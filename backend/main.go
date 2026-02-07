@@ -2,13 +2,12 @@ package main
 
 import (
 	"context"
-	"embed" // NOVO: Necessário para embutir o frontend
 	"encoding/json"
 	"fmt"
-	"io/fs" // NOVO: Para manipular o sistema de arquivos embutido
 	"log"
 	"net/http"
 	"os"
+	"path/filepath" // NOVO: Para encontrar a pasta corretamente
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +20,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-var staticFiles embed.FS
+// REMOVIDO: var staticFiles embed.FS (Não vamos usar embed, vamos ler do disco)
 
 var jwtKey = []byte(os.Getenv("JWT_SECRET"))
 
@@ -99,7 +98,7 @@ func logSysAction(action string, details string) {
 }
 
 // ----------------------------------------------
-// STRUCTS (Atualizadas para o novo sistema de usuários)
+// STRUCTS
 // ----------------------------------------------
 
 type Claims struct {
@@ -107,7 +106,6 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// User Atualizado para suportar Nome, ID e Role
 type User struct {
 	ID       string `json:"id,omitempty" bson:"_id,omitempty"`
 	Name     string `json:"name" bson:"name"`
@@ -250,14 +248,9 @@ func main() {
 	mux := http.NewServeMux()
 
 	// --- 1. ROTAS DA API ---
-	// Autenticação
-	mux.HandleFunc("/api/auth/login", loginHandler) // (Ajustado para /auth/login para bater com novo api.ts)
-
-	// Usuários (NOVO - Para a aba de Configurações)
+	mux.HandleFunc("/api/auth/login", loginHandler)
 	mux.HandleFunc("/api/users", usersHandler)
 	mux.HandleFunc("/api/users/", userDetailHandler)
-
-	// Negócio (Mantido do seu código original)
 	mux.HandleFunc("/api/loans", loansHandler)
 	mux.HandleFunc("/api/loans/", loanUpdateHandler)
 	mux.HandleFunc("/api/clients", clientsHandler)
@@ -270,35 +263,54 @@ func main() {
 	mux.HandleFunc("/api/settings", settingsHandler)
 	mux.HandleFunc("/api/dashboard/summary", dashboardSummaryHandler)
 
-	// --- 2. SERVIR O FRONT-END (REACT EMBUTIDO) ---
-	// A mágica acontece aqui: servimos a pasta 'dist' que está dentro do binário
-	contentStatic, _ := fs.Sub(staticFiles, "dist")
-	fileServer := http.FileServer(http.FS(contentStatic))
-
-	// Wrapper para lidar com SPA (Single Page Application)
-	// Se a rota não for /api e o arquivo não existir, retorna index.html
+	// --- 2. SERVIR O FRONT-END (MODO ROBUSTO) ---
+	// Este handler verifica onde a pasta 'dist' está (Docker ou Local)
+	// e serve os arquivos corretamente, resolvendo o erro de Panic.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-
-		// Se a rota começa com /api, deixa o mux tratar (mas aqui já passou pelo handler específico se existisse)
-		// Na verdade, no http.NewServeMux, rotas específicas têm prioridade.
-		// Aqui só cai o que não foi pego pelas rotas /api acima.
-
-		// Verifica se o arquivo existe na pasta estática (ex: assets/logo.png)
-		f, err := contentStatic.Open(strings.TrimPrefix(path, "/"))
-		if os.IsNotExist(err) {
-			// Se não existe (ex: /dashboard, /clients), serve o index.html
-			// Isso permite que o React Router controle a navegação
-			r.URL.Path = "/"
-		} else {
-			f.Close()
+		// Lista de lugares possíveis onde o React pode estar
+		possiveisCaminhos := []string{
+			"dist",            // Caminho no Docker (Render)
+			"backend/dist",    // Caminho Local (VS Code)
+			"../backend/dist", // Outra possibilidade local
 		}
 
-		fileServer.ServeHTTP(w, r)
+		var caminhoDist string
+		// Tenta encontrar qual caminho existe de verdade
+		for _, p := range possiveisCaminhos {
+			if info, err := os.Stat(p); err == nil && info.IsDir() {
+				caminhoDist = p
+				break
+			}
+		}
+
+		// Se não achou a pasta em lugar nenhum, erro amigável (sem crash)
+		if caminhoDist == "" {
+			http.Error(w, "Erro Crítico: Pasta 'dist' do Frontend não encontrada. O Build falhou ou a pasta está no lugar errado.", http.StatusInternalServerError)
+			return
+		}
+
+		// Caminho completo do arquivo solicitado
+		path := filepath.Join(caminhoDist, r.URL.Path)
+
+		// Verifica se o arquivo existe
+		_, err := os.Stat(path)
+
+		// Lógica SPA: Se o arquivo não existe (ex: rota /dashboard), serve index.html
+		if os.IsNotExist(err) {
+			http.ServeFile(w, r, filepath.Join(caminhoDist, "index.html"))
+			return
+		} else if err != nil {
+			// Erro de permissão ou outro problema
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Se o arquivo existe (ex: style.css, logo.png), serve ele direto
+		http.FileServer(http.Dir(caminhoDist)).ServeHTTP(w, r)
 	})
 
 	handler := cors.New(cors.Options{
-		AllowedOrigins: []string{"*"}, // Liberal para evitar dores de cabeça no modo Self-Hosted
+		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders: []string{"Content-Type", "Authorization"},
 	}).Handler(mux)
@@ -312,7 +324,7 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
 
-// --- FUNÇÕES DE USUÁRIO E AUTH (Atualizadas) ---
+// --- RESTO DO CÓDIGO (Igual) ---
 
 func seedAdminUser() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -381,13 +393,10 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Retorna Token e Dados do Usuário (Sem a senha)
 	storedUser.Password = ""
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"token": tokenString, "user": storedUser})
 }
-
-// --- HANDLERS DE USUÁRIOS (NOVO) ---
 
 func usersHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -406,7 +415,6 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Remove senhas antes de enviar
 		for i := range results {
 			results[i].Password = ""
 		}
@@ -419,18 +427,16 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Verifica se usuário já existe
 		count, _ := userCollection.CountDocuments(ctx, bson.M{"username": u.Username})
 		if count > 0 {
 			http.Error(w, "Usuário já existe", http.StatusConflict)
 			return
 		}
 
-		// Hash da senha
 		hash, _ := hashPassword(u.Password)
 		u.Password = hash
 		u.ID = strconv.FormatInt(time.Now().UnixNano(), 10)
-		u.Role = "OPERATOR" // Padrão
+		u.Role = "OPERATOR"
 
 		_, err := userCollection.InsertOne(ctx, u)
 		if err != nil {
@@ -450,7 +456,7 @@ func userDetailHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	switch r.Method {
-	case http.MethodPut: // Atualizar (ex: trocar senha)
+	case http.MethodPut:
 		var updateData struct {
 			Password string `json:"password"`
 		}
@@ -481,8 +487,6 @@ func userDetailHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
-
-// --- FUNÇÕES DE NEGÓCIO (Mantidas originais) ---
 
 func loansHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -519,10 +523,7 @@ func loansHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- LOG DE CRIAÇÃO ---
 		logAction("NOVO EMPRÉSTIMO", fmt.Sprintf("Criado contrato para %s no valor de R$ %.2f", l.Client, l.Amount))
-
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(l)
 	}
@@ -541,20 +542,16 @@ func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// --- CÁLCULO DE LUCRO E CAPITAL (ATUALIZADO) ---
 		var calcCapital, calcInterest float64
 		for _, record := range l.History {
 			tipo := strings.ToLower(record.Type)
 			if strings.Contains(tipo, "empréstimo") || strings.Contains(tipo, "contrato") || strings.Contains(tipo, "abertura") {
 				continue
 			}
-
-			// Se tem separação explícita (novo formato), usa ela
 			if record.CapitalPaid > 0 || record.InterestPaid > 0 {
 				calcCapital += record.CapitalPaid
 				calcInterest += record.InterestPaid
 			} else {
-				// Fallback para formato antigo (tentativa de inferência)
 				if strings.Contains(tipo, "juros") {
 					calcInterest += record.Amount
 				} else {
@@ -578,10 +575,7 @@ func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- LOG DE ATUALIZAÇÃO ---
 		logAction("ATUALIZAÇÃO CONTRATO", fmt.Sprintf("Contrato %s | Saldo Restante: R$ %.2f", id, l.Amount))
-
 		json.NewEncoder(w).Encode(l)
 
 	case http.MethodDelete:
@@ -590,10 +584,7 @@ func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- LOG DE EXCLUSÃO ---
 		logAction("EXCLUSÃO EMPRÉSTIMO", "Contrato removido permanentemente: "+id)
-
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -628,10 +619,7 @@ func clientsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- LOG NOVO CLIENTE ---
 		logAction("NOVO CLIENTE", fmt.Sprintf("Nome: %s | CPF: %s", c.Name, c.CPF))
-
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(c)
 	}
@@ -658,10 +646,7 @@ func clientUpdateHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- LOG EDIÇÃO CLIENTE ---
 		logAction("EDIÇÃO CLIENTE", fmt.Sprintf("ID: %d | Nome: %s", c.ID, c.Name))
-
 		json.NewEncoder(w).Encode(c)
 	case http.MethodDelete:
 		_, err := clientCollection.DeleteOne(ctx, filter)
@@ -669,10 +654,7 @@ func clientUpdateHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- LOG EXCLUSÃO CLIENTE ---
 		logAction("EXCLUSÃO CLIENTE", fmt.Sprintf("ID: %d", id))
-
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -707,10 +689,7 @@ func affiliatesHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- LOG NOVO AFILIADO ---
 		logAction("NOVO AFILIADO", fmt.Sprintf("Nome: %s | Código: %s", a.Name, a.Code))
-
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(a)
 	}
@@ -732,10 +711,7 @@ func affiliateUpdateHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- LOG EDIÇÃO AFILIADO ---
 		logAction("EDIÇÃO AFILIADO", fmt.Sprintf("ID: %s | Nome: %s", id, a.Name))
-
 		json.NewEncoder(w).Encode(a)
 	case http.MethodDelete:
 		_, err := affiliateCollection.DeleteOne(ctx, bson.M{"id": id})
@@ -743,10 +719,7 @@ func affiliateUpdateHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- LOG EXCLUSÃO AFILIADO ---
 		logAction("EXCLUSÃO AFILIADO", "Afiliado removido: "+id)
-
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -781,10 +754,7 @@ func blacklistHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- LOG LISTA NEGRA ---
 		logAction("BLACKLIST ADIÇÃO", fmt.Sprintf("Nome: %s | CPF: %s | Risco: %s", b.Name, b.CPF, b.Risk))
-
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(b)
 	}
@@ -813,10 +783,7 @@ func blacklistUpdateHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- LOG BLACKLIST REMOÇÃO ---
 		logAction("BLACKLIST REMOÇÃO", "Registro removido: "+id)
-
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -849,10 +816,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- LOG ALTERAÇÃO CONFIGURAÇÃO ---
 		logAction("CONFIGURAÇÃO", "Configurações globais do sistema foram alteradas")
-
 		json.NewEncoder(w).Encode(s)
 	}
 }
