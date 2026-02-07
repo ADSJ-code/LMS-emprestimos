@@ -7,7 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath" // NOVO: Para encontrar a pasta corretamente
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -19,8 +19,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/crypto/bcrypt"
 )
-
-// REMOVIDO: var staticFiles embed.FS (Não vamos usar embed, vamos ler do disco)
 
 var jwtKey = []byte(os.Getenv("JWT_SECRET"))
 
@@ -264,8 +262,6 @@ func main() {
 	mux.HandleFunc("/api/dashboard/summary", dashboardSummaryHandler)
 
 	// --- 2. SERVIR O FRONT-END (MODO ROBUSTO) ---
-	// Este handler verifica onde a pasta 'dist' está (Docker ou Local)
-	// e serve os arquivos corretamente, resolvendo o erro de Panic.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Lista de lugares possíveis onde o React pode estar
 		possiveisCaminhos := []string{
@@ -324,15 +320,20 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
 
-// --- RESTO DO CÓDIGO (Igual) ---
-
+// --- FUNÇÃO CORRIGIDA (TIMEOUT AUMENTADO) ---
 func seedAdminUser() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Aumentei para 30 segundos para garantir que dá tempo no plano Free
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var user User
+	// Tenta achar o usuário
 	err := userCollection.FindOne(ctx, bson.M{"username": "admin@creditnow.com"}).Decode(&user)
+
 	if err == mongo.ErrNoDocuments {
+		// Se não achou, cria o usuário
+		log.Println("⚠️ Admin não encontrado. Criando agora...")
+
 		passwordHash, _ := hashPassword("123456")
 		user = User{
 			ID:       strconv.FormatInt(time.Now().UnixNano(), 10),
@@ -342,11 +343,20 @@ func seedAdminUser() {
 			Role:     "ADMIN",
 		}
 		_, err := userCollection.InsertOne(ctx, user)
-		if err == nil {
+		if err != nil {
+			log.Printf("❌ ERRO CRÍTICO AO SALVAR ADMIN: %v", err)
+		} else {
+			log.Println("✅ SUCESSO: Usuário Admin criado no banco!")
 			logSysAction("SYSTEM", "Usuário Admin padrão criado.")
 		}
+	} else if err != nil {
+		log.Printf("❌ Erro de conexão ao verificar Admin: %v", err)
+	} else {
+		log.Println("ℹ️ O usuário Admin já existe. Pulei a criação.")
 	}
 }
+
+// --- DEMAIS HANDLERS (LOGIN, USERS, ETC) ---
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
