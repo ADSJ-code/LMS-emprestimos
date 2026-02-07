@@ -8,7 +8,7 @@ COPY . .
 RUN npm run build
 
 # --- ETAPA 2: BACK-END (Go) ---
-FROM golang:1.22-alpine AS backend-builder
+FROM golang:1.24-alpine AS backend-builder
 WORKDIR /app-api
 
 # Copia os arquivos de dependência do Go
