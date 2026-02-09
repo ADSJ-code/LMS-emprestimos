@@ -141,9 +141,10 @@ type Claims struct {
 }
 
 type User struct {
-	ID       string `json:"id,omitempty" bson:"_id,omitempty"`
-	Name     string `json:"name" bson:"name"`
-	Username string `json:"username" bson:"username"`
+	ID   string `json:"id,omitempty" bson:"_id,omitempty"`
+	Name string `json:"name" bson:"name"`
+	// CORREÇÃO: Mapeamos o JSON "email" para o campo Username do Go
+	Username string `json:"email" bson:"username"`
 	Password string `json:"password,omitempty" bson:"password"`
 	Role     string `json:"role" bson:"role"`
 }
@@ -255,7 +256,6 @@ type BlacklistEntry struct {
 	Notes  string `json:"notes" bson:"notes"`
 }
 
-// --- ESTRUTURA PARA O BACKUP COMPLETO ---
 type BackupData struct {
 	Date     string   `json:"date"`
 	Clients  []Client `json:"clients"`
@@ -316,7 +316,7 @@ func main() {
 	mux.HandleFunc("/api/users", usersHandler)
 	mux.HandleFunc("/api/users/", userDetailHandler)
 	mux.HandleFunc("/api/admin/reset", resetDatabaseHandler)
-	mux.HandleFunc("/api/admin/restore", restoreDatabaseHandler) // NOVA ROTA DE RESTORE
+	mux.HandleFunc("/api/admin/restore", restoreDatabaseHandler)
 	mux.HandleFunc("/api/loans", loansHandler)
 	mux.HandleFunc("/api/loans/", loanUpdateHandler)
 	mux.HandleFunc("/api/clients", clientsHandler)
@@ -394,7 +394,7 @@ func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	blacklistCollection.Drop(ctx)
 	logCollection.Drop(ctx)
 	userCollection.Drop(ctx)
-	settingsCollection.Drop(ctx) // Apaga settings também
+	settingsCollection.Drop(ctx)
 	seedAdminUser()
 	logSysAction("SYSTEM RESET", "Banco de dados reiniciado.")
 	w.WriteHeader(http.StatusOK)
@@ -457,6 +457,13 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "JSON Inválido", http.StatusBadRequest)
 			return
 		}
+
+		// --- CORREÇÃO: Validação para evitar e-mails vazios ---
+		if u.Username == "" || u.Password == "" {
+			http.Error(w, "Email e Senha são obrigatórios", http.StatusBadRequest)
+			return
+		}
+
 		count, _ := userCollection.CountDocuments(ctx, bson.M{"username": u.Username})
 		if count > 0 {
 			http.Error(w, "Usuário já existe", http.StatusConflict)
@@ -464,14 +471,15 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		hash, _ := hashPassword(u.Password)
 		u.Password = hash
-		// Gera ID seguro se não vier
 		if u.ID == "" {
 			u.ID = primitive.NewObjectID().Hex()
 		}
 		u.Role = "OPERATOR"
 		_, err := userCollection.InsertOne(ctx, u)
 		if err != nil {
-			http.Error(w, "Erro ao salvar no banco", http.StatusInternalServerError)
+			// --- CORREÇÃO: Log para ver o erro real no console ---
+			fmt.Printf("ERRO MONGO INSERT USER: %v\n", err)
+			http.Error(w, "Erro ao salvar no banco: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -506,33 +514,24 @@ func userDetailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- FUNÇÃO PARA RESTAURAR BACKUP ---
 func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-
-	// Aumenta o tempo limite pois restaurar pode demorar
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-
 	var data BackupData
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		http.Error(w, "Erro ao ler arquivo de backup: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	// 1. LIMPEZA TOTAL (Zona de Perigo)
 	loanCollection.Drop(ctx)
 	clientCollection.Drop(ctx)
 	affiliateCollection.Drop(ctx)
 	blacklistCollection.Drop(ctx)
 	userCollection.Drop(ctx)
 	settingsCollection.Drop(ctx)
-
-	// 2. RESTAURAÇÃO DOS DADOS
-	// Converte []Struct para []interface{} (necessário para o Mongo Driver)
 	if len(data.Clients) > 0 {
 		newClients := make([]interface{}, len(data.Clients))
 		for i, v := range data.Clients {
@@ -540,7 +539,6 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		clientCollection.InsertMany(ctx, newClients)
 	}
-
 	if len(data.Loans) > 0 {
 		newLoans := make([]interface{}, len(data.Loans))
 		for i, v := range data.Loans {
@@ -548,7 +546,6 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		loanCollection.InsertMany(ctx, newLoans)
 	}
-
 	if len(data.Users) > 0 {
 		newUsers := make([]interface{}, len(data.Users))
 		for i, v := range data.Users {
@@ -556,20 +553,16 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		userCollection.InsertMany(ctx, newUsers)
 	} else {
-		// Se o backup não tiver usuários, cria o admin padrão
 		seedAdminUser()
 	}
-
-	// Restaura Configurações
 	settingsCollection.InsertOne(ctx, data.Settings)
-
 	logAction("RESTAURAÇÃO", "Sistema restaurado a partir de um backup manual.")
-
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Backup restaurado com sucesso!"})
 }
 
-// --- DEMAIS HANDLERS ---
+// --- DEMAIS HANDLERS (COM VERIFICAÇÃO DE BLACKLIST) ---
+
 func loansHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -585,6 +578,18 @@ func loansHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var l Loan
 		json.NewDecoder(r.Body).Decode(&l)
+
+		// --- VERIFICAÇÃO DE SEGURANÇA (BLACKLIST) NO EMPRÉSTIMO ---
+		var clientData Client
+		err := clientCollection.FindOne(ctx, bson.M{"name": l.Client}).Decode(&clientData)
+		if err == nil {
+			countBL, _ := blacklistCollection.CountDocuments(ctx, bson.M{"cpf": clientData.CPF})
+			if countBL > 0 {
+				http.Error(w, "OPERAÇÃO BLOQUEADA: Este cliente consta na Lista Negra.", http.StatusForbidden)
+				return
+			}
+		}
+
 		if l.History == nil {
 			l.History = []PaymentRecord{}
 		}
@@ -606,7 +611,7 @@ func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		var calcCapital, calcInterest float64
 		for _, record := range l.History {
 			tipo := strings.ToLower(record.Type)
-			if strings.Contains(tipo, "empréstimo") || strings.Contains(tipo, "contrato") {
+			if strings.Contains(tipo, "empréstimo") || strings.Contains(tipo, "contrato") || strings.Contains(tipo, "abertura") {
 				continue
 			}
 			if record.CapitalPaid > 0 || record.InterestPaid > 0 {
@@ -652,6 +657,14 @@ func clientsHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var c Client
 		json.NewDecoder(r.Body).Decode(&c)
+
+		// --- VERIFICAÇÃO DE SEGURANÇA (BLACKLIST) NO CADASTRO ---
+		countBL, _ := blacklistCollection.CountDocuments(ctx, bson.M{"cpf": c.CPF})
+		if countBL > 0 {
+			http.Error(w, "CPF BLOQUEADO: Este CPF consta na Lista Negra.", http.StatusForbidden)
+			return
+		}
+
 		if c.ID == 0 {
 			c.ID = time.Now().UnixNano() / 1e6
 		}
@@ -847,11 +860,32 @@ func dashboardSummaryHandler(w http.ResponseWriter, r *http.Request) {
 			totalCapital = val
 		}
 	}
+
+	startOfDay := time.Now().Format("2006-01-02")
+	cursorToday, _ := loanCollection.Find(ctx, bson.M{
+		"history.date": bson.M{"$regex": startOfDay},
+	})
+	var loansToday []Loan
+	cursorToday.All(ctx, &loansToday)
+	var recoveredToday float64
+	for _, loan := range loansToday {
+		for _, rec := range loan.History {
+			if strings.HasPrefix(rec.Date, startOfDay) {
+				tipo := strings.ToLower(rec.Type)
+				if strings.Contains(tipo, "abertura") || strings.Contains(tipo, "empréstimo") || strings.Contains(tipo, "contrato") {
+					continue
+				}
+				recoveredToday += rec.Amount
+			}
+		}
+	}
+
 	summary := map[string]interface{}{
-		"totalActive":   totalActive,
-		"totalOverdue":  totalOverdue,
-		"totalCapital":  totalCapital,
-		"activeClients": activeClients,
+		"totalActive":    totalActive,
+		"totalOverdue":   totalOverdue,
+		"totalCapital":   totalCapital,
+		"activeClients":  activeClients,
+		"recoveredToday": recoveredToday,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(summary)
