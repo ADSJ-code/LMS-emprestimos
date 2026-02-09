@@ -37,9 +37,18 @@ const Settings = () => {
   const [dangerModalOpen, setDangerModalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState('');
 
-  // Estado inicial
+  // --- ALTERAÇÃO PRINCIPAL AQUI ---
+  // Inicializamos lendo do Cache. Se não tiver cache, começa vazio ('').
+  // Removemos o "Credit Now Financeira" hardcoded.
   const defaultSettings = {
-    company: { name: 'Credit Now Financeira', cnpj: '', pixKey: '', email: '', phone: '', address: '' },
+    company: { 
+        name: localStorage.getItem('lms_company_name_cache') || '', 
+        cnpj: '', 
+        pixKey: '', 
+        email: '', 
+        phone: '', 
+        address: '' 
+    },
     system: { autoBackup: false, requireLogin: true }
   };
 
@@ -50,13 +59,20 @@ const Settings = () => {
       try {
         const data = await settingsService.get();
         const legacyData = data as any;
+        
         if (legacyData && (legacyData.company || legacyData.general)) {
            const companyData = legacyData.company || legacyData.general;
            const systemData = legacyData.system || legacyData.security;
+           
            setSettings({
                company: { ...defaultSettings.company, ...companyData },
                system: { ...defaultSettings.system, ...systemData }
            });
+
+           // ATUALIZA O CACHE ASSIM QUE O DADO VEM DO BANCO
+           if (companyData.name) {
+               localStorage.setItem('lms_company_name_cache', companyData.name.toUpperCase());
+           }
         }
         const userList = await authService.listUsers();
         setUsers(userList);
@@ -70,10 +86,18 @@ const Settings = () => {
     setIsLoading(true);
     try {
       await settingsService.save(settings);
+      
+      // ATUALIZA O CACHE IMEDIATAMENTE AO SALVAR
+      if (settings.company?.name) {
+          localStorage.setItem('lms_company_name_cache', settings.company.name.toUpperCase());
+      }
+
       setIsLoading(false);
       setShowSuccess(true);
+      
       // Dispara evento para atualizar o Layout (Header) instantaneamente
       window.dispatchEvent(new Event('settingsUpdated'));
+      
       setTimeout(() => setShowSuccess(false), 3000);
     } catch (err) { alert('Falha ao salvar.'); setIsLoading(false); }
   };
@@ -145,6 +169,8 @@ const Settings = () => {
         if (response.ok) {
             alert('Sistema resetado com sucesso. Você será desconectado.');
             localStorage.removeItem('token');
+            // Limpa o cache do nome também para resetar a interface
+            localStorage.removeItem('lms_company_name_cache');
             window.location.href = '/login';
         } else {
             alert('Erro ao resetar sistema.');
@@ -182,7 +208,7 @@ const Settings = () => {
               <div className="space-y-6 animate-in fade-in duration-300">
                 <div className="flex items-center gap-3 border-b border-gray-100 pb-2"><Building className="text-slate-400" /><h3 className="text-lg font-bold text-slate-800">Dados Cadastrais</h3></div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="md:col-span-2"><label className="block text-sm font-bold text-slate-700 mb-1">Nome Fantasia</label><input type="text" value={settings.company.name} onChange={e => updateCompany('name', e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/10" /></div>
+                  <div className="md:col-span-2"><label className="block text-sm font-bold text-slate-700 mb-1">Nome Fantasia</label><input type="text" value={settings.company.name} onChange={e => updateCompany('name', e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/10" placeholder="Ex: RODRIGO FINANCEIRA" /></div>
                   <div><label className="block text-sm font-bold text-slate-700 mb-1">CNPJ</label><input type="text" value={settings.company.cnpj} onChange={e => updateCompany('cnpj', e.target.value)} maxLength={18} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/10" /></div>
                   <div><label className="flex items-center gap-1 text-sm font-bold text-green-700 mb-1"><RefreshCw size={14}/> Chave PIX</label><input type="text" value={settings.company.pixKey} onChange={e => updateCompany('pixKey', e.target.value)} className="w-full p-3 border border-green-200 bg-green-50/30 text-green-800 font-mono rounded-xl outline-none focus:ring-2 focus:ring-green-500/20" /></div>
                   <div><label className="block text-sm font-bold text-slate-700 mb-1">Telefone</label><input type="text" value={settings.company.phone} onChange={e => updateCompany('phone', e.target.value)} maxLength={15} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/10" /></div>
