@@ -37,9 +37,6 @@ const Settings = () => {
   const [dangerModalOpen, setDangerModalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState('');
 
-  // --- ALTERAÇÃO PRINCIPAL AQUI ---
-  // Inicializamos lendo do Cache. Se não tiver cache, começa vazio ('').
-  // Removemos o "Credit Now Financeira" hardcoded.
   const defaultSettings = {
     company: { 
         name: localStorage.getItem('lms_company_name_cache') || '', 
@@ -69,7 +66,8 @@ const Settings = () => {
                system: { ...defaultSettings.system, ...systemData }
            });
 
-           // ATUALIZA O CACHE ASSIM QUE O DADO VEM DO BANCO
+           // ATUALIZA O CACHE: Assim que o dado vem do banco, salvamos no navegador
+           // para que na próxima vez o carregamento seja instantâneo.
            if (companyData.name) {
                localStorage.setItem('lms_company_name_cache', companyData.name.toUpperCase());
            }
@@ -169,7 +167,7 @@ const Settings = () => {
         if (response.ok) {
             alert('Sistema resetado com sucesso. Você será desconectado.');
             localStorage.removeItem('token');
-            // Limpa o cache do nome também para resetar a interface
+            // Limpa o cache do nome também para resetar a interface visualmente
             localStorage.removeItem('lms_company_name_cache');
             window.location.href = '/login';
         } else {
