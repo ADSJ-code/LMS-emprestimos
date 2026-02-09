@@ -26,21 +26,34 @@ const Layout = ({ children }: LayoutProps) => {
   const userName = session.user?.name || 'Administrador';
   const userInitials = userName.substring(0, 2).toUpperCase(); 
 
-  // ESTADO PARA O NOME DA EMPRESA (TÍTULO DINÂMICO)
-  const [companyName, setCompanyName] = useState('CREDIT NOW');
+  // --- CORREÇÃO DO PISCA-PISCA ---
+  // 1. Inicializa o estado lendo direto do LocalStorage (Cache).
+  // Se tiver algo salvo lá, ele usa imediatamente. Se não, usa o padrão.
+  const [companyName, setCompanyName] = useState(() => {
+    return localStorage.getItem('lms_company_name_cache') || 'CREDIT NOW';
+  });
 
   const fetchCompanyName = async () => {
     try {
       const settings = await settingsService.get();
       // Casting para 'any' para evitar erro de propriedade legado
       const legacySettings = settings as any;
+      
+      let newName = '';
 
-      // Prioriza a estrutura nova (company.name), senão tenta a antiga (general.companyName)
+      // Prioriza a estrutura nova (company.name), senão tenta a antiga
       if (settings?.company?.name) {
-        setCompanyName(settings.company.name.toUpperCase());
+        newName = settings.company.name.toUpperCase();
       } else if (legacySettings?.general?.companyName) {
-        setCompanyName(legacySettings.general.companyName.toUpperCase());
+        newName = legacySettings.general.companyName.toUpperCase();
       }
+
+      // 2. Se achou um nome válido, atualiza o estado E O CACHE
+      if (newName) {
+          setCompanyName(newName);
+          localStorage.setItem('lms_company_name_cache', newName);
+      }
+
     } catch (error) {
       console.error("Erro ao carregar nome da empresa", error);
     }
@@ -60,7 +73,10 @@ const Layout = ({ children }: LayoutProps) => {
 
   const handleLogout = () => {
     localStorage.removeItem('lms_active_session');
+    localStorage.removeItem('token');
     sessionStorage.removeItem('lms_active_session');
+    // Opcional: Limpar o cache do nome ao sair (eu recomendo NÃO limpar para manter a fluidez no próximo login)
+    // localStorage.removeItem('lms_company_name_cache'); 
     navigate('/login', { replace: true });
   };
 
@@ -81,7 +97,7 @@ const Layout = ({ children }: LayoutProps) => {
       <aside className="w-64 bg-slate-900 text-white flex flex-col fixed h-full z-10 shadow-xl transition-all duration-300">
         
         <div className="p-6 border-b border-slate-800">
-          {/* TÍTULO AGORA É DINÂMICO */}
+          {/* TÍTULO COM CACHE (ESTÁVEL) */}
           <h1 className="text-xl font-bold bg-gradient-to-r from-yellow-400 to-yellow-200 bg-clip-text text-transparent tracking-wide break-words">
             {companyName}
           </h1>
