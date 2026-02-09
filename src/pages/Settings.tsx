@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Save, Building, Shield, CheckCircle, RefreshCw, Download, Users, Plus, Trash2, Key, X, AlertTriangle } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Save, Building, Shield, CheckCircle, RefreshCw, Download, Users, Plus, Trash2, Key, X, AlertTriangle, Upload } from 'lucide-react';
 import Layout from '../components/Layout';
 import { settingsService, clientService, loanService, authService } from '../services/api';
 
@@ -23,6 +23,9 @@ const Settings = () => {
   const [activeTab, setActiveTab] = useState<'empresa' | 'sistema' | 'usuarios'>('empresa');
   const [isLoading, setIsLoading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  
+  // Referência para o input de arquivo (Upload)
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Estados de Usuários
   const [users, setUsers] = useState<any[]>([]);
@@ -37,6 +40,7 @@ const Settings = () => {
   const [dangerModalOpen, setDangerModalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState('');
 
+  // --- CONFIGURAÇÃO INICIAL (SEM HARDCODE) ---
   const defaultSettings = {
     company: { 
         name: localStorage.getItem('lms_company_name_cache') || '', 
@@ -66,8 +70,7 @@ const Settings = () => {
                system: { ...defaultSettings.system, ...systemData }
            });
 
-           // ATUALIZA O CACHE: Assim que o dado vem do banco, salvamos no navegador
-           // para que na próxima vez o carregamento seja instantâneo.
+           // Atualiza o cache visual
            if (companyData.name) {
                localStorage.setItem('lms_company_name_cache', companyData.name.toUpperCase());
            }
@@ -85,7 +88,6 @@ const Settings = () => {
     try {
       await settingsService.save(settings);
       
-      // ATUALIZA O CACHE IMEDIATAMENTE AO SALVAR
       if (settings.company?.name) {
           localStorage.setItem('lms_company_name_cache', settings.company.name.toUpperCase());
       }
@@ -93,7 +95,7 @@ const Settings = () => {
       setIsLoading(false);
       setShowSuccess(true);
       
-      // Dispara evento para atualizar o Layout (Header) instantaneamente
+      // Atualiza o header instantaneamente
       window.dispatchEvent(new Event('settingsUpdated'));
       
       setTimeout(() => setShowSuccess(false), 3000);
@@ -108,7 +110,7 @@ const Settings = () => {
           setUsers([...users, created]);
           setNewUser({ name: '', email: '', password: '' });
           alert("Usuário adicionado!");
-      } catch (err: any) { alert(err.message); }
+      } catch (err: any) { alert(err.message || "Erro ao adicionar usuário"); }
   };
 
   const handleRemoveUser = async (email: string) => {
@@ -143,7 +145,7 @@ const Settings = () => {
     setSettings((p: any) => ({ ...p, company: { ...p.company, [f]: val } }));
   };
 
-  // Backup Manual
+  // Backup Manual (Download)
   const handleDownloadBackup = async () => {
       if(!confirm("Baixar backup completo?")) return;
       try {
@@ -154,6 +156,44 @@ const Settings = () => {
           el.setAttribute("href", dataStr); el.setAttribute("download", `backup_${new Date().toISOString().split('T')[0]}.json`);
           document.body.appendChild(el); el.click(); el.remove();
       } catch (e) { alert("Erro ao gerar backup."); }
+  };
+
+  // --- LÓGICA DE RESTAURAÇÃO (UPLOAD) ---
+  const handleRestoreClick = () => {
+      fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+
+      // Confirmação de segurança
+      if (!confirm("⚠️ PERIGO: Restaurar um backup irá APAGAR TODOS os dados atuais e substituí-los pelos do arquivo.\n\nDeseja continuar?")) {
+          if (fileInputRef.current) fileInputRef.current.value = ''; // Limpa input
+          return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+          try {
+              const json = JSON.parse(e.target?.result as string);
+              
+              setIsLoading(true);
+              await settingsService.restoreBackup(json);
+              
+              alert("Sistema restaurado com sucesso! Você será desconectado.");
+              localStorage.clear(); // Limpa sessão
+              window.location.href = '/login';
+
+          } catch (error: any) {
+              console.error(error);
+              alert("Erro ao restaurar: " + (error.response?.data || error.message || "Arquivo inválido."));
+          } finally {
+              setIsLoading(false);
+              if (fileInputRef.current) fileInputRef.current.value = '';
+          }
+      };
+      reader.readAsText(file);
   };
 
   // Reset de Fábrica
@@ -167,7 +207,6 @@ const Settings = () => {
         if (response.ok) {
             alert('Sistema resetado com sucesso. Você será desconectado.');
             localStorage.removeItem('token');
-            // Limpa o cache do nome também para resetar a interface visualmente
             localStorage.removeItem('lms_company_name_cache');
             window.location.href = '/login';
         } else {
@@ -266,13 +305,45 @@ const Settings = () => {
                     <button type="button" onClick={handleDownloadBackup} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700">Baixar (.json)</button>
                 </div>
 
-                {/* ZONA DE PERIGO (RESET) */}
-                <div className="bg-red-50 border border-red-200 rounded-xl p-5 flex justify-between items-center">
-                    <div>
-                        <h4 className="font-bold text-red-800 flex gap-2"><AlertTriangle size={18} className="text-red-600"/> Reset de Fábrica</h4>
-                        <p className="text-sm text-red-600">Apaga todos os dados e reseta o sistema. Irreversível.</p>
+                {/* ZONA DE PERIGO (RESET E RESTORE) */}
+                <div className="bg-red-50 border border-red-200 rounded-xl p-5">
+                    <div className="flex items-center gap-2 mb-4 text-red-700 border-b border-red-200 pb-2">
+                        <AlertTriangle className="text-red-600" />
+                        <h3 className="font-semibold text-lg">Zona de Perigo</h3>
                     </div>
-                    <button type="button" onClick={() => { setConfirmText(''); setDangerModalOpen(true); }} className="px-4 py-2 bg-red-600 text-white text-sm font-bold rounded-lg hover:bg-red-700">Resetar Sistema</button>
+                    <p className="text-sm text-red-600 mb-6">Ações irreversíveis que afetam todo o banco de dados. Tenha certeza do que está fazendo.</p>
+
+                    <div className="flex flex-col sm:flex-row gap-4">
+                        {/* INPUT INVISÍVEL PARA UPLOAD */}
+                        <input 
+                            type="file" 
+                            accept=".json" 
+                            ref={fileInputRef} 
+                            onChange={handleFileChange} 
+                            className="hidden" 
+                        />
+                        
+                        {/* BOTÃO DE RESTAURAR (NOVO) */}
+                        <button 
+                            type="button" 
+                            onClick={handleRestoreClick} 
+                            disabled={isLoading}
+                            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-white border border-red-300 text-red-700 rounded-lg hover:bg-red-100 transition-colors font-bold shadow-sm"
+                        >
+                            <Upload size={18} />
+                            {isLoading ? 'Restaurando...' : 'Restaurar Backup (.json)'}
+                        </button>
+
+                        {/* BOTÃO DE RESET */}
+                        <button 
+                            type="button" 
+                            onClick={() => { setConfirmText(''); setDangerModalOpen(true); }} 
+                            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-bold shadow-sm"
+                        >
+                            <Trash2 size={18} />
+                            Resetar Sistema (Fábrica)
+                        </button>
+                    </div>
                 </div>
               </div>
             )}

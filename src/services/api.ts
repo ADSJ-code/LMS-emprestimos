@@ -291,6 +291,12 @@ export const settingsService = {
 
     const response = await api.post('/settings', payload);
     return response.data;
+  },
+
+  // --- NOVA FUNÇÃO DE RESTAURAÇÃO ---
+  restoreBackup: async (backupData: any) => {
+    const response = await api.post('/admin/restore', backupData);
+    return response.data;
   }
 };
 

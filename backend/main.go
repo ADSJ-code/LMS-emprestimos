@@ -15,6 +15,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/rs/cors"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/crypto/bcrypt"
@@ -131,7 +132,7 @@ func performInternalBackup() {
 }
 
 // ----------------------------------------------
-// STRUCTS (ATUALIZADO COM SETTINGS CORRIGIDO)
+// STRUCTS
 // ----------------------------------------------
 
 type Claims struct {
@@ -147,7 +148,6 @@ type User struct {
 	Role     string `json:"role" bson:"role"`
 }
 
-// --- NOVAS STRUCTS PARA CORRIGIR O JSON ---
 type CompanySettings struct {
 	Name    string `json:"name" bson:"name"`
 	CNPJ    string `json:"cnpj" bson:"cnpj"`
@@ -167,8 +167,6 @@ type Settings struct {
 	Company CompanySettings `json:"company" bson:"company"`
 	System  SystemSettings  `json:"system" bson:"system"`
 }
-
-// ------------------------------------------
 
 type PaymentRecord struct {
 	Date         string  `json:"date" bson:"date"`
@@ -257,6 +255,15 @@ type BlacklistEntry struct {
 	Notes  string `json:"notes" bson:"notes"`
 }
 
+// --- ESTRUTURA PARA O BACKUP COMPLETO ---
+type BackupData struct {
+	Date     string   `json:"date"`
+	Clients  []Client `json:"clients"`
+	Loans    []Loan   `json:"loans"`
+	Settings Settings `json:"settings"`
+	Users    []User   `json:"users"`
+}
+
 var (
 	mongoClient         *mongo.Client
 	loanCollection      *mongo.Collection
@@ -309,6 +316,7 @@ func main() {
 	mux.HandleFunc("/api/users", usersHandler)
 	mux.HandleFunc("/api/users/", userDetailHandler)
 	mux.HandleFunc("/api/admin/reset", resetDatabaseHandler)
+	mux.HandleFunc("/api/admin/restore", restoreDatabaseHandler) // NOVA ROTA DE RESTORE
 	mux.HandleFunc("/api/loans", loansHandler)
 	mux.HandleFunc("/api/loans/", loanUpdateHandler)
 	mux.HandleFunc("/api/clients", clientsHandler)
@@ -386,6 +394,7 @@ func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	blacklistCollection.Drop(ctx)
 	logCollection.Drop(ctx)
 	userCollection.Drop(ctx)
+	settingsCollection.Drop(ctx) // Apaga settings também
 	seedAdminUser()
 	logSysAction("SYSTEM RESET", "Banco de dados reiniciado.")
 	w.WriteHeader(http.StatusOK)
@@ -427,8 +436,10 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func usersHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
 	switch r.Method {
 	case http.MethodGet:
 		cursor, _ := userCollection.Find(ctx, bson.M{})
@@ -439,9 +450,13 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 			results[i].Password = ""
 		}
 		json.NewEncoder(w).Encode(results)
+
 	case http.MethodPost:
 		var u User
-		json.NewDecoder(r.Body).Decode(&u)
+		if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+			http.Error(w, "JSON Inválido", http.StatusBadRequest)
+			return
+		}
 		count, _ := userCollection.CountDocuments(ctx, bson.M{"username": u.Username})
 		if count > 0 {
 			http.Error(w, "Usuário já existe", http.StatusConflict)
@@ -449,9 +464,17 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		hash, _ := hashPassword(u.Password)
 		u.Password = hash
-		u.ID = strconv.FormatInt(time.Now().UnixNano(), 10)
+		// Gera ID seguro se não vier
+		if u.ID == "" {
+			u.ID = primitive.NewObjectID().Hex()
+		}
 		u.Role = "OPERATOR"
-		userCollection.InsertOne(ctx, u)
+		_, err := userCollection.InsertOne(ctx, u)
+		if err != nil {
+			http.Error(w, "Erro ao salvar no banco", http.StatusInternalServerError)
+			return
+		}
+
 		logAction("NOVO USUÁRIO", u.Username)
 		u.Password = ""
 		w.WriteHeader(http.StatusCreated)
@@ -481,6 +504,69 @@ func userDetailHandler(w http.ResponseWriter, r *http.Request) {
 		logAction("REMOÇÃO USUÁRIO", email)
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// --- FUNÇÃO PARA RESTAURAR BACKUP ---
+func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Aumenta o tempo limite pois restaurar pode demorar
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var data BackupData
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "Erro ao ler arquivo de backup: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// 1. LIMPEZA TOTAL (Zona de Perigo)
+	loanCollection.Drop(ctx)
+	clientCollection.Drop(ctx)
+	affiliateCollection.Drop(ctx)
+	blacklistCollection.Drop(ctx)
+	userCollection.Drop(ctx)
+	settingsCollection.Drop(ctx)
+
+	// 2. RESTAURAÇÃO DOS DADOS
+	// Converte []Struct para []interface{} (necessário para o Mongo Driver)
+	if len(data.Clients) > 0 {
+		newClients := make([]interface{}, len(data.Clients))
+		for i, v := range data.Clients {
+			newClients[i] = v
+		}
+		clientCollection.InsertMany(ctx, newClients)
+	}
+
+	if len(data.Loans) > 0 {
+		newLoans := make([]interface{}, len(data.Loans))
+		for i, v := range data.Loans {
+			newLoans[i] = v
+		}
+		loanCollection.InsertMany(ctx, newLoans)
+	}
+
+	if len(data.Users) > 0 {
+		newUsers := make([]interface{}, len(data.Users))
+		for i, v := range data.Users {
+			newUsers[i] = v
+		}
+		userCollection.InsertMany(ctx, newUsers)
+	} else {
+		// Se o backup não tiver usuários, cria o admin padrão
+		seedAdminUser()
+	}
+
+	// Restaura Configurações
+	settingsCollection.InsertOne(ctx, data.Settings)
+
+	logAction("RESTAURAÇÃO", "Sistema restaurado a partir de um backup manual.")
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Backup restaurado com sucesso!"})
 }
 
 // --- DEMAIS HANDLERS ---
@@ -684,13 +770,12 @@ func blacklistUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- SETTINGS (CORRIGIDO: USA A STRUCT 'Settings' E NÃO INTERFACE) ---
+// --- SETTINGS ---
 func settingsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	switch r.Method {
 	case http.MethodGet:
-		// AQUI ESTAVA O PROBLEMA ANTES: USAVA interface{}
 		var s Settings
 		err := settingsCollection.FindOne(ctx, bson.M{}).Decode(&s)
 		if err != nil {
@@ -703,7 +788,6 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(s)
 	case http.MethodPost, http.MethodPut:
-		// AQUI TAMBÉM USAMOS A STRUCT PARA VALIDAR
 		var s Settings
 		if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
