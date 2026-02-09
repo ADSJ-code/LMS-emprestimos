@@ -15,8 +15,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/rs/cors"
 	"go.mongodb.org/mongo-driver/bson"
-
-	// REMOVIDO: "go.mongodb.org/mongo-driver/bson/primitive" (Para simplificar e evitar erros de build)
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/crypto/bcrypt"
@@ -30,21 +29,124 @@ func init() {
 	}
 }
 
-// --- STRUCTS ATUALIZADAS ---
+// --- FUNÇÕES AUXILIARES ---
 
-type User struct {
-	ID   string `json:"id,omitempty" bson:"_id,omitempty"`
-	Name string `json:"name" bson:"name"`
-	// IMPORTANTE: json:"email" mapeia o campo do frontend para o Username do banco
-	Username string `json:"email" bson:"username"`
-	Password string `json:"password,omitempty" bson:"password"`
-	Role     string `json:"role" bson:"role"`
+func hashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	return string(bytes), err
 }
 
-// ... Outras structs mantidas ...
+func checkPasswordHash(password, hash string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return err == nil
+}
+
+// LOG ACTION
+func logAction(action string, details string) {
+	fmt.Printf("\033[32m[AUDITORIA %s]\033[0m %s - %s\n", time.Now().Format("15:04:05"), action, details)
+
+	if logCollection != nil {
+		entry := LogEntry{
+			ID:        strconv.FormatInt(time.Now().UnixNano(), 10),
+			Action:    action,
+			User:      "Sistema",
+			Details:   details,
+			Timestamp: time.Now(),
+		}
+
+		go func() {
+			// Aumentei timeout do log também
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_, err := logCollection.InsertOne(ctx, entry)
+			if err != nil {
+				fmt.Printf("ERRO AO SALVAR LOG: %v\n", err)
+			}
+		}()
+	}
+}
+
+func logSysAction(action string, details string) {
+	if logCollection != nil {
+		entry := LogEntry{
+			ID:        strconv.FormatInt(time.Now().UnixNano(), 10),
+			Action:    action,
+			User:      "Sistema",
+			Details:   details,
+			Timestamp: time.Now(),
+		}
+		context.Background()
+		go logCollection.InsertOne(context.Background(), entry)
+	}
+}
+
+// --- ROTINAS DE BACKGROUND ---
+
+func StartBackgroundSystemLogs() {
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		time.Sleep(5 * time.Second)
+		logSysAction("Sistema Iniciado", "Servidor online e conexões estabelecidas")
+
+		for range ticker.C {
+			logSysAction("Monitoramento", "Verificação de integridade do sistema realizada.")
+		}
+	}()
+}
+
+func StartDailyBackupRoutine() {
+	go func() {
+		for {
+			now := time.Now()
+			nextRun := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, now.Location())
+			if now.After(nextRun) {
+				nextRun = nextRun.Add(24 * time.Hour)
+			}
+			duration := nextRun.Sub(now)
+			log.Printf("🕒 Próximo Backup Automático agendado para: %s", nextRun.Format("02/01 15:04"))
+			time.Sleep(duration)
+			performInternalBackup()
+		}
+	}()
+}
+
+func performInternalBackup() {
+	log.Println("🔄 Iniciando Backup Diário...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	db := mongoClient.Database("lms")
+	db.Collection("clients_backup").Drop(ctx)
+	cursor, _ := clientCollection.Find(ctx, bson.M{})
+	var clients []interface{}
+	if err := cursor.All(ctx, &clients); err == nil && len(clients) > 0 {
+		db.Collection("clients_backup").InsertMany(ctx, clients)
+	}
+
+	db.Collection("loans_backup").Drop(ctx)
+	cursorLoans, _ := loanCollection.Find(ctx, bson.M{})
+	var loans []interface{}
+	if err := cursorLoans.All(ctx, &loans); err == nil && len(loans) > 0 {
+		db.Collection("loans_backup").InsertMany(ctx, loans)
+	}
+	logSysAction("BACKUP AUTOMÁTICO", "Cópia de segurança realizada com sucesso.")
+}
+
+// ----------------------------------------------
+// STRUCTS
+// ----------------------------------------------
+
 type Claims struct {
 	Username string `json:"username"`
 	jwt.RegisteredClaims
+}
+
+type User struct {
+	ID       string `json:"id,omitempty" bson:"_id,omitempty"`
+	Name     string `json:"name" bson:"name"`
+	Username string `json:"email" bson:"username"` // CORREÇÃO MANTIDA
+	Password string `json:"password,omitempty" bson:"password"`
+	Role     string `json:"role" bson:"role"`
 }
 
 type CompanySettings struct {
@@ -173,104 +275,14 @@ var (
 	settingsCollection  *mongo.Collection
 )
 
-// --- FUNÇÕES AUXILIARES ---
-
-func hashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
-	return string(bytes), err
-}
-
-func checkPasswordHash(password, hash string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	return err == nil
-}
-
-func logAction(action string, details string) {
-	fmt.Printf("\033[32m[AUDITORIA %s]\033[0m %s - %s\n", time.Now().Format("15:04:05"), action, details)
-	if logCollection != nil {
-		entry := LogEntry{
-			ID:        strconv.FormatInt(time.Now().UnixNano(), 10),
-			Action:    action,
-			User:      "Sistema",
-			Details:   details,
-			Timestamp: time.Now(),
-		}
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			logCollection.InsertOne(ctx, entry)
-		}()
-	}
-}
-
-func logSysAction(action string, details string) {
-	if logCollection != nil {
-		entry := LogEntry{
-			ID:        strconv.FormatInt(time.Now().UnixNano(), 10),
-			Action:    action,
-			User:      "Sistema",
-			Details:   details,
-			Timestamp: time.Now(),
-		}
-		context.Background()
-		go logCollection.InsertOne(context.Background(), entry)
-	}
-}
-
-func StartBackgroundSystemLogs() {
-	go func() {
-		ticker := time.NewTicker(6 * time.Hour)
-		time.Sleep(5 * time.Second)
-		logSysAction("Sistema Iniciado", "Servidor online e conexões estabelecidas")
-		for range ticker.C {
-			logSysAction("Monitoramento", "Verificação de integridade do sistema realizada.")
-		}
-	}()
-}
-
-func StartDailyBackupRoutine() {
-	go func() {
-		for {
-			now := time.Now()
-			nextRun := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, now.Location())
-			if now.After(nextRun) {
-				nextRun = nextRun.Add(24 * time.Hour)
-			}
-			duration := nextRun.Sub(now)
-			log.Printf("🕒 Próximo Backup Automático agendado para: %s", nextRun.Format("02/01 15:04"))
-			time.Sleep(duration)
-			performInternalBackup()
-		}
-	}()
-}
-
-func performInternalBackup() {
-	log.Println("🔄 Iniciando Backup Diário...")
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	db := mongoClient.Database("lms")
-	db.Collection("clients_backup").Drop(ctx)
-	cursor, _ := clientCollection.Find(ctx, bson.M{})
-	var clients []interface{}
-	if err := cursor.All(ctx, &clients); err == nil && len(clients) > 0 {
-		db.Collection("clients_backup").InsertMany(ctx, clients)
-	}
-	db.Collection("loans_backup").Drop(ctx)
-	cursorLoans, _ := loanCollection.Find(ctx, bson.M{})
-	var loans []interface{}
-	if err := cursorLoans.All(ctx, &loans); err == nil && len(loans) > 0 {
-		db.Collection("loans_backup").InsertMany(ctx, loans)
-	}
-	logSysAction("BACKUP AUTOMÁTICO", "Cópia de segurança realizada com sucesso.")
-}
-
 func main() {
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
 		mongoURI = "mongodb://127.0.0.1:27017"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// TIMEOUT DE CONEXÃO: 60 SEGUNDOS (EXTREMO)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	var err error
@@ -355,7 +367,8 @@ func main() {
 }
 
 func seedAdminUser() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// TIMEOUT DE 60s
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	var user User
 	err := userCollection.FindOne(ctx, bson.M{"username": "admin@creditnow.com"}).Decode(&user)
@@ -375,7 +388,8 @@ func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// TIMEOUT DE 120s PARA RESET
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	loanCollection.Drop(ctx)
 	clientCollection.Drop(ctx)
@@ -390,7 +404,7 @@ func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Sistema resetado."})
 }
 
-// --- HANDLERS COM DEBUG DE ERRO ---
+// --- HANDLERS COM TIMEOUT DE 60s ---
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -402,7 +416,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	var storedUser User
 	if err := userCollection.FindOne(ctx, bson.M{"username": creds.Username}).Decode(&storedUser); err != nil {
@@ -427,7 +441,8 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 func usersHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// TIMEOUT DE 60 SEGUNDOS AQUI
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	switch r.Method {
@@ -448,11 +463,10 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// LOG DE DEBUG PARA VER O QUE CHEGA
 		fmt.Printf("DEBUG: Recebido Usuário: %+v\n", u)
 
 		if u.Username == "" || u.Password == "" {
-			http.Error(w, "Erro: Email e Senha são obrigatórios (Recebido vazio)", http.StatusBadRequest)
+			http.Error(w, "Erro: Email e Senha são obrigatórios", http.StatusBadRequest)
 			return
 		}
 
@@ -464,15 +478,13 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 		hash, _ := hashPassword(u.Password)
 		u.Password = hash
 
-		// Usa strconv igual ao Admin para evitar erro de import
 		if u.ID == "" {
-			u.ID = strconv.FormatInt(time.Now().UnixNano(), 10)
+			u.ID = primitive.NewObjectID().Hex()
 		}
 		u.Role = "OPERATOR"
 
 		_, err := userCollection.InsertOne(ctx, u)
 		if err != nil {
-			// RETORNA O ERRO REAL PARA A TELA
 			fmt.Printf("ERRO CRÍTICO MONGO: %v\n", err)
 			http.Error(w, "Erro no Banco de Dados: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -487,7 +499,7 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 
 func userDetailHandler(w http.ResponseWriter, r *http.Request) {
 	email := strings.TrimPrefix(r.URL.Path, "/api/users/")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	switch r.Method {
 	case http.MethodPut:
@@ -514,7 +526,7 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second) // 2 min para restore
 	defer cancel()
 	var data BackupData
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
@@ -556,10 +568,10 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Sucesso!"})
 }
 
-// --- DEMAIS HANDLERS (COM BLACKLIST) ---
+// --- DEMAIS HANDLERS (COM BLACKLIST E TIMEOUT 60s) ---
 
 func loansHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	switch r.Method {
 	case http.MethodGet:
@@ -596,7 +608,7 @@ func loansHandler(w http.ResponseWriter, r *http.Request) {
 
 func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/loans/")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	switch r.Method {
 	case http.MethodPut:
@@ -637,7 +649,7 @@ func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func clientsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	switch r.Method {
 	case http.MethodGet:
@@ -670,7 +682,7 @@ func clientsHandler(w http.ResponseWriter, r *http.Request) {
 
 func clientUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/clients/")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	filter := bson.M{"id": id}
@@ -692,7 +704,7 @@ func clientUpdateHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func affiliatesHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	switch r.Method {
 	case http.MethodGet:
@@ -718,7 +730,7 @@ func affiliatesHandler(w http.ResponseWriter, r *http.Request) {
 
 func affiliateUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/affiliates/")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	switch r.Method {
 	case http.MethodPut:
@@ -735,7 +747,7 @@ func affiliateUpdateHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func blacklistHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	switch r.Method {
 	case http.MethodGet:
@@ -761,7 +773,7 @@ func blacklistHandler(w http.ResponseWriter, r *http.Request) {
 
 func blacklistUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/blacklist/")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	switch r.Method {
 	case http.MethodPut:
@@ -777,7 +789,7 @@ func blacklistUpdateHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func settingsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	switch r.Method {
 	case http.MethodGet:
@@ -810,7 +822,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func logsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if r.Method == http.MethodGet {
 		cursor, err := logCollection.Find(ctx, bson.M{})
@@ -828,7 +840,7 @@ func logsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func dashboardSummaryHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	totalActive, _ := loanCollection.CountDocuments(ctx, bson.M{"status": bson.M{"$ne": "Pago"}})
 	totalOverdue, _ := loanCollection.CountDocuments(ctx, bson.M{"status": "Atrasado"})
