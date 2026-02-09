@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Save, Building, Shield, CheckCircle, RefreshCw, Download, Users, Plus, Trash2, Key, X, AlertTriangle, Upload } from 'lucide-react';
+import { Save, Building, Shield, CheckCircle, RefreshCw, Download, Users, Plus, Trash2, Key, X, AlertTriangle, Upload, Loader2 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { settingsService, clientService, loanService, authService } from '../services/api';
 
@@ -22,6 +22,10 @@ const Modal = ({ isOpen, onClose, title, children }: any) => {
 const Settings = () => {
   const [activeTab, setActiveTab] = useState<'empresa' | 'sistema' | 'usuarios'>('empresa');
   const [isLoading, setIsLoading] = useState(false);
+  
+  // LOADING ESPECÍFICO PARA USUÁRIOS
+  const [isUserLoading, setIsUserLoading] = useState(false);
+  
   const [showSuccess, setShowSuccess] = useState(false);
   
   // Referência para o input de arquivo (Upload)
@@ -40,7 +44,7 @@ const Settings = () => {
   const [dangerModalOpen, setDangerModalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState('');
 
-  // --- CONFIGURAÇÃO INICIAL (SEM HARDCODE) ---
+  // --- CONFIGURAÇÃO INICIAL ---
   const defaultSettings = {
     company: { 
         name: localStorage.getItem('lms_company_name_cache') || '', 
@@ -70,7 +74,6 @@ const Settings = () => {
                system: { ...defaultSettings.system, ...systemData }
            });
 
-           // Atualiza o cache visual
            if (companyData.name) {
                localStorage.setItem('lms_company_name_cache', companyData.name.toUpperCase());
            }
@@ -94,23 +97,27 @@ const Settings = () => {
 
       setIsLoading(false);
       setShowSuccess(true);
-      
-      // Atualiza o header instantaneamente
       window.dispatchEvent(new Event('settingsUpdated'));
-      
       setTimeout(() => setShowSuccess(false), 3000);
     } catch (err) { alert('Falha ao salvar.'); setIsLoading(false); }
   };
 
-  // --- LÓGICA DE USUÁRIOS ---
+  // --- LÓGICA DE USUÁRIOS (COM LOADING) ---
   const handleAddUser = async () => {
       if (!newUser.name || !newUser.email || !newUser.password) return alert("Preencha todos os campos.");
+      
+      setIsUserLoading(true); // ATIVA O LOADING
+      
       try {
           const created = await authService.addUser(newUser);
           setUsers([...users, created]);
           setNewUser({ name: '', email: '', password: '' });
-          alert("Usuário adicionado!");
-      } catch (err: any) { alert(err.message || "Erro ao adicionar usuário"); }
+          alert("Usuário adicionado com sucesso!");
+      } catch (err: any) { 
+          alert(err.response?.data || err.message || "Erro ao adicionar usuário"); 
+      } finally {
+          setIsUserLoading(false); // DESATIVA O LOADING
+      }
   };
 
   const handleRemoveUser = async (email: string) => {
@@ -145,7 +152,6 @@ const Settings = () => {
     setSettings((p: any) => ({ ...p, company: { ...p.company, [f]: val } }));
   };
 
-  // Backup Manual (Download)
   const handleDownloadBackup = async () => {
       if(!confirm("Baixar backup completo?")) return;
       try {
@@ -158,7 +164,6 @@ const Settings = () => {
       } catch (e) { alert("Erro ao gerar backup."); }
   };
 
-  // --- LÓGICA DE RESTAURAÇÃO (UPLOAD) ---
   const handleRestoreClick = () => {
       fileInputRef.current?.click();
   };
@@ -167,9 +172,8 @@ const Settings = () => {
       const file = event.target.files?.[0];
       if (!file) return;
 
-      // Confirmação de segurança
       if (!confirm("⚠️ PERIGO: Restaurar um backup irá APAGAR TODOS os dados atuais e substituí-los pelos do arquivo.\n\nDeseja continuar?")) {
-          if (fileInputRef.current) fileInputRef.current.value = ''; // Limpa input
+          if (fileInputRef.current) fileInputRef.current.value = ''; 
           return;
       }
 
@@ -177,14 +181,11 @@ const Settings = () => {
       reader.onload = async (e) => {
           try {
               const json = JSON.parse(e.target?.result as string);
-              
-              setIsLoading(true);
+              setIsLoading(true); // Loading Geral
               await settingsService.restoreBackup(json);
-              
               alert("Sistema restaurado com sucesso! Você será desconectado.");
-              localStorage.clear(); // Limpa sessão
+              localStorage.clear(); 
               window.location.href = '/login';
-
           } catch (error: any) {
               console.error(error);
               alert("Erro ao restaurar: " + (error.response?.data || error.message || "Arquivo inválido."));
@@ -196,7 +197,6 @@ const Settings = () => {
       reader.readAsText(file);
   };
 
-  // Reset de Fábrica
   const handleFactoryReset = async () => {
     if (confirmText !== 'CONFIRMAR') return;
     try {
@@ -271,10 +271,10 @@ const Settings = () => {
                             {users.map(user => (
                                 <tr key={user.id} className="hover:bg-white transition-colors">
                                     <td className="p-4 font-medium text-slate-800">{user.name}</td>
-                                    <td className="p-4 text-slate-600">{user.email}</td>
+                                    <td className="p-4 text-slate-600">{user.username || user.email}</td>
                                     <td className="p-4 text-right flex justify-end gap-2">
-                                        <button type="button" onClick={() => openResetModal(user.email)} className="text-blue-600 hover:bg-blue-100 p-2 rounded-lg transition-all" title="Alterar Senha"><Key size={16}/></button>
-                                        <button type="button" onClick={() => handleRemoveUser(user.email)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg transition-all" title="Remover"><Trash2 size={16}/></button>
+                                        <button type="button" onClick={() => openResetModal(user.username || user.email)} className="text-blue-600 hover:bg-blue-100 p-2 rounded-lg transition-all" title="Alterar Senha"><Key size={16}/></button>
+                                        <button type="button" onClick={() => handleRemoveUser(user.username || user.email)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg transition-all" title="Remover"><Trash2 size={16}/></button>
                                     </td>
                                 </tr>
                             ))}
@@ -289,7 +289,27 @@ const Settings = () => {
                         <input type="email" placeholder="Email" value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} className="p-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900/10"/>
                         <input type="password" placeholder="Senha" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="p-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900/10"/>
                     </div>
-                    <button type="button" onClick={handleAddUser} className="mt-4 w-full bg-slate-900 text-white font-bold py-3 rounded-xl hover:bg-slate-800 transition-all">Adicionar Usuário</button>
+                    
+                    {/* BOTÃO COM LOADING */}
+                    <button 
+                        type="button" 
+                        onClick={handleAddUser} 
+                        disabled={isUserLoading}
+                        className={`mt-4 w-full font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 
+                            ${isUserLoading 
+                                ? 'bg-slate-400 cursor-not-allowed text-white' 
+                                : 'bg-slate-900 text-white hover:bg-slate-800'
+                            }`}
+                    >
+                        {isUserLoading ? (
+                            <>
+                                <Loader2 className="animate-spin" size={18} />
+                                Criando Usuário...
+                            </>
+                        ) : (
+                            "Adicionar Usuário"
+                        )}
+                    </button>
                 </div>
               </div>
             )}
@@ -314,32 +334,14 @@ const Settings = () => {
                     <p className="text-sm text-red-600 mb-6">Ações irreversíveis que afetam todo o banco de dados. Tenha certeza do que está fazendo.</p>
 
                     <div className="flex flex-col sm:flex-row gap-4">
-                        {/* INPUT INVISÍVEL PARA UPLOAD */}
-                        <input 
-                            type="file" 
-                            accept=".json" 
-                            ref={fileInputRef} 
-                            onChange={handleFileChange} 
-                            className="hidden" 
-                        />
+                        <input type="file" accept=".json" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
                         
-                        {/* BOTÃO DE RESTAURAR (NOVO) */}
-                        <button 
-                            type="button" 
-                            onClick={handleRestoreClick} 
-                            disabled={isLoading}
-                            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-white border border-red-300 text-red-700 rounded-lg hover:bg-red-100 transition-colors font-bold shadow-sm"
-                        >
+                        <button type="button" onClick={handleRestoreClick} disabled={isLoading} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-white border border-red-300 text-red-700 rounded-lg hover:bg-red-100 transition-colors font-bold shadow-sm">
                             <Upload size={18} />
                             {isLoading ? 'Restaurando...' : 'Restaurar Backup (.json)'}
                         </button>
 
-                        {/* BOTÃO DE RESET */}
-                        <button 
-                            type="button" 
-                            onClick={() => { setConfirmText(''); setDangerModalOpen(true); }} 
-                            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-bold shadow-sm"
-                        >
+                        <button type="button" onClick={() => { setConfirmText(''); setDangerModalOpen(true); }} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-bold shadow-sm">
                             <Trash2 size={18} />
                             Resetar Sistema (Fábrica)
                         </button>

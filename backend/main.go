@@ -15,7 +15,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/rs/cors"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+
+	// REMOVIDO: "go.mongodb.org/mongo-driver/bson/primitive" (Para simplificar e evitar erros de build)
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/crypto/bcrypt"
@@ -29,124 +30,21 @@ func init() {
 	}
 }
 
-// --- FUNÇÕES AUXILIARES ---
-
-func hashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
-	return string(bytes), err
-}
-
-func checkPasswordHash(password, hash string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	return err == nil
-}
-
-// LOG ACTION
-func logAction(action string, details string) {
-	fmt.Printf("\033[32m[AUDITORIA %s]\033[0m %s - %s\n", time.Now().Format("15:04:05"), action, details)
-
-	if logCollection != nil {
-		entry := LogEntry{
-			ID:        strconv.FormatInt(time.Now().UnixNano(), 10),
-			Action:    action,
-			User:      "Sistema",
-			Details:   details,
-			Timestamp: time.Now(),
-		}
-
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_, err := logCollection.InsertOne(ctx, entry)
-			if err != nil {
-				fmt.Printf("ERRO AO SALVAR LOG: %v\n", err)
-			}
-		}()
-	}
-}
-
-func logSysAction(action string, details string) {
-	if logCollection != nil {
-		entry := LogEntry{
-			ID:        strconv.FormatInt(time.Now().UnixNano(), 10),
-			Action:    action,
-			User:      "Sistema",
-			Details:   details,
-			Timestamp: time.Now(),
-		}
-		context.Background()
-		go logCollection.InsertOne(context.Background(), entry)
-	}
-}
-
-// --- ROTINAS DE BACKGROUND ---
-
-func StartBackgroundSystemLogs() {
-	go func() {
-		ticker := time.NewTicker(6 * time.Hour)
-		time.Sleep(5 * time.Second)
-		logSysAction("Sistema Iniciado", "Servidor online e conexões estabelecidas")
-
-		for range ticker.C {
-			logSysAction("Monitoramento", "Verificação de integridade do sistema realizada.")
-		}
-	}()
-}
-
-func StartDailyBackupRoutine() {
-	go func() {
-		for {
-			now := time.Now()
-			nextRun := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, now.Location())
-			if now.After(nextRun) {
-				nextRun = nextRun.Add(24 * time.Hour)
-			}
-			duration := nextRun.Sub(now)
-			log.Printf("🕒 Próximo Backup Automático agendado para: %s", nextRun.Format("02/01 15:04"))
-			time.Sleep(duration)
-			performInternalBackup()
-		}
-	}()
-}
-
-func performInternalBackup() {
-	log.Println("🔄 Iniciando Backup Diário...")
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	db := mongoClient.Database("lms")
-	db.Collection("clients_backup").Drop(ctx)
-	cursor, _ := clientCollection.Find(ctx, bson.M{})
-	var clients []interface{}
-	if err := cursor.All(ctx, &clients); err == nil && len(clients) > 0 {
-		db.Collection("clients_backup").InsertMany(ctx, clients)
-	}
-
-	db.Collection("loans_backup").Drop(ctx)
-	cursorLoans, _ := loanCollection.Find(ctx, bson.M{})
-	var loans []interface{}
-	if err := cursorLoans.All(ctx, &loans); err == nil && len(loans) > 0 {
-		db.Collection("loans_backup").InsertMany(ctx, loans)
-	}
-	logSysAction("BACKUP AUTOMÁTICO", "Cópia de segurança realizada com sucesso.")
-}
-
-// ----------------------------------------------
-// STRUCTS
-// ----------------------------------------------
-
-type Claims struct {
-	Username string `json:"username"`
-	jwt.RegisteredClaims
-}
+// --- STRUCTS ATUALIZADAS ---
 
 type User struct {
 	ID   string `json:"id,omitempty" bson:"_id,omitempty"`
 	Name string `json:"name" bson:"name"`
-	// CORREÇÃO: Mapeamos o JSON "email" para o campo Username do Go
+	// IMPORTANTE: json:"email" mapeia o campo do frontend para o Username do banco
 	Username string `json:"email" bson:"username"`
 	Password string `json:"password,omitempty" bson:"password"`
 	Role     string `json:"role" bson:"role"`
+}
+
+// ... Outras structs mantidas ...
+type Claims struct {
+	Username string `json:"username"`
+	jwt.RegisteredClaims
 }
 
 type CompanySettings struct {
@@ -275,6 +173,97 @@ var (
 	settingsCollection  *mongo.Collection
 )
 
+// --- FUNÇÕES AUXILIARES ---
+
+func hashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	return string(bytes), err
+}
+
+func checkPasswordHash(password, hash string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return err == nil
+}
+
+func logAction(action string, details string) {
+	fmt.Printf("\033[32m[AUDITORIA %s]\033[0m %s - %s\n", time.Now().Format("15:04:05"), action, details)
+	if logCollection != nil {
+		entry := LogEntry{
+			ID:        strconv.FormatInt(time.Now().UnixNano(), 10),
+			Action:    action,
+			User:      "Sistema",
+			Details:   details,
+			Timestamp: time.Now(),
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			logCollection.InsertOne(ctx, entry)
+		}()
+	}
+}
+
+func logSysAction(action string, details string) {
+	if logCollection != nil {
+		entry := LogEntry{
+			ID:        strconv.FormatInt(time.Now().UnixNano(), 10),
+			Action:    action,
+			User:      "Sistema",
+			Details:   details,
+			Timestamp: time.Now(),
+		}
+		context.Background()
+		go logCollection.InsertOne(context.Background(), entry)
+	}
+}
+
+func StartBackgroundSystemLogs() {
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		time.Sleep(5 * time.Second)
+		logSysAction("Sistema Iniciado", "Servidor online e conexões estabelecidas")
+		for range ticker.C {
+			logSysAction("Monitoramento", "Verificação de integridade do sistema realizada.")
+		}
+	}()
+}
+
+func StartDailyBackupRoutine() {
+	go func() {
+		for {
+			now := time.Now()
+			nextRun := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, now.Location())
+			if now.After(nextRun) {
+				nextRun = nextRun.Add(24 * time.Hour)
+			}
+			duration := nextRun.Sub(now)
+			log.Printf("🕒 Próximo Backup Automático agendado para: %s", nextRun.Format("02/01 15:04"))
+			time.Sleep(duration)
+			performInternalBackup()
+		}
+	}()
+}
+
+func performInternalBackup() {
+	log.Println("🔄 Iniciando Backup Diário...")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	db := mongoClient.Database("lms")
+	db.Collection("clients_backup").Drop(ctx)
+	cursor, _ := clientCollection.Find(ctx, bson.M{})
+	var clients []interface{}
+	if err := cursor.All(ctx, &clients); err == nil && len(clients) > 0 {
+		db.Collection("clients_backup").InsertMany(ctx, clients)
+	}
+	db.Collection("loans_backup").Drop(ctx)
+	cursorLoans, _ := loanCollection.Find(ctx, bson.M{})
+	var loans []interface{}
+	if err := cursorLoans.All(ctx, &loans); err == nil && len(loans) > 0 {
+		db.Collection("loans_backup").InsertMany(ctx, loans)
+	}
+	logSysAction("BACKUP AUTOMÁTICO", "Cópia de segurança realizada com sucesso.")
+}
+
 func main() {
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
@@ -401,7 +390,8 @@ func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Sistema resetado."})
 }
 
-// --- LOGIN & USERS ---
+// --- HANDLERS COM DEBUG DE ERRO ---
+
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -458,28 +448,33 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// --- CORREÇÃO: Validação para evitar e-mails vazios ---
+		// LOG DE DEBUG PARA VER O QUE CHEGA
+		fmt.Printf("DEBUG: Recebido Usuário: %+v\n", u)
+
 		if u.Username == "" || u.Password == "" {
-			http.Error(w, "Email e Senha são obrigatórios", http.StatusBadRequest)
+			http.Error(w, "Erro: Email e Senha são obrigatórios (Recebido vazio)", http.StatusBadRequest)
 			return
 		}
 
 		count, _ := userCollection.CountDocuments(ctx, bson.M{"username": u.Username})
 		if count > 0 {
-			http.Error(w, "Usuário já existe", http.StatusConflict)
+			http.Error(w, "Erro: Usuário já existe", http.StatusConflict)
 			return
 		}
 		hash, _ := hashPassword(u.Password)
 		u.Password = hash
+
+		// Usa strconv igual ao Admin para evitar erro de import
 		if u.ID == "" {
-			u.ID = primitive.NewObjectID().Hex()
+			u.ID = strconv.FormatInt(time.Now().UnixNano(), 10)
 		}
 		u.Role = "OPERATOR"
+
 		_, err := userCollection.InsertOne(ctx, u)
 		if err != nil {
-			// --- CORREÇÃO: Log para ver o erro real no console ---
-			fmt.Printf("ERRO MONGO INSERT USER: %v\n", err)
-			http.Error(w, "Erro ao salvar no banco: "+err.Error(), http.StatusInternalServerError)
+			// RETORNA O ERRO REAL PARA A TELA
+			fmt.Printf("ERRO CRÍTICO MONGO: %v\n", err)
+			http.Error(w, "Erro no Banco de Dados: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -523,7 +518,7 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	var data BackupData
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		http.Error(w, "Erro ao ler arquivo de backup: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "Erro ao ler backup: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	loanCollection.Drop(ctx)
@@ -556,12 +551,12 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 		seedAdminUser()
 	}
 	settingsCollection.InsertOne(ctx, data.Settings)
-	logAction("RESTAURAÇÃO", "Sistema restaurado a partir de um backup manual.")
+	logAction("RESTAURAÇÃO", "Sistema restaurado.")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Backup restaurado com sucesso!"})
+	json.NewEncoder(w).Encode(map[string]string{"message": "Sucesso!"})
 }
 
-// --- DEMAIS HANDLERS (COM VERIFICAÇÃO DE BLACKLIST) ---
+// --- DEMAIS HANDLERS (COM BLACKLIST) ---
 
 func loansHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -579,7 +574,6 @@ func loansHandler(w http.ResponseWriter, r *http.Request) {
 		var l Loan
 		json.NewDecoder(r.Body).Decode(&l)
 
-		// --- VERIFICAÇÃO DE SEGURANÇA (BLACKLIST) NO EMPRÉSTIMO ---
 		var clientData Client
 		err := clientCollection.FindOne(ctx, bson.M{"name": l.Client}).Decode(&clientData)
 		if err == nil {
@@ -658,7 +652,6 @@ func clientsHandler(w http.ResponseWriter, r *http.Request) {
 		var c Client
 		json.NewDecoder(r.Body).Decode(&c)
 
-		// --- VERIFICAÇÃO DE SEGURANÇA (BLACKLIST) NO CADASTRO ---
 		countBL, _ := blacklistCollection.CountDocuments(ctx, bson.M{"cpf": c.CPF})
 		if countBL > 0 {
 			http.Error(w, "CPF BLOQUEADO: Este CPF consta na Lista Negra.", http.StatusForbidden)
@@ -783,7 +776,6 @@ func blacklistUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- SETTINGS ---
 func settingsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
