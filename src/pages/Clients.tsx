@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  Search, Plus, MoreVertical, Edit2, Trash2, Eye, // <--- Adicionado Eye
+  Search, Plus, MoreVertical, Edit2, Trash2, Eye, 
   MapPin, Phone, Mail, User, ShieldCheck, AlertCircle, RefreshCw, FileText, Upload, Loader2
 } from 'lucide-react';
 import Layout from '../components/Layout';
@@ -164,8 +164,14 @@ const Clients = () => {
       }
       setIsModalOpen(false);
       fetchClients();
-    } catch (err) { alert('Erro ao salvar cliente.'); } 
-    finally { setIsLoading(false); }
+    } catch (error: any) { 
+        // --- CORREÇÃO AQUI: EXIBE A MENSAGEM DO BACKEND ---
+        console.error("Erro ao salvar:", error);
+        const msg = error.response?.data || error.message || "Erro desconhecido ao salvar.";
+        alert("❌ ERRO: " + msg);
+    } finally { 
+        setIsLoading(false); 
+    }
   };
 
   const handleDelete = async (id: string | number) => {
@@ -218,14 +224,12 @@ const Clients = () => {
                     <td className="p-4 text-center"><span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${client.status === 'Ativo' ? 'bg-green-100 text-green-700' : client.status === 'Bloqueado' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>{client.status}</span></td>
                     <td className="p-4 text-right relative">
                         <div className="relative inline-block text-left">
-                            {/* BOTÃO DA LINHA AGORA É DETALHES (OLHO) */}
                             <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === client.id ? null : client.id); }} className={`p-2 rounded-lg transition-all ${openMenuId === client.id ? 'bg-slate-200 text-slate-900' : 'text-slate-400 hover:text-slate-900 hover:bg-slate-100'}`} title="Opções"><MoreVertical size={18} /></button>
                             
                             {openMenuId === client.id && (
                                 <div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
                                     <div className="py-1">
                                         <button onClick={() => handleOpenModal(client)} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
-                                            {/* ÍCONE DE OLHO E TEXTO DETALHES */}
                                             <Eye size={16} className="text-blue-500" /> Detalhes
                                         </button>
                                         <div className="border-t border-slate-100 my-1"></div>
@@ -234,7 +238,6 @@ const Clients = () => {
                                 </div>
                             )}
                         </div>
-                        {/* Botão rápido lateral agora é o OLHO também */}
                         <button onClick={() => handleOpenModal(client)} className="ml-2 p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Ver Detalhes">
                             <Eye size={18} />
                         </button>

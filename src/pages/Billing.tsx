@@ -242,7 +242,6 @@ const Billing = () => {
     const expectedInterest = selectedLoan.amount * (selectedLoan.interestRate / 100);
     const totalInterestInCycle = valInterest + cycleAcc.interest;
 
-    // Se não completou os juros e não marcou quitar
     if (totalInterestInCycle < (expectedInterest - 0.10) && !settleInterest) {
         const remaining = expectedInterest - totalInterestInCycle;
         const userConfirmed = window.confirm(
@@ -540,25 +539,32 @@ const Billing = () => {
                 <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
                     {(!selectedLoan.history || selectedLoan.history.length === 0) ? (<div className="text-center py-10 text-slate-400 flex flex-col items-center"><History size={32} className="mb-2 opacity-50"/><p className="text-sm">Nenhum registro de pagamento encontrado.</p></div>) : (
                         <div className="relative border-l-2 border-slate-100 ml-3 space-y-6 py-2">
-                            {selectedLoan.history.slice().reverse().map((record, idx) => (
-                                <div key={idx} className="relative pl-6">
-                                    <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-2 border-white ${record.type.includes('Parcela') || record.type === 'Entrada' ? 'bg-blue-500' : 'bg-green-500'}`}></div>
-                                    <div>
-                                        <div className="flex justify-between items-start mb-1">
-                                            <p className="text-xs text-slate-400 font-mono">{new Date(record.date).toLocaleDateString('pt-BR')} às {new Date(record.date).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}</p>
-                                            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${record.type.includes('Juros') ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>{record.type}</span>
-                                        </div>
-                                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                                            <div className="flex justify-between items-center mb-1 border-b border-slate-200 pb-1"><span className="text-xs font-bold text-slate-500">TOTAL PAGO:</span><span className="font-black text-slate-800">R$ {formatMoney(record.amount)}</span></div>
-                                            <div className="grid grid-cols-2 gap-2 mt-2">
-                                                <div><span className="block text-[10px] uppercase text-slate-400 font-bold">Amortização</span><span className="text-xs font-bold text-slate-700">R$ {formatMoney(record.capitalPaid || 0)}</span></div>
-                                                <div><span className="block text-[10px] uppercase text-slate-400 font-bold">Lucro (Juros)</span><span className="text-xs font-bold text-green-600">R$ {formatMoney(record.interestPaid || 0)}</span></div>
+                            {selectedLoan.history.slice().reverse().map((record, idx) => {
+                                // --- CORREÇÃO VISUAL AQUI ---
+                                const isOpening = record.type.toLowerCase().includes('abertura');
+                                return (
+                                    <div key={idx} className="relative pl-6">
+                                        <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-2 border-white ${isOpening ? 'bg-green-500' : 'bg-blue-500'}`}></div>
+                                        <div>
+                                            <div className="flex justify-between items-start mb-1">
+                                                <p className="text-xs text-slate-400 font-mono">{new Date(record.date).toLocaleDateString('pt-BR')} às {new Date(record.date).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}</p>
+                                                <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${isOpening ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>{record.type}</span>
                                             </div>
-                                            {record.note && <p className="text-[10px] text-slate-400 italic mt-2 border-t border-slate-200 pt-1">{record.note}</p>}
+                                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                                <div className="flex justify-between items-center mb-1 border-b border-slate-200 pb-1">
+                                                    <span className="text-xs font-bold text-slate-500">{isOpening ? 'VALOR CONCEDIDO:' : 'TOTAL PAGO:'}</span>
+                                                    <span className="font-black text-slate-800">R$ {formatMoney(record.amount)}</span>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-2 mt-2">
+                                                    <div><span className="block text-[10px] uppercase text-slate-400 font-bold">Amortização</span><span className="text-xs font-bold text-slate-700">R$ {formatMoney(record.capitalPaid || 0)}</span></div>
+                                                    <div><span className="block text-[10px] uppercase text-slate-400 font-bold">Lucro (Juros)</span><span className="text-xs font-bold text-green-600">R$ {formatMoney(record.interestPaid || 0)}</span></div>
+                                                </div>
+                                                {record.note && <p className="text-[10px] text-slate-400 italic mt-2 border-t border-slate-200 pt-1">{record.note}</p>}
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     )}
                 </div>

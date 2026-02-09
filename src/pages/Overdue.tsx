@@ -71,8 +71,17 @@ const Overdue = () => {
       if (loan.history && loan.history.length > 0) {
         loan.history.forEach(record => {
             const payDate = new Date(record.date);
-            // Ajuste fuso horário se necessário, mas geralmente .toDateString() resolve
-            // Compara se é o mesmo dia, mês e ano
+            // Ajuste de fuso horário para garantir que "Hoje" bata corretamente
+            payDate.setMinutes(payDate.getMinutes() + payDate.getTimezoneOffset());
+
+            // --- CORREÇÃO AQUI ---
+            // Verifica o tipo do registro. Se for Abertura, IGNORA.
+            const type = record.type ? record.type.toLowerCase() : '';
+            if (type.includes('abertura') || type.includes('empréstimo') || type.includes('contrato')) {
+                return; // Pula este registro, pois é saída de dinheiro
+            }
+            // ---------------------
+
             if (
                 payDate.getDate() === today.getDate() &&
                 payDate.getMonth() === today.getMonth() &&
@@ -86,7 +95,6 @@ const Overdue = () => {
     });
 
     // Eficiência: Relação entre pagamentos recebidos hoje e total de inadimplentes ativos
-    // Se não houver inadimplentes, a eficiência é 100% (ou 0 se não recebeu nada, depende da regra)
     const eff = overdueCount > 0 ? Math.round((payingCount / (overdueCount + payingCount)) * 100) : (sumRecoveredToday > 0 ? 100 : 0);
 
     setMetrics({
