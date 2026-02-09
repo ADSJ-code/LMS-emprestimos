@@ -9,8 +9,7 @@ import {
   Share2, 
   History, 
   Settings, 
-  LogOut,
-  ShieldCheck 
+  LogOut 
 } from 'lucide-react';
 import { settingsService } from '../services/api';
 

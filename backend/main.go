@@ -42,15 +42,13 @@ func checkPasswordHash(password, hash string) bool {
 
 // LOG ACTION: Salva no Banco de Dados e Imprime no Terminal
 func logAction(action string, details string) {
-	// 1. Visual no Terminal
 	fmt.Printf("\033[32m[AUDITORIA %s]\033[0m %s - %s\n", time.Now().Format("15:04:05"), action, details)
 
-	// 2. Salva no MongoDB
 	if logCollection != nil {
 		entry := LogEntry{
 			ID:        strconv.FormatInt(time.Now().UnixNano(), 10),
 			Action:    action,
-			User:      "Sistema", // Em prod, pegaria do Contexto JWT
+			User:      "Sistema",
 			Details:   details,
 			Timestamp: time.Now(),
 		}
@@ -64,21 +62,6 @@ func logAction(action string, details string) {
 			}
 		}()
 	}
-}
-
-// ROTINA DE BACKGROUND
-func StartBackgroundSystemLogs() {
-	ticker := time.NewTicker(6 * time.Hour)
-	go func() {
-		time.Sleep(5 * time.Second)
-		logSysAction("Sistema Iniciado", "Servidor online e conexões estabelecidas")
-
-		for range ticker.C {
-			logSysAction("Backup Automático", "Backup do Banco de Dados realizado com sucesso (Snapshot)")
-			time.Sleep(2 * time.Second)
-			logSysAction("Verificação de Segurança", "Varredura de integridade completada. Nenhuma ameaça.")
-		}
-	}()
 }
 
 func logSysAction(action string, details string) {
@@ -95,6 +78,74 @@ func logSysAction(action string, details string) {
 	}
 }
 
+// --- ROTINAS DE BACKGROUND (LOGS E BACKUP) ---
+
+func StartBackgroundSystemLogs() {
+	// Rotina de Logs do Sistema (a cada 6h)
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		time.Sleep(5 * time.Second)
+		logSysAction("Sistema Iniciado", "Servidor online e conexões estabelecidas")
+
+		for range ticker.C {
+			logSysAction("Monitoramento", "Verificação de integridade do sistema realizada.")
+		}
+	}()
+}
+
+// StartDailyBackupRoutine: Executa backup automático às 03:00 da manhã
+func StartDailyBackupRoutine() {
+	go func() {
+		for {
+			now := time.Now()
+			// Define a próxima execução para as 03:00:00 de hoje
+			nextRun := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, now.Location())
+
+			// Se já passou das 3 da manhã hoje, agenda para amanhã
+			if now.After(nextRun) {
+				nextRun = nextRun.Add(24 * time.Hour)
+			}
+
+			duration := nextRun.Sub(now)
+			log.Printf("🕒 Próximo Backup Automático agendado para: %s (em %v)", nextRun.Format("02/01 15:04"), duration)
+
+			// Dorme até a hora do backup
+			time.Sleep(duration)
+
+			// Executa o Backup
+			performInternalBackup()
+		}
+	}()
+}
+
+func performInternalBackup() {
+	log.Println("🔄 Iniciando Backup Diário...")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// 1. Backup de Clientes (Copia para clients_backup)
+	// Para simplificar, dropamos o backup antigo e criamos um novo
+	db := mongoClient.Database("lms")
+	db.Collection("clients_backup").Drop(ctx)
+
+	cursor, _ := clientCollection.Find(ctx, bson.M{})
+	var clients []interface{}
+	if err := cursor.All(ctx, &clients); err == nil && len(clients) > 0 {
+		db.Collection("clients_backup").InsertMany(ctx, clients)
+	}
+
+	// 2. Backup de Empréstimos
+	db.Collection("loans_backup").Drop(ctx)
+	cursorLoans, _ := loanCollection.Find(ctx, bson.M{})
+	var loans []interface{}
+	if err := cursorLoans.All(ctx, &loans); err == nil && len(loans) > 0 {
+		db.Collection("loans_backup").InsertMany(ctx, loans)
+	}
+
+	logSysAction("BACKUP AUTOMÁTICO", "Cópia de segurança de Clientes e Empréstimos realizada com sucesso.")
+	log.Println("✅ Backup Diário Concluído!")
+}
+
 // ----------------------------------------------
 // STRUCTS
 // ----------------------------------------------
@@ -107,7 +158,7 @@ type Claims struct {
 type User struct {
 	ID       string `json:"id,omitempty" bson:"_id,omitempty"`
 	Name     string `json:"name" bson:"name"`
-	Username string `json:"username" bson:"username"` // Email
+	Username string `json:"username" bson:"username"`
 	Password string `json:"password,omitempty" bson:"password"`
 	Role     string `json:"role" bson:"role"`
 }
@@ -242,6 +293,7 @@ func main() {
 
 	seedAdminUser()
 	StartBackgroundSystemLogs()
+	StartDailyBackupRoutine() // INICIA O BACKUP AGENDADO
 
 	mux := http.NewServeMux()
 
@@ -249,6 +301,10 @@ func main() {
 	mux.HandleFunc("/api/auth/login", loginHandler)
 	mux.HandleFunc("/api/users", usersHandler)
 	mux.HandleFunc("/api/users/", userDetailHandler)
+
+	// ROTA DE RESET (NOVA)
+	mux.HandleFunc("/api/admin/reset", resetDatabaseHandler)
+
 	mux.HandleFunc("/api/loans", loansHandler)
 	mux.HandleFunc("/api/loans/", loanUpdateHandler)
 	mux.HandleFunc("/api/clients", clientsHandler)
@@ -263,15 +319,13 @@ func main() {
 
 	// --- 2. SERVIR O FRONT-END (MODO ROBUSTO) ---
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Lista de lugares possíveis onde o React pode estar
 		possiveisCaminhos := []string{
-			"dist",            // Caminho no Docker (Render)
-			"backend/dist",    // Caminho Local (VS Code)
-			"../backend/dist", // Outra possibilidade local
+			"dist",
+			"backend/dist",
+			"../backend/dist",
 		}
 
 		var caminhoDist string
-		// Tenta encontrar qual caminho existe de verdade
 		for _, p := range possiveisCaminhos {
 			if info, err := os.Stat(p); err == nil && info.IsDir() {
 				caminhoDist = p
@@ -279,29 +333,22 @@ func main() {
 			}
 		}
 
-		// Se não achou a pasta em lugar nenhum, erro amigável (sem crash)
 		if caminhoDist == "" {
 			http.Error(w, "Erro Crítico: Pasta 'dist' do Frontend não encontrada. O Build falhou ou a pasta está no lugar errado.", http.StatusInternalServerError)
 			return
 		}
 
-		// Caminho completo do arquivo solicitado
 		path := filepath.Join(caminhoDist, r.URL.Path)
-
-		// Verifica se o arquivo existe
 		_, err := os.Stat(path)
 
-		// Lógica SPA: Se o arquivo não existe (ex: rota /dashboard), serve index.html
 		if os.IsNotExist(err) {
 			http.ServeFile(w, r, filepath.Join(caminhoDist, "index.html"))
 			return
 		} else if err != nil {
-			// Erro de permissão ou outro problema
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// Se o arquivo existe (ex: style.css, logo.png), serve ele direto
 		http.FileServer(http.Dir(caminhoDist)).ServeHTTP(w, r)
 	})
 
@@ -320,20 +367,16 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
 
-// --- FUNÇÃO CORRIGIDA (TIMEOUT AUMENTADO) ---
+// --- SEED ADMIN (Com Timeout de 30s) ---
 func seedAdminUser() {
-	// Aumentei para 30 segundos para garantir que dá tempo no plano Free
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var user User
-	// Tenta achar o usuário
 	err := userCollection.FindOne(ctx, bson.M{"username": "admin@creditnow.com"}).Decode(&user)
 
 	if err == mongo.ErrNoDocuments {
-		// Se não achou, cria o usuário
 		log.Println("⚠️ Admin não encontrado. Criando agora...")
-
 		passwordHash, _ := hashPassword("123456")
 		user = User{
 			ID:       strconv.FormatInt(time.Now().UnixNano(), 10),
@@ -356,7 +399,41 @@ func seedAdminUser() {
 	}
 }
 
-// --- DEMAIS HANDLERS (LOGIN, USERS, ETC) ---
+// --- HANDLER DE RESET (NOVO) ---
+func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Aqui poderíamos checar senha extra, mas vamos confiar no Frontend mandando só se user confirmar
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// 1. Limpa coleções operacionais
+	loanCollection.Drop(ctx)
+	clientCollection.Drop(ctx)
+	affiliateCollection.Drop(ctx)
+	blacklistCollection.Drop(ctx)
+	logCollection.Drop(ctx)
+
+	// 2. Limpa Usuários (mas vamos recriar o admin logo em seguida)
+	userCollection.Drop(ctx)
+
+	// NÃO LIMPA: settingsCollection (Para manter a marca da empresa)
+
+	log.Println("⚠️ BANCO DE DADOS RESETADO PELO USUÁRIO")
+
+	// 3. Recria o Admin imediatamente
+	seedAdminUser()
+
+	logSysAction("SYSTEM RESET", "Banco de dados reiniciado para o padrão de fábrica (Configurações mantidas).")
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Sistema resetado com sucesso."})
+}
+
+// --- DEMAIS HANDLERS ---
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

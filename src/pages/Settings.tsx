@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Save, Building, Shield, CheckCircle, AlertTriangle, RefreshCw, Download, Lock, Users, Plus, Trash2, Key, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Save, Building, Shield, CheckCircle, RefreshCw, Download, Users, Plus, Trash2, Key, X, AlertTriangle } from 'lucide-react';
 import Layout from '../components/Layout';
 import { settingsService, clientService, loanService, authService } from '../services/api';
 
@@ -32,6 +32,10 @@ const Settings = () => {
   const [resetModalOpen, setResetModalOpen] = useState(false);
   const [selectedUserEmail, setSelectedUserEmail] = useState<string | null>(null);
   const [newPasswordReset, setNewPasswordReset] = useState('');
+
+  // Estado para Reset de Fábrica (Zona de Perigo)
+  const [dangerModalOpen, setDangerModalOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
 
   // Estado inicial
   const defaultSettings = {
@@ -68,6 +72,7 @@ const Settings = () => {
       await settingsService.save(settings);
       setIsLoading(false);
       setShowSuccess(true);
+      // Dispara evento para atualizar o Layout (Header) instantaneamente
       window.dispatchEvent(new Event('settingsUpdated'));
       setTimeout(() => setShowSuccess(false), 3000);
     } catch (err) { alert('Falha ao salvar.'); setIsLoading(false); }
@@ -116,8 +121,6 @@ const Settings = () => {
     setSettings((p: any) => ({ ...p, company: { ...p.company, [f]: val } }));
   };
 
-  const updateSystem = (f: string, v: any) => setSettings((p: any) => ({ ...p, system: { ...p.system, [f]: v } }));
-
   // Backup Manual
   const handleDownloadBackup = async () => {
       if(!confirm("Baixar backup completo?")) return;
@@ -129,6 +132,24 @@ const Settings = () => {
           el.setAttribute("href", dataStr); el.setAttribute("download", `backup_${new Date().toISOString().split('T')[0]}.json`);
           document.body.appendChild(el); el.click(); el.remove();
       } catch (e) { alert("Erro ao gerar backup."); }
+  };
+
+  // Reset de Fábrica
+  const handleFactoryReset = async () => {
+    if (confirmText !== 'CONFIRMAR') return;
+    try {
+        const response = await fetch('/api/admin/reset', { 
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        });
+        if (response.ok) {
+            alert('Sistema resetado com sucesso. Você será desconectado.');
+            localStorage.removeItem('token');
+            window.location.href = '/login';
+        } else {
+            alert('Erro ao resetar sistema.');
+        }
+    } catch (e) { alert('Erro de conexão.'); }
   };
 
   return (
@@ -172,7 +193,7 @@ const Settings = () => {
               </div>
             )}
 
-            {/* ABA USUÁRIOS (NOVA) */}
+            {/* ABA USUÁRIOS */}
             {activeTab === 'usuarios' && (
               <div className="space-y-6 animate-in fade-in duration-300">
                 <div className="flex items-center gap-3 border-b border-gray-100 pb-2"><Users className="text-slate-400" /><h3 className="text-lg font-bold text-slate-800">Gerenciar Acessos</h3></div>
@@ -214,7 +235,21 @@ const Settings = () => {
             {activeTab === 'sistema' && (
               <div className="space-y-6 animate-in fade-in duration-300">
                 <div className="flex items-center gap-3 border-b border-gray-100 pb-2"><Shield className="text-slate-400" /><h3 className="text-lg font-bold text-slate-800">Manutenção</h3></div>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex justify-between items-center"><div><h4 className="font-bold text-slate-800 flex gap-2"><Download size={18} className="text-blue-600"/> Backup Manual</h4><p className="text-sm text-slate-500">Baixar cópia dos dados locais.</p></div><button type="button" onClick={handleDownloadBackup} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700">Baixar (.json)</button></div>
+                
+                {/* Backup Manual */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex justify-between items-center mb-4">
+                    <div><h4 className="font-bold text-slate-800 flex gap-2"><Download size={18} className="text-blue-600"/> Backup Manual</h4><p className="text-sm text-slate-500">Baixar cópia dos dados locais.</p></div>
+                    <button type="button" onClick={handleDownloadBackup} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700">Baixar (.json)</button>
+                </div>
+
+                {/* ZONA DE PERIGO (RESET) */}
+                <div className="bg-red-50 border border-red-200 rounded-xl p-5 flex justify-between items-center">
+                    <div>
+                        <h4 className="font-bold text-red-800 flex gap-2"><AlertTriangle size={18} className="text-red-600"/> Reset de Fábrica</h4>
+                        <p className="text-sm text-red-600">Apaga todos os dados e reseta o sistema. Irreversível.</p>
+                    </div>
+                    <button type="button" onClick={() => { setConfirmText(''); setDangerModalOpen(true); }} className="px-4 py-2 bg-red-600 text-white text-sm font-bold rounded-lg hover:bg-red-700">Resetar Sistema</button>
+                </div>
               </div>
             )}
           </form>
@@ -224,14 +259,23 @@ const Settings = () => {
       {/* MODAL RESET SENHA */}
       <Modal isOpen={resetModalOpen} onClose={() => setResetModalOpen(false)} title="Alterar Senha">
           <div className="space-y-4">
-              <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-200 text-sm text-yellow-800">
-                  Alterando senha de: <strong>{selectedUserEmail}</strong>
+              <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-200 text-sm text-yellow-800">Alterando senha de: <strong>{selectedUserEmail}</strong></div>
+              <div><label className="block text-sm font-bold text-slate-700 mb-1">Nova Senha</label><input type="password" value={newPasswordReset} onChange={(e) => setNewPasswordReset(e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" placeholder="Digite a nova senha..." /></div>
+              <button onClick={confirmPasswordReset} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all">Confirmar Alteração</button>
+          </div>
+      </Modal>
+
+      {/* MODAL RESET FÁBRICA (PERIGO) */}
+      <Modal isOpen={dangerModalOpen} onClose={() => setDangerModalOpen(false)} title="⚠️ Confirmação Crítica">
+          <div className="space-y-4">
+              <div className="bg-red-100 p-4 rounded-lg border border-red-200 text-sm text-red-900">
+                  <strong>Atenção:</strong> Esta ação apagará permanentemente todos os clientes, empréstimos e registros do sistema. As configurações da empresa serão mantidas.
               </div>
               <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-1">Nova Senha</label>
-                  <input type="password" value={newPasswordReset} onChange={(e) => setNewPasswordReset(e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" placeholder="Digite a nova senha..." />
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Para confirmar, digite "CONFIRMAR":</label>
+                  <input type="text" value={confirmText} onChange={(e) => setConfirmText(e.target.value)} className="w-full p-3 border border-red-200 rounded-xl outline-none focus:ring-2 focus:ring-red-500" placeholder="CONFIRMAR" />
               </div>
-              <button onClick={confirmPasswordReset} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all">Confirmar Alteração</button>
+              <button onClick={handleFactoryReset} disabled={confirmText !== 'CONFIRMAR'} className={`w-full py-3 font-bold rounded-xl transition-all ${confirmText === 'CONFIRMAR' ? 'bg-red-600 text-white hover:bg-red-700 shadow-lg' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>APAGAR TUDO</button>
           </div>
       </Modal>
     </Layout>

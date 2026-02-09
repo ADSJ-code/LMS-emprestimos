@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LogIn, Lock, Mail, ArrowRight, CheckCircle, Loader2, AlertCircle, ArrowLeft, PhoneCall } from 'lucide-react';
-import { authService } from '../services/api';
+import { authService, settingsService } from '../services/api';
 
 const Login = () => {
   const navigate = useNavigate();
@@ -15,8 +15,29 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // 1. EFEITO: VERIFICAR "MANTER CONECTADO"
+  // ESTADO PARA NOME DA EMPRESA (Dinâmico)
+  const [companyName, setCompanyName] = useState('Credit Now');
+  const [initials, setInitials] = useState('CN');
+
+  // 1. EFEITO: CARREGAR CONFIGURAÇÕES E "MANTER CONECTADO"
   useEffect(() => {
+    // Carrega nome da empresa
+    const loadSettings = async () => {
+        try {
+            const data = await settingsService.get();
+            const legacyData = data as any;
+            let name = 'Credit Now';
+            
+            if (data?.company?.name) name = data.company.name;
+            else if (legacyData?.general?.companyName) name = legacyData.general.companyName;
+
+            setCompanyName(name);
+            setInitials(name.substring(0, 2).toUpperCase());
+        } catch (e) { console.error('Erro ao carregar marca', e); }
+    };
+    loadSettings();
+
+    // Carrega usuário lembrado
     const savedEmail = localStorage.getItem('lms_remember_user');
     if (savedEmail) {
       setEmail(savedEmail);
@@ -75,8 +96,8 @@ const Login = () => {
             
             <div className="text-left">
               <div className="inline-flex items-center gap-2 mb-6">
-                <div className="w-8 h-8 bg-slate-900 rounded-lg flex items-center justify-center text-yellow-400 font-bold">CN</div>
-                <span className="font-bold text-slate-900 text-lg tracking-tight">Credit Now</span>
+                <div className="w-8 h-8 bg-slate-900 rounded-lg flex items-center justify-center text-yellow-400 font-bold">{initials}</div>
+                <span className="font-bold text-slate-900 text-lg tracking-tight">{companyName}</span>
               </div>
               
               <h1 className="text-3xl font-bold text-slate-900 tracking-tight mb-2">

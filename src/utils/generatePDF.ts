@@ -1,6 +1,8 @@
 import jsPDF from 'jspdf';
 import { Loan, Client, settingsService } from '../services/api';
 
+// --- HELPER FUNCTIONS ---
+
 const formatMoney = (value: number) => {
   return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 };
@@ -33,22 +35,49 @@ const calculateTotalInstallments = (loan: Loan): number => {
     const due = new Date(loan.nextDue);
     start.setMinutes(start.getMinutes() + start.getTimezoneOffset());
     due.setMinutes(due.getMinutes() + due.getTimezoneOffset());
+    
+    // Cálculo aproximado de meses
     const monthsPassed = (due.getFullYear() - start.getFullYear()) * 12 + (due.getMonth() - start.getMonth());
     const correction = loan.installments > 0 ? 1 : 0;
     const totalEstimated = loan.installments + monthsPassed - correction;
     return totalEstimated > 0 ? totalEstimated : loan.installments;
 };
 
+// Tenta extrair a cidade do endereço da empresa (formato esperado: "Rua X, 00 - Bairro, Cidade/UF")
+const extractCityFromAddress = (address: string, defaultCity: string = "São Paulo"): string => {
+    if (!address) return defaultCity;
+    try {
+        // Tenta achar padrão "Cidade/UF" ou pegar a parte antes do CEP
+        const parts = address.split(',');
+        if (parts.length > 2) {
+            const cityPart = parts[parts.length - 2]; // Pega a penúltima parte (comum em endereços)
+            if (cityPart && cityPart.includes('/')) return cityPart.split('/')[0].trim();
+            if (cityPart && cityPart.includes('-')) return cityPart.split('-')[1].trim(); // Bairro - Cidade
+            return cityPart.trim();
+        }
+        return defaultCity;
+    } catch (e) {
+        return defaultCity;
+    }
+}
+
+// --- GERADORES ---
+
 export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
+  // 1. Busca Configurações Atualizadas
   const settings = await settingsService.get();
   
+  // Garante que estamos lendo do lugar certo (nova estrutura)
   const legacySettings = settings as any;
   const companyData = settings.company || legacySettings.general || {};
 
-  const lenderName = companyData.name || companyData.companyName || "CREDIT NOW FINANCEIRA";
+  const lenderName = companyData.name || "CREDIT NOW FINANCEIRA";
   const lenderCNPJ = companyData.cnpj || "00.000.000/0001-00";
   const lenderAddress = companyData.address || "Endereço da Empresa, 000 - Cidade/UF";
-  const lenderPix = companyData.pixKey || companyData.cnpj || "Chave PIX não informada";
+  const lenderPix = companyData.pixKey || "Chave PIX não informada";
+  
+  // Define cidade da assinatura baseada no endereço da empresa ou do cliente
+  const contractCity = extractCityFromAddress(lenderAddress, clientData?.city || "Local");
 
   const doc = new jsPDF();
   const totalOriginalInstallments = calculateTotalInstallments(loan);
@@ -69,7 +98,12 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
     doc.setFont("times", isBold ? "bold" : "normal");
     doc.setFontSize(fontSize);
     const lines = doc.splitTextToSize(text, maxLineWidth);
-    if (y + (lines.length * 5) > 280) { doc.addPage(); y = 20; }
+    
+    // Quebra de página se necessário
+    if (y + (lines.length * 5) > 280) { 
+        doc.addPage(); 
+        y = 20; 
+    }
     
     if (align === 'justify' || align === 'left') doc.text(lines, margin, y, { align: 'left', maxWidth: maxLineWidth });
     else if (align === 'center') doc.text(lines, pageWidth / 2, y, { align: 'center', maxWidth: maxLineWidth });
@@ -77,6 +111,8 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
 
     y += (lines.length * 5) + 2;
   };
+
+  // --- CONTEÚDO DO CONTRATO ---
 
   addText("INSTRUMENTO PARTICULAR DE MÚTUO", true, 'center', 14);
   y += 5;
@@ -118,13 +154,13 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
 
   y += 5;
   addText("Cláusula Terceira – DISPOSIÇÕES GERAIS", true);
-  addText(`3.1. O presente Contrato obriga as Partes e seus sucessores. O foro eleito é o da Comarca de São Paulo/SP.`);
+  addText(`3.1. O presente Contrato obriga as Partes e seus sucessores. O foro eleito é o da Comarca de ${contractCity}.`);
 
   y += 10;
   addText(`E, por estarem de acordo, as Partes assinam o presente instrumento em duas vias.`, false);
   
   y += 10;
-  addText(`São Paulo, ${formatDateExtenso(new Date().toISOString())}.`, false, 'right');
+  addText(`${contractCity}, ${formatDateExtenso(new Date().toISOString())}.`, false, 'right');
 
   y += 20;
   if (y > 230) { doc.addPage(); y = 40; }
@@ -145,8 +181,11 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client) => 
     const legacySettings = settings as any;
     const companyData = settings.company || legacySettings.general || {};
 
-    const lenderName = companyData.name || companyData.companyName || "CREDIT NOW FINANCEIRA";
+    const lenderName = companyData.name || "CREDIT NOW FINANCEIRA";
     const lenderCNPJ = companyData.cnpj || "00.000.000/0001-00";
+    const lenderAddress = companyData.address || "";
+    // Tenta extrair a cidade para a Promissória também
+    const promissoriaCity = extractCityFromAddress(lenderAddress, "São Paulo - SP");
 
     const doc = new jsPDF('l', 'mm', 'a4'); 
     const totalOriginalInstallments = calculateTotalInstallments(loan);
@@ -185,7 +224,7 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client) => 
         const lines = doc.splitTextToSize(texto, 240);
         doc.text(lines, 30, 85);
 
-        doc.text(`Pagável em: São Paulo - SP`, 30, 105);
+        doc.text(`Pagável em: ${promissoriaCity}`, 30, 105);
 
         doc.setFont("times", "bold");
         doc.text("Emitente:", 30, 120);
