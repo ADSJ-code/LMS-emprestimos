@@ -99,10 +99,25 @@ const api = axios.create({
   }
 });
 
-// Interceptor de Autenticação
+// Interceptor de Autenticação (CORRIGIDO)
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
+    // Tenta pegar o token puro
+    let token = localStorage.getItem('token');
+    
+    // Se não achar, tenta pegar da sessão completa (que é o padrão do Login.tsx)
+    if (!token) {
+        const session = localStorage.getItem('lms_active_session');
+        if (session) {
+            try {
+                const parsed = JSON.parse(session);
+                token = parsed.token;
+            } catch (e) {
+                console.error("Erro ao ler token da sessão", e);
+            }
+        }
+    }
+
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -115,7 +130,9 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response && error.response.status === 401) {
+    // Ignora erro 401 na tela de login para não gerar loop
+    if (error.response && error.response.status === 401 && !window.location.pathname.includes('/login')) {
+        console.warn("Sessão expirada. Redirecionando para login.");
         authService.logout();
         window.location.href = '/login';
     }
@@ -127,8 +144,13 @@ api.interceptors.response.use(
 
 export const authService = {
   login: async (username: string, password: string) => {
-    // POST /api/auth/login
     const response = await api.post('/auth/login', { username, password });
+    
+    // Salva o token puro também para facilitar
+    if (response.data.token) {
+        localStorage.setItem('token', response.data.token);
+    }
+    
     return response.data;
   },
   
@@ -144,7 +166,6 @@ export const authService = {
   },
   
   updateUser: async (email: string, newData: any) => {
-    // PUT /api/users/{email}
     const response = await api.put(`/users/${email}`, newData);
     return response.data;
   },
@@ -245,7 +266,30 @@ export const settingsService = {
     return response.data;
   },
   save: async (settings: any) => {
-    const response = await api.post('/settings', settings);
+    // GARANTE QUE ESTAMOS ENVIANDO O JSON NO FORMATO CERTO
+    // O Backend espera: { company: {...}, system: {...} }
+    // Se recebermos algo flat, estruturamos aqui
+    let payload = settings;
+    
+    // Proteção extra: se estiver faltando a estrutura, tenta montar
+    if (!settings.company && settings.name) {
+         payload = {
+             company: {
+                 name: settings.name,
+                 cnpj: settings.cnpj,
+                 pixKey: settings.pixKey,
+                 email: settings.email,
+                 phone: settings.phone,
+                 address: settings.address
+             },
+             system: {
+                 autoBackup: settings.autoBackup || false,
+                 requireLogin: true
+             }
+         };
+    }
+
+    const response = await api.post('/settings', payload);
     return response.data;
   }
 };
