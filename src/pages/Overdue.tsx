@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
 import { 
   Search, AlertTriangle, Phone, Calendar, ArrowRight, 
-  DollarSign, RefreshCw, Filter, MessageCircle 
+  DollarSign, RefreshCw, Filter, MessageCircle, Send
 } from 'lucide-react';
 import Layout from '../components/Layout';
-import { loanService, Loan } from '../services/api';
+import { loanService, clientService, Loan, Client } from '../services/api'; // Adicionado clientService e Client
 import { calculateOverdueValue, formatMoney } from '../utils/finance';
 
 const Overdue = () => {
   const [loans, setLoans] = useState<Loan[]>([]);
+  const [clients, setClients] = useState<Client[]>([]); // Novo estado para clientes
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   
@@ -20,11 +21,16 @@ const Overdue = () => {
     count: 0
   });
 
-  const fetchOverdueLoans = async () => {
+  const fetchData = async () => {
     setIsLoading(true);
     try {
-      const allLoans = await loanService.getAll();
-      setLoans(allLoans || []);
+      // Buscamos Clientes e Empréstimos em paralelo para cruzar o telefone
+      const [loansData, clientsData] = await Promise.all([
+          loanService.getAll(),
+          clientService.getAll()
+      ]);
+      setLoans(loansData || []);
+      setClients(clientsData || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -33,13 +39,57 @@ const Overdue = () => {
   };
 
   useEffect(() => {
-    fetchOverdueLoans();
+    fetchData();
   }, []);
+
+  // --- FUNÇÃO DO WHATSAPP (PREPARADA) ---
+  const handleWhatsApp = (loan: Loan, updatedValue: number) => {
+      // 1. Acha o cliente dono do empréstimo para pegar o telefone
+      const client = clients.find(c => c.name === loan.client);
+      
+      if (!client || !client.phone) {
+          alert("❌ Erro: Telefone do cliente não encontrado no cadastro.");
+          return;
+      }
+
+      // 2. Limpa o telefone (remove ( ) - e espaços)
+      const cleanPhone = client.phone.replace(/\D/g, '');
+      
+      // Validação básica de número brasileiro (com ou sem 9)
+      if (cleanPhone.length < 10 || cleanPhone.length > 11) {
+          alert("⚠️ O número de telefone parece inválido.");
+          return;
+      }
+
+      // 3. Monta a Mensagem Personalizada
+      const firstName = loan.client.split(' ')[0];
+      const message = `Olá ${firstName}, identificamos uma pendência no valor atualizado de R$ ${formatMoney(updatedValue)} referente ao seu contrato. Podemos agendar o pagamento para regularizar?`;
+
+      // 4. LÓGICA DE ENVIO
+      
+      // --- OPÇÃO A: API AUTOMÁTICA (DESATIVADO - FUTURO) ---
+      /*
+      try {
+          await api.post('/integrations/whatsapp/send', {
+              number: `55${cleanPhone}`,
+              message: message
+          });
+          alert("Mensagem enviada para a fila de disparo!");
+      } catch (e) {
+          alert("Erro na API de WhatsApp");
+      }
+      */
+
+      // --- OPÇÃO B: LINK DIRETO (ATIVO - OPERAÇÃO MANUAL) ---
+      // Isso abre o WhatsApp Web ou App com a mensagem pronta, o operador só aperta enviar.
+      const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
+      window.open(url, '_blank');
+  };
 
   // --- LÓGICA DE CÁLCULO DAS MÉTRICAS ---
   useEffect(() => {
     const today = new Date();
-    today.setHours(0, 0, 0, 0); // Zera hora para comparar apenas datas
+    today.setHours(0, 0, 0, 0); 
 
     let sumOverdue = 0;
     let sumRecoveredToday = 0;
@@ -47,7 +97,6 @@ const Overdue = () => {
     let payingCount = 0;
 
     loans.forEach(loan => {
-      // 1. Verifica Status Real de Atraso (Para somar o Total em Atraso)
       const dueDate = new Date(loan.nextDue);
       dueDate.setMinutes(dueDate.getMinutes() + dueDate.getTimezoneOffset());
       dueDate.setHours(0, 0, 0, 0);
@@ -55,7 +104,6 @@ const Overdue = () => {
       const isOverdue = dueDate < today && loan.status !== 'Pago';
 
       if (isOverdue) {
-        // Calcula valor atualizado com multa/juros
         const value = calculateOverdueValue(
             loan.installmentValue, 
             loan.nextDue, 
@@ -67,20 +115,15 @@ const Overdue = () => {
         overdueCount++;
       }
 
-      // 2. Calcula Recuperado Hoje (Olhando o Histórico de TODOS os contratos)
       if (loan.history && loan.history.length > 0) {
         loan.history.forEach(record => {
             const payDate = new Date(record.date);
-            // Ajuste de fuso horário
             payDate.setMinutes(payDate.getMinutes() + payDate.getTimezoneOffset());
 
-            // --- CORREÇÃO PRINCIPAL AQUI ---
-            // Verifica o tipo. Se for Abertura, NÃO soma no recuperado.
             const type = record.type ? record.type.toLowerCase() : '';
             if (type.includes('abertura') || type.includes('empréstimo') || type.includes('contrato')) {
-                return; // Pula este registro
+                return;
             }
-            // --------------------------------
 
             if (
                 payDate.getDate() === today.getDate() &&
@@ -105,7 +148,6 @@ const Overdue = () => {
 
   }, [loans]);
 
-  // Filtra apenas os atrasados para a tabela
   const filteredOverdue = loans.filter(l => {
     const today = new Date();
     today.setHours(0,0,0,0);
@@ -126,7 +168,7 @@ const Overdue = () => {
           <p className="text-slate-500">Gestão de contratos em atraso e recuperação.</p>
         </div>
         <button 
-            onClick={fetchOverdueLoans} 
+            onClick={fetchData} 
             className="flex items-center gap-2 bg-white border border-gray-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm hover:bg-gray-50 transition-colors shadow-sm font-bold"
         >
             <RefreshCw className={isLoading ? "animate-spin" : ""} size={18} /> Atualizar
@@ -228,7 +270,12 @@ const Overdue = () => {
                                     R$ {formatMoney(updatedValue)}
                                 </td>
                                 <td className="p-4 text-center">
-                                    <button className="text-green-600 hover:bg-green-50 p-2 rounded-lg transition-all flex items-center justify-center gap-2 w-full font-bold text-xs border border-green-100 shadow-sm">
+                                    {/* BOTÃO WHATSAPP CONECTADO */}
+                                    <button 
+                                        onClick={() => handleWhatsApp(loan, updatedValue)}
+                                        className="text-green-600 hover:bg-green-100 hover:text-green-800 p-2 rounded-lg transition-all flex items-center justify-center gap-2 w-full font-bold text-xs border border-green-200 shadow-sm"
+                                        title="Enviar mensagem de cobrança"
+                                    >
                                         <Phone size={14}/> WhatsApp
                                     </button>
                                 </td>
