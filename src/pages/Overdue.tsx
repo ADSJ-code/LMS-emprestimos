@@ -71,16 +71,16 @@ const Overdue = () => {
       if (loan.history && loan.history.length > 0) {
         loan.history.forEach(record => {
             const payDate = new Date(record.date);
-            // Ajuste de fuso horário para garantir que "Hoje" bata corretamente
+            // Ajuste de fuso horário
             payDate.setMinutes(payDate.getMinutes() + payDate.getTimezoneOffset());
 
-            // --- CORREÇÃO AQUI ---
-            // Verifica o tipo do registro. Se for Abertura, IGNORA.
+            // --- CORREÇÃO PRINCIPAL AQUI ---
+            // Verifica o tipo. Se for Abertura, NÃO soma no recuperado.
             const type = record.type ? record.type.toLowerCase() : '';
             if (type.includes('abertura') || type.includes('empréstimo') || type.includes('contrato')) {
-                return; // Pula este registro, pois é saída de dinheiro
+                return; // Pula este registro
             }
-            // ---------------------
+            // --------------------------------
 
             if (
                 payDate.getDate() === today.getDate() &&
@@ -88,13 +88,12 @@ const Overdue = () => {
                 payDate.getFullYear() === today.getFullYear()
             ) {
                 sumRecoveredToday += record.amount;
-                payingCount++; // Conta quantos pagamentos tivemos hoje
+                payingCount++; 
             }
         });
       }
     });
 
-    // Eficiência: Relação entre pagamentos recebidos hoje e total de inadimplentes ativos
     const eff = overdueCount > 0 ? Math.round((payingCount / (overdueCount + payingCount)) * 100) : (sumRecoveredToday > 0 ? 100 : 0);
 
     setMetrics({
@@ -113,10 +112,7 @@ const Overdue = () => {
     const dueDate = new Date(l.nextDue);
     dueDate.setMinutes(dueDate.getMinutes() + dueDate.getTimezoneOffset());
     
-    // É atrasado se data < hoje E não está pago
     const isOverdue = dueDate < today && l.status !== 'Pago';
-    
-    // Filtro de busca
     const matchesSearch = (l.client || '').toLowerCase().includes(searchTerm.toLowerCase());
 
     return isOverdue && matchesSearch;
@@ -137,7 +133,6 @@ const Overdue = () => {
         </button>
       </header>
 
-      {/* CARDS DE KPI */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="bg-red-50 p-6 rounded-2xl border border-red-100 shadow-sm relative overflow-hidden">
             <div className="flex justify-between items-start mb-2">
@@ -169,7 +164,6 @@ const Overdue = () => {
         </div>
       </div>
 
-      {/* TABELA DE ATRASADOS */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-4 border-b border-slate-50 bg-slate-50/30 flex justify-between items-center">
             <div className="relative w-96">
@@ -206,14 +200,10 @@ const Overdue = () => {
                     filteredOverdue.map(loan => {
                         const dueDate = new Date(loan.nextDue);
                         dueDate.setMinutes(dueDate.getMinutes() + dueDate.getTimezoneOffset());
-                        
                         const today = new Date();
                         today.setHours(0,0,0,0);
-                        
-                        // Diferença em dias
                         const diffTime = Math.abs(today.getTime() - dueDate.getTime());
                         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
                         const updatedValue = calculateOverdueValue(loan.installmentValue, loan.nextDue, 'Atrasado', loan.fineRate || 2, loan.moraInterestRate || 1);
 
                         return (

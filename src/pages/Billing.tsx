@@ -541,7 +541,7 @@ const Billing = () => {
                         <div className="relative border-l-2 border-slate-100 ml-3 space-y-6 py-2">
                             {selectedLoan.history.slice().reverse().map((record, idx) => {
                                 // --- CORREÇÃO VISUAL AQUI ---
-                                const isOpening = record.type.toLowerCase().includes('abertura');
+                                const isOpening = record.type.toLowerCase().includes('abertura') || record.type.toLowerCase().includes('empréstimo');
                                 return (
                                     <div key={idx} className="relative pl-6">
                                         <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-2 border-white ${isOpening ? 'bg-green-500' : 'bg-blue-500'}`}></div>

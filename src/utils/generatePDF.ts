@@ -29,16 +29,49 @@ const formatDateShort = (dateStr: string) => {
     }
 }
 
-const calculateTotalInstallments = (loan: Loan): number => {
-    if (!loan.startDate || !loan.nextDue) return loan.installments;
-    // Se o número de parcelas já vier definido corretamente, usa ele
-    if (loan.installments > 0) return loan.installments;
+// --- FUNÇÕES DE RECONSTRUÇÃO DO PASSADO (CORREÇÃO DO BUG) ---
+
+// 1. Recupera o Valor Original Concedido
+const getOriginalAmount = (loan: Loan): number => {
+    // Primeiro, tenta achar o registro de "Abertura" no histórico (mais preciso)
+    if (loan.history && loan.history.length > 0) {
+        const openingRecord = loan.history.find(h => 
+            h.type.toLowerCase().includes('abertura') || 
+            h.type.toLowerCase().includes('empréstimo')
+        );
+        if (openingRecord) return openingRecord.amount;
+    }
     
-    // Fallback: cálculo aproximado (apenas se installments for 0 ou erro)
+    // Fallback: Se não achar histórico, reconstrói somando o atual + amortizado
+    return (loan.amount || 0) + (loan.totalPaidCapital || 0);
+};
+
+// 2. Recupera o Total de Parcelas Original
+const calculateTotalInstallments = (loan: Loan): number => {
+    if (!loan.startDate || !loan.nextDue) return loan.installments || 1;
+
     const start = new Date(loan.startDate);
-    const due = new Date(loan.nextDue);
-    const monthsPassed = (due.getFullYear() - start.getFullYear()) * 12 + (due.getMonth() - start.getMonth());
-    return monthsPassed > 0 ? monthsPassed : 1;
+    const currentNext = new Date(loan.nextDue);
+    
+    // Ajuste de fuso
+    start.setMinutes(start.getMinutes() + start.getTimezoneOffset());
+    currentNext.setMinutes(currentNext.getMinutes() + currentNext.getTimezoneOffset());
+
+    // Calcula quantos meses se passaram entre o Início e o Próximo Vencimento Atual
+    let monthsPassed = (currentNext.getFullYear() - start.getFullYear()) * 12;
+    monthsPassed -= start.getMonth();
+    monthsPassed += currentNext.getMonth();
+
+    // Se o status for "Pago", o nextDue parou no passado, então precisamos compensar
+    const correction = loan.status === 'Pago' ? 1 : 0;
+    
+    // Parcelas Pagas = Meses Passados - 1 (pois o nextDue aponta para o futuro) + Correção
+    const paidInstallments = Math.max(0, monthsPassed - 1 + correction);
+    
+    // Total = Restantes (loan.installments) + Pagas
+    const total = (loan.installments || 0) + paidInstallments;
+    
+    return total > 0 ? total : (loan.installments || 1);
 };
 
 // Tenta extrair a cidade do endereço
@@ -47,17 +80,17 @@ const extractCityFromAddress = (address: string, defaultCity: string = "São Pau
     try {
         const parts = address.split(',');
         if (parts.length > 1) {
-            // Tenta pegar o último pedaço que geralmente tem Cidade-UF ou Cidade/UF
-            const suffix = parts[parts.length - 1]; 
+            // Tenta pegar o último pedaço (Ex: "Cidade/UF" ou "Cidade - UF")
+            let suffix = parts[parts.length - 1].trim(); 
+            
+            // Se o último pedaço for só CEP ou muito curto, tenta o penúltimo
+            if (suffix.length < 3 && parts.length > 2) {
+                suffix = parts[parts.length - 2].trim();
+            }
+
             if (suffix.includes('-')) return suffix.split('-')[1].trim().split('/')[0];
             if (suffix.includes('/')) return suffix.split('/')[0].trim();
-            
-            // Se falhar, tenta o penúltimo (bairro, cidade)
-            if (parts.length > 2) {
-                 const cityPart = parts[parts.length - 2];
-                 if (cityPart.includes('-')) return cityPart.split('-')[1].trim();
-                 return cityPart.trim();
-            }
+            return suffix;
         }
         return defaultCity;
     } catch (e) {
@@ -65,10 +98,9 @@ const extractCityFromAddress = (address: string, defaultCity: string = "São Pau
     }
 }
 
-// --- GERADOR DO CONTRATO (MODELO COMPLETO ABCP) ---
+// --- GERADOR DO CONTRATO (ATUALIZADO) ---
 
 export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
-  // 1. Busca Dados
   const settings = await settingsService.get();
   const legacySettings = settings as any;
   const companyData = settings.company || legacySettings.general || {};
@@ -86,16 +118,18 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
     : "Endereço não informado";
 
   const contractCity = extractCityFromAddress(lenderAddress, clientData?.city || "São Paulo");
-  const totalInstallments = loan.installments || 1;
+  
+  // --- AQUI ESTÁ A CORREÇÃO: USAMOS OS VALORES ORIGINAIS ---
+  const originalAmount = getOriginalAmount(loan);
+  const totalInstallments = calculateTotalInstallments(loan);
+  // ---------------------------------------------------------
 
-  // 2. Configura PDF
   const doc = new jsPDF();
   const margin = 20;
   const pageWidth = 210;
   const maxLineWidth = pageWidth - (margin * 2);
   let y = 20;
 
-  // Função auxiliar para adicionar texto com quebra de página automática
   const addText = (text: string, isBold: boolean = false, align: 'left' | 'center' | 'right' | 'justify' = 'justify', fontSize: number = 10) => {
     doc.setFont("times", isBold ? "bold" : "normal");
     doc.setFontSize(fontSize);
@@ -103,7 +137,6 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
     const lines = doc.splitTextToSize(text, maxLineWidth);
     const blockHeight = lines.length * 5;
 
-    // Se o bloco de texto não couber na página, cria nova página
     if (y + blockHeight > 280) { 
         doc.addPage(); 
         y = 20; 
@@ -113,51 +146,44 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
     else if (align === 'center') doc.text(lines, pageWidth / 2, y, { align: 'center', maxWidth: maxLineWidth });
     else if (align === 'right') doc.text(lines, pageWidth - margin, y, { align: 'right', maxWidth: maxLineWidth });
 
-    y += blockHeight + 2; // Espaço após o parágrafo
+    y += blockHeight + 2;
   };
 
   const addSpace = (size: number = 5) => { y += size; };
 
-  // --- INÍCIO DO CONTRATO ---
-
+  // CONTEÚDO
   addText("INSTRUMENTO PARTICULAR DE MÚTUO", true, 'center', 14);
   addSpace(5);
 
   addText("Pelo presente Contrato de Mútuo, e na melhor forma de direito, as Partes:");
   addSpace(2);
 
-  // Qualificação Mutuante
   addText(`${lenderName.toUpperCase()}, inscrita no CNPJ sob o nº ${lenderCNPJ}, com sede na ${lenderAddress}, neste ato designado por "MUTUANTE";`, true);
   addText("e,", false);
-  
-  // Qualificação Mutuário
   addText(`${borrowerName.toUpperCase()}, inscrito(a) no CPF sob o nº ${borrowerCPF} e portador(a) da cédula de identidade RG nº ${borrowerRG}, residente e domiciliado(a) na ${borrowerAddress}, doravante denominado simplesmente por "MUTUÁRIA".`, true);
   
   addSpace(3);
   addText(`Resolvem celebrar o presente Contrato que se regerá pelas cláusulas e condições acordadas entre as Partes que seguem disciplinadas a seguir:`);
   addSpace(5);
 
-  // --- CLÁUSULA PRIMEIRA ---
+  // CLÁUSULA 1 - Usa originalAmount
   addText("Cláusula Primeira – DO OBJETO", true);
-  
   const bankInfo = loan.clientBank ? `, Banco ${loan.clientBank}` : "";
-  addText(`1.1 Pelo presente instrumento, o MUTUANTE entrega ao MUTUÁRIO neste ato, a título de empréstimo (ou "Mútuo"), a importância de ${formatMoney(loan.amount)}, através de transferência bancária para conta/chave Pix do próprio MUTUÁRIO${bankInfo}.`);
-  
+  addText(`1.1 Pelo presente instrumento, o MUTUANTE entrega ao MUTUÁRIO neste ato, a título de empréstimo (ou "Mútuo"), a importância de ${formatMoney(originalAmount)}, através de transferência bancária para conta/chave Pix do próprio MUTUÁRIO${bankInfo}.`);
   addText(`1.2 Fica acordado entre as Partes que o Valor do Mútuo, na data do vencimento do presente contrato, será acrescido de uma taxa de remuneração de ${loan.interestRate}% a.m do Valor do Mútuo.`);
-  
   addText(`1.3 O Valor do Mútuo deverá ser restituído em sua integralidade pelo MUTUÁRIO ao MUTUANTE, respeitando-se os juros e correção pactuados na cláusula 1.2 acima, até o término do prazo de vigência do presente contrato, qual seja, até o pagamento da última parcela.`);
-  
   addText(`1.4 Caso o MUTUÁRIO deixe de pagar integralmente o Valor do Mútuo e seus acessórios no prazo estipulado na cláusula 1.3 acima, o saldo devedor corrigido na data do término de referido prazo ficará sujeito a juros moratórios à taxa de 1% ao mês, multa de mora na ordem de ${loan.fineRate || 2}% sobre o valor atualizado do débito e correção monetária.`);
 
   addSpace(5);
 
-  // --- CLÁUSULA SEGUNDA ---
+  // CLÁUSULA 2 - Usa totalInstallments e recria datas
   addText("Cláusula Segunda – DO PRAZO DE VIGÊNCIA", true);
   
-  // Gera lista de datas
   let baseDate = new Date(loan.startDate);
   baseDate.setMinutes(baseDate.getMinutes() + baseDate.getTimezoneOffset());
+  
   let datesText = "";
+  // Loop até o total ORIGINAL, não apenas o restante
   for (let i = 1; i <= totalInstallments; i++) {
       const pDate = new Date(baseDate);
       pDate.setMonth(baseDate.getMonth() + i);
@@ -167,27 +193,18 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
   }
 
   addText(`2.1. O presente Contrato entra em vigor na data de sua assinatura, e sua vigência perdurará nas seguintes datas: ${datesText}, a contar dessa data, findo o qual o MUTUÁRIO deverá efetuar a restituição ao MUTUANTE do Valor do Mútuo, acrescido da taxa de remuneração, perfazendo o em ${totalInstallments} parcelas no valor de ${formatMoney(loan.installmentValue)} através de transferência para a conta corrente do MUTUANTE ou Chave Pix ${lenderPix}, sob pena de, independentemente de qualquer notificação, judicial ou extrajudicial, ficar constituído em mora, autorizada a aplicação de sanções previstas na cláusula 1.4.`);
-
   addText(`2.2. Poderão as Partes prorrogar o prazo de vigência deste Contrato, mediante aditamento ao presente subscrito por elas juntamente com duas testemunhas.`);
 
   addSpace(5);
 
-  // --- CLÁUSULA TERCEIRA (COMPLETA) ---
+  // CLÁUSULA 3
   addText("Cláusula Terceira – DAS DISPOSIÇÕES GERAIS", true);
-
   addText(`3.1. O MUTUÁRIO arcará com todos e quaisquer tributos e despesas de qualquer natureza incidentes sobre ou decorrentes da presente avença, bem como arcará com os demais custos e despesas dela decorrentes.`);
-  
   addText(`3.2. Todas as obrigações assumidas neste Contrato são irretratáveis e irrevogáveis.`);
-  
-  addText(`3.3. O MUTUÁRIO não poderá ceder quaisquer de seus direitos, interesses ou obrigações estabelecidas no presente Contrato sem o prévio consentimento por escrito do MUTUANTE, e qualquer tentativa de cessão do presente Contrato sem o mencionado consentimento será considerada nula e sem efeito.`);
-  
-  addText(`3.4. As Partes reconhecem e acordam que as condições constantes no presente Contrato refletem as suas pretensões e interesses comerciais.`);
-  addText(`Ademais, as Partes têm pleno entendimento e conhecimento do teor do presente Contrato e de suas Cláusulas, cientes das obrigações bilaterais a que se comprometem, produzindo seus efeitos perante os contratantes e terceiros.`);
-  
+  addText(`3.3. O MUTUÁRIO não poderá ceder quaisquer de seus direitos, interesses ou obrigações estabelecidas no presente Contrato sem o prévio consentimento por escrito do MUTUANTE.`);
+  addText(`3.4. As Partes reconhecem e acordam que as condições constantes no presente Contrato refletem as suas pretensões e interesses comerciais. Ademais, as Partes têm pleno entendimento e conhecimento do teor do presente Contrato e de suas Cláusulas.`);
   addText(`3.5. O presente Contrato obriga as Partes e seus sucessores a qualquer título.`);
-  
-  addText(`3.6. Eventual tolerância por qualquer das Partes no cumprimento de obrigação de outra Parte não constituirá novação, alteração tácita ou qualquer outra forma de alteração das disposições deste Contrato, mantendo a Parte tolerante o direito de exigir o cumprimento da obrigação inadimplida e tolerada a qualquer tempo.`);
-  
+  addText(`3.6. Eventual tolerância por qualquer das Partes no cumprimento de obrigação de outra Parte não constituirá novação, alteração tácita ou qualquer outra forma de alteração das disposições deste Contrato.`);
   addText(`3.7. Para dirimir as dúvidas porventura emergentes deste Contrato, elegem as partes o foro da Comarca de ${contractCity.toUpperCase()}, com expressa renúncia de outro, por mais privilegiado que for.`);
 
   addSpace(8);
@@ -196,50 +213,38 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
   addSpace(8);
   addText(`${contractCity}, ${formatDateExtenso(new Date().toISOString())}.`, false, 'right');
 
-  // --- ASSINATURAS ---
   addSpace(15);
-  // Garante que as assinaturas não fiquem quebradas entre páginas
   if (y > 220) { doc.addPage(); y = 40; }
 
   doc.setLineWidth(0.1);
   
-  // Mutuante
   doc.line(margin, y, margin + 170, y);
   doc.setFont("times", "bold");
   doc.text(`MUTUANTE: ${lenderName.toUpperCase()}`, margin, y + 5);
   y += 20;
 
-  // Mutuário
   doc.line(margin, y, margin + 170, y);
   doc.text(`MUTUÁRIO: ${borrowerName.toUpperCase()}`, margin, y + 5);
   y += 25;
 
-  // Testemunhas
-  doc.setFont("times", "bold");
   doc.text("Testemunhas:", margin, y);
   y += 10;
 
-  // Testemunha 1
   doc.line(margin, y, margin + 70, y);
   doc.setFont("times", "normal");
   doc.setFontSize(9);
   doc.text("1. _______________________", margin, y + 5);
-  doc.text("Nome:", margin, y + 10);
-  doc.text("RG:", margin, y + 15);
-  doc.text("CPF:", margin, y + 20);
+  doc.text("RG/CPF:", margin, y + 10);
 
-  // Testemunha 2 (ao lado)
   const col2 = margin + 90;
   doc.line(col2, y, col2 + 70, y);
   doc.text("2. _______________________", col2, y + 5);
-  doc.text("Nome:", col2, y + 10);
-  doc.text("RG:", col2, y + 15);
-  doc.text("CPF:", col2, y + 20);
+  doc.text("RG/CPF:", col2, y + 10);
 
   doc.save(`Contrato_${borrowerName.replace(/\s+/g, '_')}.pdf`);
 };
 
-// --- GERADOR DE PROMISSÓRIAS (MANTIDO E INTEGRADO) ---
+// --- GERADOR DE PROMISSÓRIAS (ATUALIZADO) ---
 
 export const generatePromissoryPDF = async (loan: Loan, clientData?: Client) => {
     const settings = await settingsService.get();
@@ -252,7 +257,10 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client) => 
     const promissoriaCity = extractCityFromAddress(lenderAddress, "São Paulo");
 
     const doc = new jsPDF('l', 'mm', 'a4'); 
+    
+    // --- CORREÇÃO: Usa o total recalculado ---
     const totalOriginalInstallments = calculateTotalInstallments(loan);
+    // -----------------------------------------
     
     const borrowerName = clientData?.name || loan.client;
     const borrowerCPF = clientData?.cpf || "___.___.___-__";
@@ -263,28 +271,25 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client) => 
     let baseDate = new Date(loan.startDate);
     baseDate.setMinutes(baseDate.getMinutes() + baseDate.getTimezoneOffset());
 
+    // Loop vai de 1 até o total ORIGINAL (gera todas as promissórias, pagas e não pagas)
     for (let i = 1; i <= totalOriginalInstallments; i++) {
         if (i > 1) doc.addPage();
 
         const pDate = new Date(baseDate);
         pDate.setMonth(baseDate.getMonth() + i);
 
-        // Moldura
         doc.setLineWidth(0.8);
         doc.rect(15, 15, 267, 100);
 
-        // Título
         doc.setFont("times", "bold");
         doc.setFontSize(24);
         doc.text("NOTA PROMISSÓRIA", 148, 35, { align: "center" });
 
-        // Dados Numéricos
         doc.setFontSize(14);
         doc.text(`Nº: ${loan.id.split('/')[0] || '001'} - ${i}/${totalOriginalInstallments}`, 30, 55);
         doc.text(`Valor: ${formatMoney(loan.installmentValue)}`, 260, 55, { align: 'right' });
         doc.text(`Vencimento: ${formatDateShort(pDate.toISOString())}`, 30, 65);
 
-        // Texto Legal
         doc.setFont("times", "normal");
         doc.setFontSize(12);
         
@@ -294,7 +299,6 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client) => 
 
         doc.text(`Pagável em: ${promissoriaCity}`, 30, 105);
 
-        // Dados do Emitente
         doc.setFont("times", "bold");
         doc.text("Emitente:", 30, 120);
         doc.setFont("times", "normal");
@@ -302,12 +306,10 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client) => 
         doc.text(`CPF: ${borrowerCPF}`, 55, 127);
         doc.text(`Endereço: ${borrowerAddress}`, 55, 134);
 
-        // Assinatura
         doc.line(160, 130, 260, 130);
         doc.setFontSize(10);
         doc.text("Assinatura do Emitente", 210, 135, { align: 'center' });
 
-        // Canhoto Lateral
         doc.setLineWidth(0.2);
         (doc as any).setLineDash([2, 2], 0);
         doc.line(275, 15, 275, 115);
