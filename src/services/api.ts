@@ -32,11 +32,11 @@ export interface Loan {
   totalPaidCapital?: number;
   history?: PaymentRecord[];
 
-  // --- NOVOS CAMPOS (FIADOR E TIPO DE JUROS) ---
-  InterestType?: 'PRICE' | 'SIMPLE'; // Se undefined, assume PRICE
-  GuarantorName?: string;
-  GuarantorCPF?: string;
-  GuarantorAddress?: string;
+  // --- CORREÇÃO: AGORA TUDO MINÚSCULO (camelCase) PARA BATER COM O BACKEND ---
+  interestType?: 'PRICE' | 'SIMPLE'; 
+  guarantorName?: string;
+  guarantorCPF?: string;
+  guarantorAddress?: string;
 }
 
 export interface ClientDoc {

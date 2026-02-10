@@ -62,7 +62,7 @@ const Billing = () => {
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
       fineRate: '2.0', clientBank: '', paymentMethod: '',
       // NOVOS CAMPOS
-      interestType: 'PRICE', // Inicializa como string, mas validaremos no envio
+      interestType: 'PRICE', 
       hasGuarantor: false,
       guarantorName: '',
       guarantorCPF: '',
@@ -118,7 +118,7 @@ const Billing = () => {
 
   useEffect(() => { fetchLoans(); }, []);
 
-  // --- AUTOCOMPLETE DE DADOS BANCÁRIOS (CORRIGIDO - SÓ DADOS BANCÁRIOS) ---
+  // --- AUTOCOMPLETE DE DADOS BANCÁRIOS (CORRIGIDO) ---
   useEffect(() => {
       if (formData.client && availableClients.length > 0) {
           const lastLoan = loans
@@ -128,10 +128,8 @@ const Billing = () => {
           if (lastLoan) {
               setFormData(prev => ({
                   ...prev,
-                  // Puxa APENAS dados bancários e fixos, NÃO puxa taxa nem multa
                   clientBank: lastLoan.clientBank || '',
                   paymentMethod: lastLoan.paymentMethod || '',
-                  // Mantém os valores atuais do formulário para o resto
                   fineRate: prev.fineRate,
                   interestRate: prev.interestRate
               }));
@@ -181,8 +179,8 @@ const Billing = () => {
   const getBreakdown = (loan: Loan) => {
       const interest = loan.amount * (loan.interestRate / 100);
       
-      // SE FOR MODO "SÓ JUROS" (SIMPLE), A PARCELA DE CAPITAL É ZERO (ATÉ PAGAR FINAL)
-      if (loan.InterestType === 'SIMPLE') {
+      // --- CORREÇÃO: interestType (minúsculo) ---
+      if (loan.interestType === 'SIMPLE') {
           return { interest, capital: 0 }; 
       }
 
@@ -337,10 +335,13 @@ const Billing = () => {
              currentDue.setMonth(currentDue.getMonth() + 1);
              updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
              
-             // --- CORREÇÃO DA LÓGICA DE PARCELAS ---
-             // Se for SIMPLE (Só Juros) E não houve pagamento de capital, NÃO diminui a parcela.
-             // Pois a parcela representa a dívida principal que rolou para frente.
-             const isSimple = updatedLoan.InterestType === 'SIMPLE';
+             // --- CORREÇÃO CRÍTICA DE LÓGICA ---
+             // Agora usamos 'interestType' (minúsculo)
+             const isSimple = updatedLoan.interestType === 'SIMPLE';
+             
+             // Lógica: 
+             // Se for PRICE (!isSimple) -> Diminui parcela sempre que completa o mês.
+             // Se for SIMPLE (isSimple) -> Só diminui se tiver pago CAPITAL (>0).
              if (!isSimple || valCapital > 0) {
                  updatedLoan.installments = Math.max(0, updatedLoan.installments - 1);
              }
@@ -448,10 +449,11 @@ const Billing = () => {
             totalPaidCapital: 0, totalPaidInterest: 0,
             history: [{ date: new Date().toISOString(), amount: parseFloat(formData.amount), type: 'Abertura', note: 'Empréstimo Concedido' }],
             
-            InterestType: formData.interestType as 'PRICE' | 'SIMPLE',
-            GuarantorName: formData.hasGuarantor ? formData.guarantorName : '',
-            GuarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '',
-            GuarantorAddress: formData.hasGuarantor ? formData.guarantorAddress : ''
+            // --- CORREÇÃO: ENVIANDO COM O NOME CORRETO (interestType) ---
+            interestType: formData.interestType as 'PRICE' | 'SIMPLE',
+            guarantorName: formData.hasGuarantor ? formData.guarantorName : '',
+            guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '',
+            guarantorAddress: formData.hasGuarantor ? formData.guarantorAddress : ''
         };
         await loanService.create(newLoan);
         fetchLoans();
@@ -561,13 +563,13 @@ const Billing = () => {
                         <div className="bg-white border border-slate-100 rounded-xl p-4">
                             <span className="text-xs font-bold text-slate-400 uppercase block mb-1">Modalidade</span>
                             <span className="text-sm font-bold text-slate-800">
-                                {selectedLoan.InterestType === 'SIMPLE' ? 'Pagamento Mínimo (Só Juros)' : 'Price (Amortização)'}
+                                {selectedLoan.interestType === 'SIMPLE' ? 'Pagamento Mínimo (Só Juros)' : 'Price (Amortização)'}
                             </span>
                         </div>
-                        {selectedLoan.GuarantorName && (
+                        {selectedLoan.guarantorName && (
                             <div className="bg-white border border-slate-100 rounded-xl p-4">
                                 <span className="text-xs font-bold text-slate-400 uppercase block mb-1">Fiador Vinculado</span>
-                                <span className="text-sm font-bold text-slate-800 truncate block">{selectedLoan.GuarantorName}</span>
+                                <span className="text-sm font-bold text-slate-800 truncate block">{selectedLoan.guarantorName}</span>
                             </div>
                         )}
                     </div>
@@ -702,35 +704,6 @@ const Billing = () => {
           <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-inner"><div className="flex items-center gap-2 mb-4 border-b border-slate-200 pb-3"><Calculator size={20} className="text-slate-800" /><h4 className="text-[12px] font-bold text-slate-800 uppercase tracking-widest">Simulação Financeira ({formData.interestType === 'SIMPLE' ? 'Juros Simples' : 'Price'})</h4></div>{isSimulating ? (<div className="flex justify-center py-4"><Loader2 className="animate-spin text-slate-400" /></div>) : simulation.isValid ? (<div className="space-y-4"><div className="flex justify-between items-center text-sm font-medium"><span className="text-slate-500">Montante Financiado:</span><span className="text-slate-900 font-bold">R$ {formatMoney(parseFloat(formData.amount))}</span></div><div className="flex justify-between items-center"><span className="text-sm text-slate-500 font-medium">Parcela Mensal ({formData.installments}x):</span><span className="text-xl font-black text-green-600 bg-green-50 px-3 py-1 rounded-lg border border-green-100">R$ {formatMoney(simulation.installment)}</span></div><div className="flex justify-between items-center text-sm"><span className="text-slate-500 font-medium">Custo Total de Juros:</span><span className="text-red-600 font-bold">+ R$ {formatMoney(simulation.totalInterest)}</span></div></div>) : (<p className="text-center text-slate-400 text-xs py-4 font-medium italic">Aguardando dados...</p>)}</div>
           <div className="flex justify-end gap-3 pt-4 border-t border-slate-100"><button type="button" onClick={() => setIsModalOpen(false)} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all">Cancelar</button><button type="submit" disabled={!simulation.isValid} className="px-8 py-3 bg-slate-900 text-white rounded-xl flex items-center gap-2 font-bold shadow-xl shadow-slate-900/20 disabled:opacity-50 hover:bg-slate-800 transition-all">Iniciar Triagem <ChevronRight size={18} /></button></div>
         </form>
-      </Modal>
-
-      <Modal isOpen={isChecklistOpen} onClose={() => setIsChecklistOpen(false)} title="Checklist de Segurança">
-        <div className="space-y-6">
-          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
-            <div className="flex justify-between items-end mb-3">
-              <div><p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Score de Aprovação</p><p className={`text-4xl font-black ${progressPercentage >= 70 ? 'text-green-600' : 'text-blue-600'}`}>{progressPercentage}%</p></div>
-              <div className="text-right"><div className="text-[10px] font-bold px-2 py-1 rounded border mb-2 inline-block bg-blue-50 border-blue-200 text-blue-600">APROVAÇÃO FLEXÍVEL</div></div>
-            </div>
-            <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden shadow-inner"><div className={`h-full transition-all duration-700 ease-out ${progressPercentage >= 70 ? 'bg-green-500' : 'bg-blue-500'}`} style={{ width: `${progressPercentage}%` }}></div></div>
-          </div>
-          <div className="flex border-b border-slate-100 gap-4"><button type="button" onClick={() => setActiveStage(1)} className={`pb-3 text-sm font-bold transition-all border-b-2 ${activeStage === 1 ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>1. Comportamental</button><button type="button" onClick={() => setActiveStage(2)} className={`pb-3 text-sm font-bold transition-all border-b-2 ${activeStage === 2 ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>2. Documentos</button></div>
-          <div className="grid grid-cols-1 gap-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
-            {checklistItems.filter(i => i.stage === activeStage).map((item) => (
-                <div key={item.id} onClick={(e) => toggleChecklistItem(item.id, e)} className={`flex items-center gap-4 p-4 border rounded-2xl cursor-pointer hover:bg-slate-50 transition-all ${item.checked ? 'border-green-200 bg-green-50/40 shadow-sm' : 'border-slate-100 bg-white'}`}>
-                    <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-colors ${item.checked ? 'bg-green-500 border-green-500 text-white' : 'bg-white border-slate-200'}`}>{item.checked && <Check size={16} strokeWidth={4} />}</div>
-                    <div><span className={`text-sm font-bold block ${item.checked ? 'text-green-900' : 'text-slate-600'}`}>{item.label}</span><span className="text-[10px] uppercase font-bold text-slate-400">Peso: {item.weight} pts</span></div>
-                </div>
-            ))}
-          </div>
-          <div className="animate-in slide-in-from-top duration-500 bg-orange-50 p-5 rounded-2xl border border-orange-100 shadow-sm">
-               <div className="flex items-center gap-2 mb-3"><ShieldAlert size={18} className="text-orange-600" /><label className="text-sm font-bold text-orange-800">Observação Obrigatória</label></div>
-               <textarea required value={justification} onChange={(e) => setJustification(e.target.value)} className="w-full p-4 border border-orange-200 bg-white rounded-xl text-sm h-24 outline-none focus:ring-2 focus:ring-orange-400 transition-all placeholder:text-orange-200" placeholder="Resuma a análise do cliente aqui..."/>
-          </div>
-          <div className="flex justify-end gap-3 pt-6 border-t border-slate-100">
-            <button type="button" onClick={handleBackToForm} className="px-6 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition-all">Voltar</button>
-            <button type="button" onClick={handleFinalSave} disabled={!canFinalize || isSaving} className={`px-10 py-3 rounded-xl font-bold text-white transition-all flex items-center gap-3 shadow-lg ${canFinalize ? 'bg-green-600 hover:bg-green-700 shadow-green-900/20' : 'bg-slate-200 cursor-not-allowed text-slate-400'}`}>{isSaving ? <Loader2 className="animate-spin" /> : <ShieldCheck size={20} />} {isSaving ? 'Gravando...' : 'Aprovar Contrato'}</button>
-          </div>
-        </div>
       </Modal>
     </Layout>
   );
