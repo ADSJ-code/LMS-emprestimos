@@ -23,11 +23,13 @@ interface ChecklistItem {
   stage: 1 | 2;
 }
 
+// --- TIPO DE FLUXO PARA O NOVO EMPRÉSTIMO ---
+type LoanFlowStep = 'closed' | 'form' | 'checklist';
+
 const Billing = () => {
   // --- Estados de Interface ---
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [loanFlowStep, setLoanFlowStep] = useState<LoanFlowStep>('closed'); // Controle unificado do Modal
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
-  const [isChecklistOpen, setIsChecklistOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [activeStage, setActiveStage] = useState<1 | 2>(1);
   const [detailTab, setDetailTab] = useState<'info' | 'history'>('info');
@@ -61,7 +63,7 @@ const Billing = () => {
   const [formData, setFormData] = useState({ 
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
       fineRate: '2.0', clientBank: '', paymentMethod: '',
-      // NOVOS CAMPOS (Minúsculo para bater com API)
+      // NOVOS CAMPOS
       interestType: 'PRICE', 
       hasGuarantor: false,
       guarantorName: '',
@@ -118,7 +120,7 @@ const Billing = () => {
 
   useEffect(() => { fetchLoans(); }, []);
 
-  // --- AUTOCOMPLETE DE DADOS BANCÁRIOS (CORRIGIDO) ---
+  // --- AUTOCOMPLETE ---
   useEffect(() => {
       if (formData.client && availableClients.length > 0) {
           const lastLoan = loans
@@ -139,7 +141,7 @@ const Billing = () => {
 
   // --- CHECKLIST INTELIGENTE ---
   useEffect(() => {
-      if (isChecklistOpen && formData.client) {
+      if (loanFlowStep === 'checklist' && formData.client) {
           const clientData = availableClients.find(c => c.name === formData.client);
           const lastLoan = loans
             .filter(l => l.client === formData.client && l.checklistAtApproval && l.checklistAtApproval.length > 0)
@@ -161,7 +163,7 @@ const Billing = () => {
           }));
           if (lastLoan && justification === '') setJustification('Cliente recorrente. Checklist importado do contrato anterior.');
       }
-  }, [isChecklistOpen, formData.client]);
+  }, [loanFlowStep, formData.client]);
 
   const toggleChecklistItem = (id: string, e: React.MouseEvent) => {
       e.stopPropagation();
@@ -217,13 +219,10 @@ const Billing = () => {
         let pmt = 0;
         let totalInt = 0;
 
-        // --- CORREÇÃO: interestType (minúsculo) ---
         if (formData.interestType === 'SIMPLE') {
-            // MODO SÓ JUROS: Parcela = Apenas Juros. Capital fica pro final.
             pmt = amount * i; 
             totalInt = pmt * months;
         } else {
-            // MODO PRICE: Amortização
             pmt = i > 0 ? amount * ( (i * Math.pow(1 + i, months)) / (Math.pow(1 + i, months) - 1) ) : amount / months;
             totalInt = (pmt * months) - amount;
         }
@@ -337,15 +336,10 @@ const Billing = () => {
              updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
              
              // --- CORREÇÃO DA LÓGICA DE PARCELAS ---
-             // Agora acessa 'interestType' (minúsculo)
              const isSimple = updatedLoan.interestType === 'SIMPLE';
-             
-             // Se for SIMPLE: Só diminui a parcela se pagou CAPITAL
-             // Se for PRICE: Sempre diminui a parcela
              if (!isSimple || valCapital > 0) {
                  updatedLoan.installments = Math.max(0, updatedLoan.installments - 1);
              }
-             // -------------------------------------
         }
     }
 
@@ -407,20 +401,29 @@ const Billing = () => {
   const toggleSelectAll = () => { if (selectedIds.length === loans.length) setSelectedIds([]); else setSelectedIds(loans.map(l => l.id)); };
   const toggleSelectOne = (id: string) => { setSelectedIds(prev => prev.includes(id) ? prev.filter(curr => curr !== id) : [...prev, id]); };
   
-  // --- CORREÇÃO DO MODAL TRAVADO ---
-  // Removido setTimeout. Abrimos o Checklist ANTES de fechar o Modal para garantir que o estado propague.
-  // Em algumas versões do React, fechar antes de abrir pode causar "piscar" ou desmontar componentes.
+  // --- FLUXO UNIFICADO DO MODAL ---
+  // Apenas mudamos o "step" interno. O Modal nunca fecha, então não há piscar ou falha.
+  
   const handlePreSave = (e: React.FormEvent) => { 
       e.preventDefault(); 
       setActiveStage(1); 
-      setIsChecklistOpen(true); // Abre primeiro
-      setIsModalOpen(false);    // Fecha depois
+      setLoanFlowStep('checklist'); // Troca o conteúdo instantaneamente
   };
   
   const handleBackToForm = () => {
-      setIsModalOpen(true);     // Abre primeiro
-      setIsChecklistOpen(false); // Fecha depois
+      setLoanFlowStep('form'); // Volta para o formulário
   };
+
+  const closeLoanFlow = () => {
+      setLoanFlowStep('closed');
+      // Reseta formulário ao fechar tudo
+      setFormData({ 
+        client: '', amount: '', interestRate: '', installments: '', startDate: '', 
+        fineRate: '2.0', clientBank: '', paymentMethod: '', 
+        interestType: 'PRICE', hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '' 
+      });
+      setJustification('');
+  }
 
   const handleFinalSave = async () => {
     setIsSaving(true);
@@ -452,7 +455,6 @@ const Billing = () => {
             totalPaidCapital: 0, totalPaidInterest: 0,
             history: [{ date: new Date().toISOString(), amount: parseFloat(formData.amount), type: 'Abertura', note: 'Empréstimo Concedido' }],
             
-            // --- CORREÇÃO: ENVIANDO COM O NOME CORRETO (interestType) ---
             interestType: formData.interestType as 'PRICE' | 'SIMPLE',
             guarantorName: formData.hasGuarantor ? formData.guarantorName : '',
             guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '',
@@ -460,13 +462,7 @@ const Billing = () => {
         };
         await loanService.create(newLoan);
         fetchLoans();
-        setIsChecklistOpen(false); setIsModalOpen(false);
-        setFormData({ 
-            client: '', amount: '', interestRate: '', installments: '', startDate: '', 
-            fineRate: '2.0', clientBank: '', paymentMethod: '', 
-            interestType: 'PRICE', hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '' 
-        });
-        setJustification('');
+        closeLoanFlow();
         alert(`✅ Contrato ${newID} criado.`);
     } catch (err) { alert("Erro ao salvar."); } finally { setIsSaving(false); }
   };
@@ -487,7 +483,7 @@ const Billing = () => {
         <div className="flex gap-2">
             <button onClick={() => fetchLoans()} className="flex items-center gap-2 bg-white border border-gray-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm hover:bg-gray-50 transition-colors font-bold shadow-sm"><RefreshCw className={isLoadingList ? "animate-spin" : ""} size={18} /> Recarregar</button>
             <button onClick={handleExportExcel} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-green-700 transition-colors shadow-lg shadow-green-900/10"><Download size={18} /> Exportar Selecionados ({selectedIds.length})</button>
-            <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-2 bg-slate-900 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/20"><Plus size={20} /> Novo Contrato</button>
+            <button onClick={() => setLoanFlowStep('form')} className="flex items-center gap-2 bg-slate-900 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/20"><Plus size={20} /> Novo Contrato</button>
         </div>
       </header>
 
@@ -561,7 +557,6 @@ const Billing = () => {
                             </div>
                         </div>
                     </div>
-                    {/* INFO ADICIONAL: TIPO DE CONTRATO E FIADOR */}
                     <div className="grid grid-cols-2 gap-4">
                         <div className="bg-white border border-slate-100 rounded-xl p-4">
                             <span className="text-xs font-bold text-slate-400 uppercase block mb-1">Modalidade</span>
@@ -671,42 +666,73 @@ const Billing = () => {
         </div>
       </Modal>
 
-      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Novo Empréstimo">
-        <form onSubmit={handlePreSave} className="space-y-6">
-          <div className="space-y-4">
-            <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Cliente Selecionado</label><select required value={formData.client} onChange={e => setFormData({...formData, client: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5"><option value="">Selecione o titular...</option>{availableClients.map((c) => (<option key={c.id} value={c.name}>{c.name}</option>))}</select></div>
-            
-            {/* DADOS BANCÁRIOS (AUTOCOMPLETE) */}
-            <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100"><div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Banco do Cliente</label><input value={formData.clientBank} onChange={e => setFormData({...formData, clientBank: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Ex: Nubank, Itaú..."/></div><div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Forma de Pagamento</label><input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="CPF, Email, Ag/Conta..."/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Ex: 2.0"/></div></div>
-            
-            {/* VALORES E DATAS */}
-            <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="0,00"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="5.0"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Data da Operação</label><input required type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" /></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.installments} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="12"/></div></div>
-            
-            {/* CHECKBOX: MODO SÓ JUROS */}
-            <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl">
-                <input type="checkbox" id="interestType" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" />
-                <label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros) <span className="text-xs font-normal text-blue-600 block">O cliente paga apenas os juros mensais. O capital não abate.</span></label>
+      {/* --- MODAL UNIFICADO PARA O FLUXO DE NOVO EMPRÉSTIMO --- */}
+      <Modal 
+        isOpen={loanFlowStep !== 'closed'} 
+        onClose={closeLoanFlow} 
+        title={loanFlowStep === 'form' ? "Novo Empréstimo" : "Checklist de Segurança"}
+      >
+        {loanFlowStep === 'form' ? (
+            // --- CONTEÚDO DO FORMULÁRIO ---
+            <form onSubmit={handlePreSave} className="space-y-6">
+            <div className="space-y-4">
+                <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Cliente Selecionado</label><select required value={formData.client} onChange={e => setFormData({...formData, client: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5"><option value="">Selecione o titular...</option>{availableClients.map((c) => (<option key={c.id} value={c.name}>{c.name}</option>))}</select></div>
+                
+                <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100"><div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Banco do Cliente</label><input value={formData.clientBank} onChange={e => setFormData({...formData, clientBank: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Ex: Nubank, Itaú..."/></div><div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Forma de Pagamento</label><input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="CPF, Email, Ag/Conta..."/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Ex: 2.0"/></div></div>
+                
+                <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="0,00"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="5.0"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Data da Operação</label><input required type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" /></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.installments} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="12"/></div></div>
+                
+                <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl">
+                    <input type="checkbox" id="interestType" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" />
+                    <label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros) <span className="text-xs font-normal text-blue-600 block">O cliente paga apenas os juros mensais. O capital não abate.</span></label>
+                </div>
+
+                <div className="flex items-center gap-2 mt-4"><input type="checkbox" id="hasGuarantor" checked={formData.hasGuarantor} onChange={(e) => setFormData({...formData, hasGuarantor: e.target.checked})} className="w-4 h-4 rounded text-slate-900 focus:ring-slate-500"/><label htmlFor="hasGuarantor" className="text-sm font-bold text-slate-700 cursor-pointer">Adicionar Fiador (Opcional)</label></div>
+                
+                {formData.hasGuarantor && (
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 animate-in slide-in-from-top-2">
+                        <div className="flex items-center gap-2 mb-2"><UserCheck size={18} className="text-slate-500"/><span className="text-xs font-bold uppercase text-slate-500">Dados do Fiador</span></div>
+                        <input type="text" placeholder="Nome Completo do Fiador" value={formData.guarantorName} onChange={(e) => setFormData({...formData, guarantorName: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/>
+                        <div className="grid grid-cols-2 gap-3">
+                            <input type="text" placeholder="CPF do Fiador" value={formData.guarantorCPF} onChange={(e) => setFormData({...formData, guarantorCPF: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/>
+                            <input type="text" placeholder="Endereço Completo" value={formData.guarantorAddress} onChange={(e) => setFormData({...formData, guarantorAddress: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/>
+                        </div>
+                    </div>
+                )}
             </div>
 
-            {/* CHECKBOX: FIADOR */}
-            <div className="flex items-center gap-2 mt-4"><input type="checkbox" id="hasGuarantor" checked={formData.hasGuarantor} onChange={(e) => setFormData({...formData, hasGuarantor: e.target.checked})} className="w-4 h-4 rounded text-slate-900 focus:ring-slate-500"/><label htmlFor="hasGuarantor" className="text-sm font-bold text-slate-700 cursor-pointer">Adicionar Fiador (Opcional)</label></div>
-            
-            {/* CAMPOS DE FIADOR (CONDICIONAL) */}
-            {formData.hasGuarantor && (
-                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 animate-in slide-in-from-top-2">
-                    <div className="flex items-center gap-2 mb-2"><UserCheck size={18} className="text-slate-500"/><span className="text-xs font-bold uppercase text-slate-500">Dados do Fiador</span></div>
-                    <input type="text" placeholder="Nome Completo do Fiador" value={formData.guarantorName} onChange={(e) => setFormData({...formData, guarantorName: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/>
-                    <div className="grid grid-cols-2 gap-3">
-                        <input type="text" placeholder="CPF do Fiador" value={formData.guarantorCPF} onChange={(e) => setFormData({...formData, guarantorCPF: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/>
-                        <input type="text" placeholder="Endereço Completo" value={formData.guarantorAddress} onChange={(e) => setFormData({...formData, guarantorAddress: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/>
-                    </div>
+            <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-inner"><div className="flex items-center gap-2 mb-4 border-b border-slate-200 pb-3"><Calculator size={20} className="text-slate-800" /><h4 className="text-[12px] font-bold text-slate-800 uppercase tracking-widest">Simulação Financeira ({formData.interestType === 'SIMPLE' ? 'Juros Simples' : 'Price'})</h4></div>{isSimulating ? (<div className="flex justify-center py-4"><Loader2 className="animate-spin text-slate-400" /></div>) : simulation.isValid ? (<div className="space-y-4"><div className="flex justify-between items-center text-sm font-medium"><span className="text-slate-500">Montante Financiado:</span><span className="text-slate-900 font-bold">R$ {formatMoney(parseFloat(formData.amount))}</span></div><div className="flex justify-between items-center"><span className="text-sm text-slate-500 font-medium">Parcela Mensal ({formData.installments}x):</span><span className="text-xl font-black text-green-600 bg-green-50 px-3 py-1 rounded-lg border border-green-100">R$ {formatMoney(simulation.installment)}</span></div><div className="flex justify-between items-center text-sm"><span className="text-slate-500 font-medium">Custo Total de Juros:</span><span className="text-red-600 font-bold">+ R$ {formatMoney(simulation.totalInterest)}</span></div></div>) : (<p className="text-center text-slate-400 text-xs py-4 font-medium italic">Aguardando dados...</p>)}</div>
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100"><button type="button" onClick={closeLoanFlow} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all">Cancelar</button><button type="submit" disabled={!simulation.isValid} className="px-8 py-3 bg-slate-900 text-white rounded-xl flex items-center gap-2 font-bold shadow-xl shadow-slate-900/20 disabled:opacity-50 hover:bg-slate-800 transition-all">Iniciar Triagem <ChevronRight size={18} /></button></div>
+            </form>
+        ) : (
+            // --- CONTEÚDO DO CHECKLIST ---
+            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                <div className="flex justify-between items-end mb-3">
+                    <div><p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Score de Aprovação</p><p className={`text-4xl font-black ${progressPercentage >= 70 ? 'text-green-600' : 'text-blue-600'}`}>{progressPercentage}%</p></div>
+                    <div className="text-right"><div className="text-[10px] font-bold px-2 py-1 rounded border mb-2 inline-block bg-blue-50 border-blue-200 text-blue-600">APROVAÇÃO FLEXÍVEL</div></div>
                 </div>
-            )}
-          </div>
-
-          <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-inner"><div className="flex items-center gap-2 mb-4 border-b border-slate-200 pb-3"><Calculator size={20} className="text-slate-800" /><h4 className="text-[12px] font-bold text-slate-800 uppercase tracking-widest">Simulação Financeira ({formData.interestType === 'SIMPLE' ? 'Juros Simples' : 'Price'})</h4></div>{isSimulating ? (<div className="flex justify-center py-4"><Loader2 className="animate-spin text-slate-400" /></div>) : simulation.isValid ? (<div className="space-y-4"><div className="flex justify-between items-center text-sm font-medium"><span className="text-slate-500">Montante Financiado:</span><span className="text-slate-900 font-bold">R$ {formatMoney(parseFloat(formData.amount))}</span></div><div className="flex justify-between items-center"><span className="text-sm text-slate-500 font-medium">Parcela Mensal ({formData.installments}x):</span><span className="text-xl font-black text-green-600 bg-green-50 px-3 py-1 rounded-lg border border-green-100">R$ {formatMoney(simulation.installment)}</span></div><div className="flex justify-between items-center text-sm"><span className="text-slate-500 font-medium">Custo Total de Juros:</span><span className="text-red-600 font-bold">+ R$ {formatMoney(simulation.totalInterest)}</span></div></div>) : (<p className="text-center text-slate-400 text-xs py-4 font-medium italic">Aguardando dados...</p>)}</div>
-          <div className="flex justify-end gap-3 pt-4 border-t border-slate-100"><button type="button" onClick={() => setIsModalOpen(false)} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all">Cancelar</button><button type="submit" disabled={!simulation.isValid} className="px-8 py-3 bg-slate-900 text-white rounded-xl flex items-center gap-2 font-bold shadow-xl shadow-slate-900/20 disabled:opacity-50 hover:bg-slate-800 transition-all">Iniciar Triagem <ChevronRight size={18} /></button></div>
-        </form>
+                <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden shadow-inner"><div className={`h-full transition-all duration-700 ease-out ${progressPercentage >= 70 ? 'bg-green-500' : 'bg-blue-500'}`} style={{ width: `${progressPercentage}%` }}></div></div>
+                </div>
+                <div className="flex border-b border-slate-100 gap-4"><button type="button" onClick={() => setActiveStage(1)} className={`pb-3 text-sm font-bold transition-all border-b-2 ${activeStage === 1 ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>1. Comportamental</button><button type="button" onClick={() => setActiveStage(2)} className={`pb-3 text-sm font-bold transition-all border-b-2 ${activeStage === 2 ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>2. Documentos</button></div>
+                <div className="grid grid-cols-1 gap-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
+                {checklistItems.filter(i => i.stage === activeStage).map((item) => (
+                    <div key={item.id} onClick={(e) => toggleChecklistItem(item.id, e)} className={`flex items-center gap-4 p-4 border rounded-2xl cursor-pointer hover:bg-slate-50 transition-all ${item.checked ? 'border-green-200 bg-green-50/40 shadow-sm' : 'border-slate-100 bg-white'}`}>
+                        <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-colors ${item.checked ? 'bg-green-500 border-green-500 text-white' : 'bg-white border-slate-200'}`}>{item.checked && <Check size={16} strokeWidth={4} />}</div>
+                        <div><span className={`text-sm font-bold block ${item.checked ? 'text-green-900' : 'text-slate-600'}`}>{item.label}</span><span className="text-[10px] uppercase font-bold text-slate-400">Peso: {item.weight} pts</span></div>
+                    </div>
+                ))}
+                </div>
+                <div className="animate-in slide-in-from-top duration-500 bg-orange-50 p-5 rounded-2xl border border-orange-100 shadow-sm">
+                    <div className="flex items-center gap-2 mb-3"><ShieldAlert size={18} className="text-orange-600" /><label className="text-sm font-bold text-orange-800">Observação Obrigatória</label></div>
+                    <textarea required value={justification} onChange={(e) => setJustification(e.target.value)} className="w-full p-4 border border-orange-200 bg-white rounded-xl text-sm h-24 outline-none focus:ring-2 focus:ring-orange-400 transition-all placeholder:text-orange-200" placeholder="Resuma a análise do cliente aqui..."/>
+                </div>
+                <div className="flex justify-end gap-3 pt-6 border-t border-slate-100">
+                <button type="button" onClick={handleBackToForm} className="px-6 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition-all">Voltar</button>
+                <button type="button" onClick={handleFinalSave} disabled={!canFinalize || isSaving} className={`px-10 py-3 rounded-xl font-bold text-white transition-all flex items-center gap-3 shadow-lg ${canFinalize ? 'bg-green-600 hover:bg-green-700 shadow-green-900/20' : 'bg-slate-200 cursor-not-allowed text-slate-400'}`}>{isSaving ? <Loader2 className="animate-spin" /> : <ShieldCheck size={20} />} {isSaving ? 'Gravando...' : 'Aprovar Contrato'}</button>
+                </div>
+            </div>
+        )}
       </Modal>
     </Layout>
   );
