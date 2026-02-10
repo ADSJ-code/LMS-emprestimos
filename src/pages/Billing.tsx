@@ -61,7 +61,7 @@ const Billing = () => {
   const [formData, setFormData] = useState({ 
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
       fineRate: '2.0', clientBank: '', paymentMethod: '',
-      // NOVOS CAMPOS
+      // NOVOS CAMPOS (Minúsculo para bater com API)
       interestType: 'PRICE', 
       hasGuarantor: false,
       guarantorName: '',
@@ -128,10 +128,8 @@ const Billing = () => {
           if (lastLoan) {
               setFormData(prev => ({
                   ...prev,
-                  // Puxa APENAS dados bancários e fixos, NÃO puxa taxa nem multa
                   clientBank: lastLoan.clientBank || '',
                   paymentMethod: lastLoan.paymentMethod || '',
-                  // Mantém os valores atuais do formulário para o resto
                   fineRate: prev.fineRate,
                   interestRate: prev.interestRate
               }));
@@ -181,7 +179,7 @@ const Billing = () => {
   const getBreakdown = (loan: Loan) => {
       const interest = loan.amount * (loan.interestRate / 100);
       
-      // --- CORREÇÃO: Usando 'interestType' (minúsculo) ---
+      // --- CORREÇÃO: interestType (minúsculo) ---
       if (loan.interestType === 'SIMPLE') {
           return { interest, capital: 0 }; 
       }
@@ -219,6 +217,7 @@ const Billing = () => {
         let pmt = 0;
         let totalInt = 0;
 
+        // --- CORREÇÃO: interestType (minúsculo) ---
         if (formData.interestType === 'SIMPLE') {
             // MODO SÓ JUROS: Parcela = Apenas Juros. Capital fica pro final.
             pmt = amount * i; 
@@ -408,23 +407,19 @@ const Billing = () => {
   const toggleSelectAll = () => { if (selectedIds.length === loans.length) setSelectedIds([]); else setSelectedIds(loans.map(l => l.id)); };
   const toggleSelectOne = (id: string) => { setSelectedIds(prev => prev.includes(id) ? prev.filter(curr => curr !== id) : [...prev, id]); };
   
-  // --- CORREÇÃO DO MODAL TRAVADO (DELAY) ---
+  // --- CORREÇÃO DO MODAL TRAVADO ---
+  // Removido setTimeout. Abrimos o Checklist ANTES de fechar o Modal para garantir que o estado propague.
+  // Em algumas versões do React, fechar antes de abrir pode causar "piscar" ou desmontar componentes.
   const handlePreSave = (e: React.FormEvent) => { 
       e.preventDefault(); 
-      setIsModalOpen(false); 
-      // Delay de 150ms para garantir que o fechamento do modal anterior não bloqueie a abertura do próximo
-      setTimeout(() => {
-          setActiveStage(1); 
-          setIsChecklistOpen(true); 
-      }, 150);
+      setActiveStage(1); 
+      setIsChecklistOpen(true); // Abre primeiro
+      setIsModalOpen(false);    // Fecha depois
   };
   
   const handleBackToForm = () => {
-      setIsChecklistOpen(false);
-      // Delay também na volta para suavidade
-      setTimeout(() => {
-          setIsModalOpen(true); 
-      }, 150);
+      setIsModalOpen(true);     // Abre primeiro
+      setIsChecklistOpen(false); // Fecha depois
   };
 
   const handleFinalSave = async () => {
@@ -618,6 +613,62 @@ const Billing = () => {
             <div className="flex flex-col gap-2 pt-4 border-t border-slate-100"><button onClick={() => { handleOpenPayment(selectedLoan); setIsDetailsOpen(false); }} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-slate-800 transition-all shadow-lg"><DollarSign size={18} /> Registrar Novo Pagamento</button></div>
           </div>
         )}
+      </Modal>
+
+      <Modal isOpen={isPaymentModalOpen} onClose={() => setIsPaymentModalOpen(false)} title="Baixa Flexível">
+        <div className="space-y-5">
+            {selectedLoan && (cycleAcc.interest > 0 || cycleAcc.capital > 0) && (
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                    <div className="flex items-center gap-2 mb-2">
+                        <Info size={16} className="text-blue-600"/>
+                        <span className="text-xs font-bold text-blue-900">Juros Acumulados no Ciclo</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-blue-800 mb-1">
+                        <span>Pago: R$ {formatMoney(cycleAcc.interest)}</span>
+                        <span>Meta: R$ {formatMoney(getBreakdown(selectedLoan).interest)}</span>
+                    </div>
+                    <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
+                        <div className="bg-blue-600 h-full transition-all" style={{ width: `${Math.min(100, (cycleAcc.interest / getBreakdown(selectedLoan).interest) * 100)}%` }}></div>
+                    </div>
+                </div>
+            )}
+
+            {selectedLoan && !settleInterest && (parseFloat(payInterest || '0') + cycleAcc.interest) >= (selectedLoan.amount * (selectedLoan.interestRate/100) - 0.10) && (
+                <div className="flex items-center gap-2 bg-green-50 text-green-700 p-2 rounded-lg text-xs animate-in fade-in slide-in-from-top-1">
+                    <PartyPopper size={16}/>
+                    <span>✨ Este valor completa os juros do mês! O vencimento avançará.</span>
+                </div>
+            )}
+
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                <label className="flex items-center gap-2 text-xs font-bold uppercase text-slate-500 mb-2"><Calendar size={14}/> Data e Hora do Pagamento</label>
+                <input type="datetime-local" value={payDate} onChange={(e) => setPayDate(e.target.value)} className="w-full p-3 border border-slate-200 rounded-lg bg-white outline-none focus:ring-2 focus:ring-slate-900/5 font-mono text-sm"/>
+                <p className="text-[10px] text-slate-400 mt-1 italic">Use para registrar pagamentos feitos anteriormente.</p>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Capital (Amortização)</label>
+                    <small className="block text-[10px] text-slate-400 mb-1">Esperado: R$ {selectedLoan && formatMoney(getBreakdown(selectedLoan).capital)}</small>
+                    <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">R$</span><input type="number" step="0.01" value={payCapital} onChange={(e) => setPayCapital(e.target.value)} className="w-full pl-10 p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 font-bold text-slate-700" placeholder="0.00"/></div>
+                </div>
+                <div>
+                    <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros (Lucro)</label>
+                    <small className="block text-[10px] text-slate-400 mb-1">Esperado: R$ {selectedLoan && formatMoney(getBreakdown(selectedLoan).interest)}</small>
+                    <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-green-500 font-bold">R$</span><input type="number" step="0.01" value={payInterest} onChange={(e) => setPayInterest(e.target.value)} className="w-full pl-10 p-3 border border-green-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500/20 font-bold text-green-600 bg-green-50/30" placeholder="0.00"/></div>
+                </div>
+            </div>
+            <div className="flex items-center gap-2 py-2"><input type="checkbox" id="settleInterest" checked={settleInterest} onChange={(e) => setSettleInterest(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500"/><label htmlFor="settleInterest" className="text-xs font-bold text-slate-600">Quitar Juros do Mês?</label></div>
+            
+            {settleInterest && selectedLoan && (parseFloat(payInterest || '0') + cycleAcc.interest) < (selectedLoan.amount * (selectedLoan.interestRate/100) - 0.10) && (
+                <div className="flex items-center gap-2 bg-orange-50 text-orange-700 p-2 rounded-lg text-xs">
+                    <AlertTriangle size={14}/>
+                    <span>Atenção: Juros somado menor que o devido. O histórico registrará desconto.</span>
+                </div>
+            )}
+
+            <div className="bg-slate-900 p-4 rounded-xl text-center shadow-lg"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Recebido</span><p className="text-3xl font-black text-white mt-1">R$ {formatMoney(payTotal)}</p></div>
+            <button onClick={confirmPayment} className="w-full py-4 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 transition-all shadow-lg flex items-center justify-center gap-2"><Check size={20}/> Confirmar Baixa</button>
+        </div>
       </Modal>
 
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Novo Empréstimo">
