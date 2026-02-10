@@ -5,7 +5,7 @@ import axios from 'axios';
 export interface PaymentRecord {
   date: string;
   amount: number;
-  type: 'Entrada' | 'Renovação' | 'Amortização' | 'Quitação' | 'Abertura' | 'Parcela' | 'Juros';
+  type: 'Entrada' | 'Renovação' | 'Amortização' | 'Quitação' | 'Abertura' | 'Parcela' | 'Juros' | string;
   note?: string;
   capitalPaid?: number;
   interestPaid?: number;
@@ -31,6 +31,12 @@ export interface Loan {
   totalPaidInterest?: number;
   totalPaidCapital?: number;
   history?: PaymentRecord[];
+
+  // --- NOVOS CAMPOS (FIADOR E TIPO DE JUROS) ---
+  InterestType?: 'PRICE' | 'SIMPLE'; // Se undefined, assume PRICE
+  GuarantorName?: string;
+  GuarantorCPF?: string;
+  GuarantorAddress?: string;
 }
 
 export interface ClientDoc {
@@ -88,7 +94,6 @@ export interface BlacklistEntry {
 
 // --- Configuração da API ---
 
-// MODO TUDO-EM-UM: A API está na mesma URL do site, na rota /api
 const API_BASE_URL = '/api';
 
 const api = axios.create({
@@ -99,13 +104,10 @@ const api = axios.create({
   }
 });
 
-// Interceptor de Autenticação (CORRIGIDO)
+// Interceptor de Autenticação
 api.interceptors.request.use(
   (config) => {
-    // Tenta pegar o token puro
     let token = localStorage.getItem('token');
-    
-    // Se não achar, tenta pegar da sessão completa (que é o padrão do Login.tsx)
     if (!token) {
         const session = localStorage.getItem('lms_active_session');
         if (session) {
@@ -117,7 +119,6 @@ api.interceptors.request.use(
             }
         }
     }
-
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -130,7 +131,6 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    // Ignora erro 401 na tela de login para não gerar loop
     if (error.response && error.response.status === 401 && !window.location.pathname.includes('/login')) {
         console.warn("Sessão expirada. Redirecionando para login.");
         authService.logout();
@@ -145,35 +145,26 @@ api.interceptors.response.use(
 export const authService = {
   login: async (username: string, password: string) => {
     const response = await api.post('/auth/login', { username, password });
-    
-    // Salva o token puro também para facilitar
     if (response.data.token) {
         localStorage.setItem('token', response.data.token);
     }
-    
     return response.data;
   },
-  
-  // CRUD de Usuários via API
   listUsers: async () => {
     const response = await api.get('/users');
     return response.data;
   },
-  
   addUser: async (userData: any) => {
     const response = await api.post('/users', userData);
     return response.data;
   },
-  
   updateUser: async (email: string, newData: any) => {
     const response = await api.put(`/users/${email}`, newData);
     return response.data;
   },
-  
   removeUser: async (email: string) => {
     await api.delete(`/users/${email}`);
   },
-
   logout: () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
@@ -266,12 +257,7 @@ export const settingsService = {
     return response.data;
   },
   save: async (settings: any) => {
-    // GARANTE QUE ESTAMOS ENVIANDO O JSON NO FORMATO CERTO
-    // O Backend espera: { company: {...}, system: {...} }
-    // Se recebermos algo flat, estruturamos aqui
     let payload = settings;
-    
-    // Proteção extra: se estiver faltando a estrutura, tenta montar
     if (!settings.company && settings.name) {
          payload = {
              company: {
@@ -288,12 +274,9 @@ export const settingsService = {
              }
          };
     }
-
     const response = await api.post('/settings', payload);
     return response.data;
   },
-
-  // --- NOVA FUNÇÃO DE RESTAURAÇÃO ---
   restoreBackup: async (backupData: any) => {
     const response = await api.post('/admin/restore', backupData);
     return response.data;

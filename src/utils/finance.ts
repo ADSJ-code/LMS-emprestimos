@@ -1,6 +1,3 @@
-// Calculadora Oficial do Credit Now
-// Agora suporta taxas históricas (Snapshot)
-
 export const calculateOverdueValue = (
   amount: number, 
   dueDateStr: string, 

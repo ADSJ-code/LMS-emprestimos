@@ -55,7 +55,6 @@ func logAction(action string, details string) {
 		}
 
 		go func() {
-			// Aumentei timeout do log também
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			_, err := logCollection.InsertOne(ctx, entry)
@@ -144,7 +143,7 @@ type Claims struct {
 type User struct {
 	ID       string `json:"id,omitempty" bson:"_id,omitempty"`
 	Name     string `json:"name" bson:"name"`
-	Username string `json:"email" bson:"username"` // CORREÇÃO MANTIDA
+	Username string `json:"email" bson:"username"`
 	Password string `json:"password,omitempty" bson:"password"`
 	Role     string `json:"role" bson:"role"`
 }
@@ -198,6 +197,12 @@ type Loan struct {
 	TotalPaidInterest   float64         `json:"totalPaidInterest" bson:"totalPaidInterest"`
 	TotalPaidCapital    float64         `json:"totalPaidCapital" bson:"totalPaidCapital"`
 	History             []PaymentRecord `json:"history" bson:"history"`
+
+	// --- NOVOS CAMPOS ADICIONADOS ---
+	InterestType     string `json:"interestType,omitempty" bson:"interestType,omitempty"` // "PRICE" ou "SIMPLE" (Juros Puros)
+	GuarantorName    string `json:"guarantorName,omitempty" bson:"guarantorName,omitempty"`
+	GuarantorCPF     string `json:"guarantorCPF,omitempty" bson:"guarantorCPF,omitempty"`
+	GuarantorAddress string `json:"guarantorAddress,omitempty" bson:"guarantorAddress,omitempty"`
 }
 
 type ClientDoc struct {
@@ -281,7 +286,7 @@ func main() {
 		mongoURI = "mongodb://127.0.0.1:27017"
 	}
 
-	// TIMEOUT DE CONEXÃO: 60 SEGUNDOS (EXTREMO)
+	// TIMEOUT DE CONEXÃO: 60 SEGUNDOS
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -367,7 +372,6 @@ func main() {
 }
 
 func seedAdminUser() {
-	// TIMEOUT DE 60s
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	var user User
@@ -388,7 +392,6 @@ func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	// TIMEOUT DE 120s PARA RESET
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	loanCollection.Drop(ctx)
@@ -404,7 +407,7 @@ func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Sistema resetado."})
 }
 
-// --- HANDLERS COM TIMEOUT DE 60s ---
+// --- HANDLERS ---
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -441,7 +444,6 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 func usersHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	// TIMEOUT DE 60 SEGUNDOS AQUI
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -526,7 +528,7 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second) // 2 min para restore
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	var data BackupData
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
@@ -568,7 +570,7 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Sucesso!"})
 }
 
-// --- DEMAIS HANDLERS (COM BLACKLIST E TIMEOUT 60s) ---
+// --- DEMAIS HANDLERS (LOANS COM NOVOS CAMPOS) ---
 
 func loansHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
