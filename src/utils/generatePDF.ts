@@ -97,11 +97,12 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
     ? `${clientData.address}, ${clientData.number || 'S/N'} - ${clientData.neighborhood || ''}, ${clientData.city || ''}/${clientData.state || ''}, CEP: ${clientData.cep || ''}`
     : "Endereço não informado";
 
-  // DADOS DO FIADOR
-  const hasGuarantor = !!loan.GuarantorName;
-  const guarantorName = loan.GuarantorName || "";
-  const guarantorCPF = loan.GuarantorCPF || "";
-  const guarantorAddress = loan.GuarantorAddress || "";
+  // --- CORREÇÃO AQUI: Mudando para minúsculo (camelCase) ---
+  const hasGuarantor = !!loan.guarantorName;
+  const guarantorName = loan.guarantorName || "";
+  const guarantorCPF = loan.guarantorCPF || "";
+  const guarantorAddress = loan.guarantorAddress || "";
+  // ---------------------------------------------------------
 
   const contractCity = extractCityFromAddress(lenderAddress, clientData?.city || "São Paulo");
   const originalAmount = getOriginalAmount(loan);
