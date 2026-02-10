@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { 
   Users, DollarSign, AlertTriangle, TrendingUp, Plus, 
   Search, FileText, ArrowRight, Calendar, Activity, 
-  Briefcase, PieChart, Wallet, RefreshCw, ArrowLeft, Clock
+  Briefcase, PieChart, Wallet, RefreshCw, ArrowLeft, Clock, Filter
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { calculateOverdueValue, formatMoney } from '../utils/finance';
@@ -11,11 +11,15 @@ import { loanService, Loan } from '../services/api';
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  // ADICIONADO 'proximo_mes' E 'personalizado' AOS PERÍODOS
-  const [period, setPeriod] = useState<'hoje' | 'semana' | 'mes' | 'proximo_mes' | 'personalizado' | 'todos'>('todos');
-  const [customMonth, setCustomMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
-  const [loading, setLoading] = useState(false);
   
+  // --- ESTADOS DE FILTRO ---
+  const [period, setPeriod] = useState<'hoje' | 'semana' | 'mes' | 'proximo_mes' | 'personalizado' | 'todos'>('todos');
+  
+  // Datas para o filtro personalizado
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+
+  const [loading, setLoading] = useState(false);
   const [selectedRange, setSelectedRange] = useState<'low' | 'mid' | 'high' | 'capital' | 'profit' | 'overdue' | null>(null);
   const [allLoans, setAllLoans] = useState<Loan[]>([]);
 
@@ -51,17 +55,16 @@ const Dashboard = () => {
       const today = new Date();
       today.setHours(0,0,0,0);
 
-      // 1. FILTRAGEM POR PERÍODO (INCLUINDO FUTURO)
+      // 1. FILTRAGEM POR PERÍODO
       const filteredLoans = loans.filter((loan: any) => {
         if (period === 'todos') return true;
         
-        // Data base para filtro: Se for atrasado, usa vencimento. Se for novo, usa inicio.
-        // Para projeção futura, usamos SEMPRE o vencimento (nextDue)
         const loanStart = parseLocalDate(loan.startDate);
         const loanDue = parseLocalDate(loan.nextDue);
         loanStart.setHours(0,0,0,0);
         loanDue.setHours(0,0,0,0);
 
+        // Filtros de Histórico (Baseados em quando foi feito)
         if (period === 'hoje') return loanStart.toDateString() === today.toDateString();
         
         if (period === 'semana') {
@@ -76,19 +79,21 @@ const Dashboard = () => {
           return loanStart >= monthStart && loanStart <= monthEnd;
         }
 
-        // --- PROJEÇÃO FUTURA (PRÓXIMO MÊS) ---
+        // Filtros de Projeção (Baseados em quando vence)
         if (period === 'proximo_mes') {
             const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1);
             const nextMonthEnd = new Date(today.getFullYear(), today.getMonth() + 2, 0);
             return loanDue >= nextMonthStart && loanDue <= nextMonthEnd && loan.status !== 'Pago';
         }
 
-        // --- PROJEÇÃO PERSONALIZADA ---
+        // Filtro Personalizado (Intervalo de Datas) - Baseado em Vencimento (Projeção) ou Início?
+        // Híbrido: Se data futura, olha vencimento. Se passado, olha inicio.
+        // Simplificação: Vamos olhar Vencimento para permitir projeção exata.
         if (period === 'personalizado') {
-            const [y, m] = customMonth.split('-').map(Number);
-            const pStart = new Date(y, m - 1, 1);
-            const pEnd = new Date(y, m, 0);
-            return loanDue >= pStart && loanDue <= pEnd && loan.status !== 'Pago';
+            if (!customStart || !customEnd) return true;
+            const start = parseLocalDate(customStart);
+            const end = parseLocalDate(customEnd);
+            return loanDue >= start && loanDue <= end && loan.status !== 'Pago';
         }
 
         return true;
@@ -114,15 +119,16 @@ const Dashboard = () => {
         const totalReceivable = installmentValue * installments;
         const profit = Math.max(0, totalReceivable - amount);
 
-        // Se for projeção futura, somamos o valor da parcela como "recebível"
-        if (period === 'proximo_mes' || period === 'personalizado') {
-             // Em projeção, "Capital" vira "Recebível"
+        // Lógica de Projeção vs Histórico
+        const isProjection = period === 'proximo_mes' || period === 'personalizado';
+
+        if (isProjection) {
+             // Em projeção, somamos o valor da parcela como "A Entrar"
              capitalTotal += installmentValue; 
-             // Lucro proporcional da parcela
              const profitPart = profit / (installments || 1);
              lucroTotal += profitPart;
         } else {
-             // Modo Padrão (Histórico/Atual)
+             // Histórico: Somamos o capital emprestado
              if (status !== 'pago') {
                  capitalTotal += amount;
                  lucroTotal += profit;
@@ -145,7 +151,7 @@ const Dashboard = () => {
         }
       });
 
-      // Loop Geral para Taxas (Capital Alocado)
+      // Loop Geral para Taxas (Capital Alocado - Sempre Total)
       loans.forEach((loan: Loan) => {
           if(loan.status !== 'Pago') {
               const capital = Number(loan.amount) || 0;
@@ -181,14 +187,14 @@ const Dashboard = () => {
         const dueDate = parseLocalDate(loan.nextDue);
         dueDate.setHours(0,0,0,0);
         const isOverdue = dueDate < today && loan.status !== 'Pago';
+        const isProjection = period === 'proximo_mes' || period === 'personalizado';
         
         let type = isOverdue ? 'atraso' : 'novo_contrato';
         let text = isOverdue ? `Atraso: ${loan.client}` : `Novo: ${loan.client}`;
         let value = isOverdue ? 'Cobrar' : `+ ${formatMoney(loan.amount)}`;
 
-        // Ajuste para Projeção Futura
-        if (period === 'proximo_mes' || period === 'personalizado') {
-            type = 'novo_contrato'; // Verde
+        if (isProjection) {
+            type = 'novo_contrato'; 
             text = `Vence em: ${dueDate.toLocaleDateString('pt-BR')} - ${loan.client}`;
             value = `Receber: ${formatMoney(loan.installmentValue)}`;
         }
@@ -197,7 +203,7 @@ const Dashboard = () => {
           id: loan.id,
           type,
           text,
-          time: period === 'proximo_mes' || period === 'personalizado' ? 'Futuro' : parseLocalDate(loan.startDate).toLocaleDateString('pt-BR'), 
+          time: isProjection ? 'Futuro' : parseLocalDate(loan.startDate).toLocaleDateString('pt-BR'), 
           value
         };
       });
@@ -206,7 +212,17 @@ const Dashboard = () => {
     } catch (error) { console.error(error); } finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchAndCalculate(); }, [period, customMonth]);
+  // Dispara o filtro se mudar o período ou clicar em filtrar (que muda o período para personalizado)
+  useEffect(() => { 
+      if (period !== 'personalizado') {
+          fetchAndCalculate();
+      }
+  }, [period]);
+
+  const handleCustomFilter = () => {
+      setPeriod('personalizado');
+      fetchAndCalculate();
+  }
 
   const detailedLoans = useMemo(() => {
       if (!selectedRange) return [];
@@ -232,7 +248,7 @@ const Dashboard = () => {
       low: 'Capital em Taxa Baixa (< 10%)',
       mid: 'Capital em Taxa Média (10% - 15%)',
       high: 'Capital em Taxa Alta (> 15%)',
-      capital: period === 'proximo_mes' || period === 'personalizado' ? 'Previsão de Recebimento' : 'Detalhamento de Capital',
+      capital: (period === 'proximo_mes' || period === 'personalizado') ? 'Previsão de Recebimento' : 'Detalhamento de Capital',
       profit: 'Detalhamento de Lucro Projetado',
       overdue: 'Contratos em Atraso (Crítico)'
   };
@@ -279,7 +295,7 @@ const Dashboard = () => {
                                   const profit = totalVal - amount;
                                   let overdueValue = 0;
                                   if (selectedRange === 'overdue') {
-                                      overdueValue = calculateOverdueValue(loan.installmentValue, loan.nextDue, 'Atrasado', loan.fineRate || 2, loan.moraInterestRate || 1);
+                                      overdueValue = calculateOverdueValue(loan.installmentValue, loan.nextDue, 'Atrasado', loan.fineRate !== undefined ? loan.fineRate : 2, loan.moraInterestRate || 1);
                                   }
                                   return (
                                       <tr key={loan.id} className="hover:bg-slate-50/50 transition-colors">
@@ -307,25 +323,34 @@ const Dashboard = () => {
           </div>
       ) : (
           <>
-            <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+            {/* --- BARRA DE FILTROS PADRONIZADA --- */}
+            <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-8 gap-4">
                 <div><h2 className="text-2xl font-bold text-slate-800">Dashboard Geral</h2><p className="text-slate-500">Visão completa da operação.</p></div>
-                <div className="flex gap-2 items-center flex-wrap">
-                    <button onClick={fetchAndCalculate} className="p-2 bg-white border border-gray-200 rounded-lg text-slate-500 hover:text-slate-900 transition-colors"><RefreshCw size={18} className={loading ? "animate-spin" : ""} /></button>
-                    <div className="flex bg-white p-1 rounded-lg border border-gray-200 shadow-sm overflow-x-auto">
-                        <button onClick={() => setPeriod('hoje')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${period === 'hoje' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-gray-50'}`}>Hoje</button>
-                        <button onClick={() => setPeriod('mes')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${period === 'mes' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-gray-50'}`}>Este Mês</button>
-                        <button onClick={() => setPeriod('proximo_mes')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap ${period === 'proximo_mes' ? 'bg-blue-600 text-white' : 'text-blue-600 hover:bg-blue-50'}`}>Próximo Mês</button>
-                        <button onClick={() => setPeriod('todos')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${period === 'todos' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-gray-50'}`}>Total</button>
+                
+                <div className="flex flex-col md:flex-row gap-3 items-start md:items-center w-full xl:w-auto">
+                    {/* BOTÃO ATUALIZAR */}
+                    <button onClick={fetchAndCalculate} className="p-2.5 bg-white border border-gray-200 rounded-xl text-slate-500 hover:text-slate-900 transition-colors shadow-sm"><RefreshCw size={18} className={loading ? "animate-spin" : ""} /></button>
+                    
+                    {/* BOTÕES DE PERÍODO FIXO */}
+                    <div className="flex bg-white p-1 rounded-xl border border-gray-200 shadow-sm overflow-x-auto max-w-full">
+                        <button onClick={() => setPeriod('hoje')} className={`px-4 py-2 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${period === 'hoje' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>Hoje</button>
+                        <button onClick={() => setPeriod('semana')} className={`px-4 py-2 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${period === 'semana' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>Esta Semana</button>
+                        <button onClick={() => setPeriod('mes')} className={`px-4 py-2 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${period === 'mes' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>Este Mês</button>
+                        <button onClick={() => setPeriod('proximo_mes')} className={`px-4 py-2 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${period === 'proximo_mes' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>Próximo Mês</button>
+                        <button onClick={() => setPeriod('todos')} className={`px-4 py-2 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${period === 'todos' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>Total</button>
                     </div>
                     
-                    {/* SELETOR DE MÊS PERSONALIZADO */}
-                    <div className="flex items-center gap-2 bg-white p-1 rounded-lg border border-gray-200 shadow-sm">
-                        <input 
-                            type="month" 
-                            value={customMonth} 
-                            onChange={(e) => { setCustomMonth(e.target.value); setPeriod('personalizado'); }}
-                            className="text-sm font-bold text-slate-700 bg-transparent outline-none px-2 cursor-pointer"
-                        />
+                    {/* SELETOR PERSONALIZADO (INTERVALO) */}
+                    <div className="flex items-center gap-2 bg-white p-1.5 rounded-xl border border-gray-200 shadow-sm w-full md:w-auto">
+                        <div className="flex items-center gap-2 px-2">
+                            <Calendar size={16} className="text-slate-400"/>
+                            <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="text-xs font-bold text-slate-600 bg-transparent outline-none w-24"/>
+                            <span className="text-slate-300">|</span>
+                            <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="text-xs font-bold text-slate-600 bg-transparent outline-none w-24"/>
+                        </div>
+                        <button onClick={handleCustomFilter} className={`p-2 rounded-lg transition-all ${period === 'personalizado' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`} title="Filtrar Período">
+                            <Filter size={16}/>
+                        </button>
                     </div>
                 </div>
             </header>

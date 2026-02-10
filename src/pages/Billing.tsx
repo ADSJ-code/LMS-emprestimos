@@ -62,7 +62,7 @@ const Billing = () => {
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
       fineRate: '2.0', clientBank: '', paymentMethod: '',
       // NOVOS CAMPOS
-      interestType: 'PRICE', 
+      interestType: 'PRICE', // Inicializa como string, mas validaremos no envio
       hasGuarantor: false,
       guarantorName: '',
       guarantorCPF: '',
@@ -118,7 +118,7 @@ const Billing = () => {
 
   useEffect(() => { fetchLoans(); }, []);
 
-  // --- AUTOCOMPLETE DE DADOS BANCÁRIOS ---
+  // --- AUTOCOMPLETE DE DADOS BANCÁRIOS (CORRIGIDO - SÓ DADOS BANCÁRIOS) ---
   useEffect(() => {
       if (formData.client && availableClients.length > 0) {
           const lastLoan = loans
@@ -128,10 +128,12 @@ const Billing = () => {
           if (lastLoan) {
               setFormData(prev => ({
                   ...prev,
+                  // Puxa APENAS dados bancários e fixos, NÃO puxa taxa nem multa
                   clientBank: lastLoan.clientBank || '',
                   paymentMethod: lastLoan.paymentMethod || '',
-                  fineRate: lastLoan.fineRate?.toString() || '2.0',
-                  interestRate: lastLoan.interestRate?.toString() || prev.interestRate
+                  // Mantém os valores atuais do formulário para o resto
+                  fineRate: prev.fineRate,
+                  interestRate: prev.interestRate
               }));
           }
       }
@@ -178,9 +180,12 @@ const Billing = () => {
 
   const getBreakdown = (loan: Loan) => {
       const interest = loan.amount * (loan.interestRate / 100);
+      
+      // SE FOR MODO "SÓ JUROS" (SIMPLE), A PARCELA DE CAPITAL É ZERO (ATÉ PAGAR FINAL)
       if (loan.InterestType === 'SIMPLE') {
           return { interest, capital: 0 }; 
       }
+
       const capital = loan.installmentValue - interest;
       return { interest, capital: capital > 0 ? capital : 0 };
   };
@@ -189,7 +194,7 @@ const Billing = () => {
     const totalOverdue = loans.reduce((acc, l) => {
       if (l.status === 'Pago') return acc;
       const realStatus = getLoanRealStatus(l);
-      if (realStatus === 'Atrasado') return acc + calculateOverdueValue(l.installmentValue, l.nextDue, 'Atrasado', l.fineRate || 2, l.moraInterestRate || 1);
+      if (realStatus === 'Atrasado') return acc + calculateOverdueValue(l.installmentValue, l.nextDue, 'Atrasado', l.fineRate !== undefined ? l.fineRate : 2, l.moraInterestRate || 1);
       return acc;
     }, 0);
     const totalProfit = loans.reduce((acc, l) => acc + (l.totalPaidInterest || 0), 0);
@@ -201,6 +206,7 @@ const Billing = () => {
     setSummary({ overdue: totalOverdue, received: totalProfit, today: totalToday });
   }, [loans]);
 
+  // --- SIMULAÇÃO DE PARCELAS ---
   useEffect(() => {
     const amount = parseFloat(formData.amount); 
     const rate = parseFloat(formData.interestRate); 
@@ -214,9 +220,11 @@ const Billing = () => {
         let totalInt = 0;
 
         if (formData.interestType === 'SIMPLE') {
+            // MODO SÓ JUROS: Parcela = Apenas Juros. Capital fica pro final.
             pmt = amount * i; 
             totalInt = pmt * months;
         } else {
+            // MODO PRICE: Amortização
             pmt = i > 0 ? amount * ( (i * Math.pow(1 + i, months)) / (Math.pow(1 + i, months) - 1) ) : amount / months;
             totalInt = (pmt * months) - amount;
         }
@@ -277,6 +285,7 @@ const Billing = () => {
 
   const confirmPayment = async () => {
     if(!selectedLoan) return;
+    
     const valCapital = parseFloat(payCapital) || 0;
     const valInterest = parseFloat(payInterest) || 0;
     const valTotal = valCapital + valInterest;
@@ -306,6 +315,7 @@ const Billing = () => {
     updatedLoan.amount = newAmount;
 
     let noteText = `Baixa Manual. Ref: ${new Date(payDate).toLocaleString('pt-BR')}`;
+    
     const cycleCompletedNow = totalInterestInCycle >= (expectedInterest - 0.10);
 
     if (settleInterest) {
@@ -326,7 +336,15 @@ const Billing = () => {
              const currentDue = new Date(updatedLoan.nextDue);
              currentDue.setMonth(currentDue.getMonth() + 1);
              updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
-             updatedLoan.installments = Math.max(0, updatedLoan.installments - 1);
+             
+             // --- CORREÇÃO DA LÓGICA DE PARCELAS ---
+             // Se for SIMPLE (Só Juros) E não houve pagamento de capital, NÃO diminui a parcela.
+             // Pois a parcela representa a dívida principal que rolou para frente.
+             const isSimple = updatedLoan.InterestType === 'SIMPLE';
+             if (!isSimple || valCapital > 0) {
+                 updatedLoan.installments = Math.max(0, updatedLoan.installments - 1);
+             }
+             // -------------------------------------
         }
     }
 
@@ -388,18 +406,16 @@ const Billing = () => {
   const toggleSelectAll = () => { if (selectedIds.length === loans.length) setSelectedIds([]); else setSelectedIds(loans.map(l => l.id)); };
   const toggleSelectOne = (id: string) => { setSelectedIds(prev => prev.includes(id) ? prev.filter(curr => curr !== id) : [...prev, id]); };
   
-  // --- CORREÇÃO NO HANDLER DE NAVEGAÇÃO ---
   const handlePreSave = (e: React.FormEvent) => { 
       e.preventDefault(); 
       setActiveStage(1); 
-      setIsModalOpen(false); // <--- FECHA O FORMULÁRIO
-      setIsChecklistOpen(true); // <--- ABRE O CHECKLIST
+      setIsModalOpen(false); 
+      setIsChecklistOpen(true); 
   };
   
-  // --- FUNÇÃO PARA O BOTÃO VOLTAR DO CHECKLIST ---
   const handleBackToForm = () => {
       setIsChecklistOpen(false);
-      setIsModalOpen(true); // <--- REABRE O FORMULÁRIO COM OS DADOS MANTIDOS
+      setIsModalOpen(true); 
   };
 
   const handleFinalSave = async () => {
@@ -488,7 +504,6 @@ const Billing = () => {
                     <th className="p-4 text-center w-10"><input type="checkbox" onChange={toggleSelectAll} checked={filteredLoans.length > 0 && selectedIds.length === filteredLoans.length} className="w-4 h-4 rounded border-gray-300 text-slate-900 cursor-pointer"/></th>
                     <th className="p-4">Cliente</th>
                     <th className="p-4 text-center">Parcelas</th>
-                    {/* NOVA COLUNA: VENCIMENTO */}
                     <th className="p-4 text-center">Vencimento</th>
                     <th className="p-4 text-right">Capital Atual</th>
                     <th className="p-4 text-right text-green-600">Lucro (Juros)</th>
@@ -504,12 +519,7 @@ const Billing = () => {
                             <td className="p-4 text-center"><input type="checkbox" checked={selectedIds.includes(loan.id)} onChange={() => toggleSelectOne(loan.id)} className="w-4 h-4 rounded border-gray-300 text-slate-900 cursor-pointer"/></td>
                             <td className="p-4"><div className="font-bold text-slate-800">{loan.client}</div><div className="text-[10px] font-mono text-slate-400">{loan.id}</div></td>
                             <td className="p-4 text-center"><span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">{loan.installments}x</span></td>
-                            {/* DADO DA NOVA COLUNA VENCIMENTO */}
-                            <td className="p-4 text-center">
-                                <span className={`font-bold text-sm ${displayStatus === 'Atrasado' ? 'text-red-600' : 'text-slate-700'}`}>
-                                    {new Date(loan.nextDue).toLocaleDateString('pt-BR')}
-                                </span>
-                            </td>
+                            <td className="p-4 text-center"><span className={`font-bold text-sm ${displayStatus === 'Atrasado' ? 'text-red-600' : 'text-slate-700'}`}>{new Date(loan.nextDue).toLocaleDateString('pt-BR')}</span></td>
                             <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(loan.amount)}</td>
                             <td className="p-4 text-right font-bold text-green-600 bg-green-50/30 rounded">R$ {formatMoney(loan.totalPaidInterest || 0)}</td>
                             <td className="p-4 text-center"><span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${displayStatus === 'Em Dia' ? 'bg-blue-50 text-blue-600' : displayStatus === 'Atrasado' ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>{displayStatus}</span></td>
