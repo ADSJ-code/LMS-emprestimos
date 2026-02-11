@@ -59,11 +59,12 @@ const Billing = () => {
   const [summary, setSummary] = useState({ today: 0, overdue: 0, received: 0 });
   const [loans, setLoans] = useState<Loan[]>([]);
 
-  // --- FORMULÁRIO DE CONTRATO (COM FIADOR E TIPO DE JUROS) ---
+  // --- FORMULÁRIO DE CONTRATO (ATUALIZADO COM MORA) ---
   const [formData, setFormData] = useState({ 
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
-      fineRate: '2.0', clientBank: '', paymentMethod: '',
-      // NOVOS CAMPOS
+      fineRate: '2.0',        // Multa Única (Padrão 2%)
+      moraInterestRate: '1.0', // Juros Mora Mensal (Padrão 1%) -> NOVO CAMPO
+      clientBank: '', paymentMethod: '',
       interestType: 'PRICE', 
       hasGuarantor: false,
       guarantorName: '',
@@ -120,7 +121,7 @@ const Billing = () => {
 
   useEffect(() => { fetchLoans(); }, []);
 
-  // --- AUTOCOMPLETE ---
+  // --- AUTOCOMPLETE DE DADOS BANCÁRIOS ---
   useEffect(() => {
       if (formData.client && availableClients.length > 0) {
           const lastLoan = loans
@@ -133,6 +134,7 @@ const Billing = () => {
                   clientBank: lastLoan.clientBank || '',
                   paymentMethod: lastLoan.paymentMethod || '',
                   fineRate: prev.fineRate,
+                  moraInterestRate: prev.moraInterestRate, // Puxa a mora anterior também
                   interestRate: prev.interestRate
               }));
           }
@@ -180,21 +182,30 @@ const Billing = () => {
 
   const getBreakdown = (loan: Loan) => {
       const interest = loan.amount * (loan.interestRate / 100);
-      
-      // --- CORREÇÃO: interestType (minúsculo) ---
       if (loan.interestType === 'SIMPLE') {
           return { interest, capital: 0 }; 
       }
-
       const capital = loan.installmentValue - interest;
       return { interest, capital: capital > 0 ? capital : 0 };
   };
 
+  // --- CÁLCULO DOS TOTAIS NO TOPO DA TELA (CORRIGIDO PARA USAR A MORA INDIVIDUAL) ---
   useEffect(() => {
     const totalOverdue = loans.reduce((acc, l) => {
       if (l.status === 'Pago') return acc;
       const realStatus = getLoanRealStatus(l);
-      if (realStatus === 'Atrasado') return acc + calculateOverdueValue(l.installmentValue, l.nextDue, 'Atrasado', l.fineRate !== undefined ? l.fineRate : 2, l.moraInterestRate || 1);
+      if (realStatus === 'Atrasado') {
+          // AQUI ESTÁ A MÁGICA: Passamos a taxa individual. Se for undefined, o finance.ts assume o padrão.
+          // Se o usuário gravou 0, passamos 0.
+          const val = calculateOverdueValue(
+              l.installmentValue, 
+              l.nextDue, 
+              'Atrasado', 
+              l.fineRate ?? 2, 
+              l.moraInterestRate ?? 1 // <--- AQUI
+          );
+          return acc + val;
+      }
       return acc;
     }, 0);
     const totalProfit = loans.reduce((acc, l) => acc + (l.totalPaidInterest || 0), 0);
@@ -335,7 +346,6 @@ const Billing = () => {
              currentDue.setMonth(currentDue.getMonth() + 1);
              updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
              
-             // --- CORREÇÃO DA LÓGICA DE PARCELAS ---
              const isSimple = updatedLoan.interestType === 'SIMPLE';
              if (!isSimple || valCapital > 0) {
                  updatedLoan.installments = Math.max(0, updatedLoan.installments - 1);
@@ -419,7 +429,8 @@ const Billing = () => {
       // Reseta formulário ao fechar tudo
       setFormData({ 
         client: '', amount: '', interestRate: '', installments: '', startDate: '', 
-        fineRate: '2.0', clientBank: '', paymentMethod: '', 
+        fineRate: '2.0', moraInterestRate: '1.0', // Reset
+        clientBank: '', paymentMethod: '', 
         interestType: 'PRICE', hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '' 
       });
       setJustification('');
@@ -447,7 +458,10 @@ const Billing = () => {
             nextDue: new Date(new Date(formData.startDate).setMonth(new Date(formData.startDate).getMonth() + 1)).toISOString().split('T')[0],
             status: 'Em Dia', 
             installmentValue: simulation.installment,
-            fineRate: parseFloat(formData.fineRate) || 2.0, 
+            // --- DADOS DE ATRASO DINÂMICOS ---
+            fineRate: parseFloat(formData.fineRate) || 0, // Se vazio, vira 0 (mas o placeholder é 2.0)
+            moraInterestRate: parseFloat(formData.moraInterestRate) || 0, // Se vazio, vira 0
+            // ---------------------------------
             clientBank: formData.clientBank, 
             paymentMethod: formData.paymentMethod, 
             justification: justification,
@@ -557,6 +571,7 @@ const Billing = () => {
                             </div>
                         </div>
                     </div>
+                    {/* INFO ADICIONAL: TIPO DE CONTRATO E FIADOR */}
                     <div className="grid grid-cols-2 gap-4">
                         <div className="bg-white border border-slate-100 rounded-xl p-4">
                             <span className="text-xs font-bold text-slate-400 uppercase block mb-1">Modalidade</span>
@@ -678,7 +693,12 @@ const Billing = () => {
             <div className="space-y-4">
                 <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Cliente Selecionado</label><select required value={formData.client} onChange={e => setFormData({...formData, client: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5"><option value="">Selecione o titular...</option>{availableClients.map((c) => (<option key={c.id} value={c.name}>{c.name}</option>))}</select></div>
                 
-                <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100"><div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Banco do Cliente</label><input value={formData.clientBank} onChange={e => setFormData({...formData, clientBank: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Ex: Nubank, Itaú..."/></div><div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Forma de Pagamento</label><input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="CPF, Email, Ag/Conta..."/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Ex: 2.0"/></div></div>
+                <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100"><div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Banco do Cliente</label><input value={formData.clientBank} onChange={e => setFormData({...formData, clientBank: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Ex: Nubank, Itaú..."/></div><div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Forma de Pagamento</label><input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="CPF, Email, Ag/Conta..."/></div>
+                {/* --- MUDANÇA: DIVIDINDO MULTA E MORA --- */}
+                <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="2.0"/></div>
+                <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros Mora Diária (%)</label><input value={formData.moraInterestRate} onChange={e => setFormData({...formData, moraInterestRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="1.0 (ao mês)"/></div>
+                {/* --------------------------------------- */}
+                </div>
                 
                 <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="0,00"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="5.0"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Data da Operação</label><input required type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" /></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.installments} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="12"/></div></div>
                 

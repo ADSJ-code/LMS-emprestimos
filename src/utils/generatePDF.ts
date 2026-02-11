@@ -29,7 +29,6 @@ const formatDateShort = (dateStr: string) => {
     }
 }
 
-// 1. Recupera o Valor Original Concedido
 const getOriginalAmount = (loan: Loan): number => {
     if (loan.history && loan.history.length > 0) {
         const openingRecord = loan.history.find(h => 
@@ -41,7 +40,6 @@ const getOriginalAmount = (loan: Loan): number => {
     return (loan.amount || 0) + (loan.totalPaidCapital || 0);
 };
 
-// 2. Recupera o Total de Parcelas Original
 const calculateTotalInstallments = (loan: Loan): number => {
     if (!loan.startDate || !loan.nextDue) return loan.installments || 1;
 
@@ -97,12 +95,10 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
     ? `${clientData.address}, ${clientData.number || 'S/N'} - ${clientData.neighborhood || ''}, ${clientData.city || ''}/${clientData.state || ''}, CEP: ${clientData.cep || ''}`
     : "Endereço não informado";
 
-  // --- CORREÇÃO AQUI: Mudando para minúsculo (camelCase) ---
   const hasGuarantor = !!loan.guarantorName;
   const guarantorName = loan.guarantorName || "";
   const guarantorCPF = loan.guarantorCPF || "";
   const guarantorAddress = loan.guarantorAddress || "";
-  // ---------------------------------------------------------
 
   const contractCity = extractCityFromAddress(lenderAddress, clientData?.city || "São Paulo");
   const originalAmount = getOriginalAmount(loan);
@@ -133,14 +129,11 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
   addText("Pelo presente Contrato de Mútuo, e na melhor forma de direito, as Partes:");
   addSpace(2);
   
-  // Mutuante
   addText(`${lenderName.toUpperCase()}, inscrita no CNPJ sob o nº ${lenderCNPJ}, com sede na ${lenderAddress}, neste ato designado por "MUTUANTE";`, true);
   
-  // Mutuário
   addText("e,", false);
   addText(`${borrowerName.toUpperCase()}, inscrito(a) no CPF sob o nº ${borrowerCPF} e portador(a) da cédula de identidade RG nº ${borrowerRG}, residente e domiciliado(a) na ${borrowerAddress}, doravante denominado simplesmente por "MUTUÁRIA".`, true);
   
-  // Fiador (Se houver)
   if (hasGuarantor) {
       addText("e, como FIADOR(A) SOLIDÁRIO(A),", false);
       addText(`${guarantorName.toUpperCase()}, inscrito(a) no CPF sob o nº ${guarantorCPF}, residente e domiciliado(a) na ${guarantorAddress}, doravante denominado simplesmente por "FIADOR".`, true);
@@ -155,7 +148,8 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
   addText(`1.1 Pelo presente instrumento, o MUTUANTE entrega ao MUTUÁRIO neste ato, a título de empréstimo (ou "Mútuo"), a importância de ${formatMoney(originalAmount)}, através de transferência bancária para a Chave Pix: ${pixDestino}${bankInfo}.`);
   addText(`1.2 Fica acordado entre as Partes que o Valor do Mútuo, na data do vencimento do presente contrato, será acrescido de uma taxa de remuneração de ${loan.interestRate}% a.m do Valor do Mútuo.`);
   addText(`1.3 O Valor do Mútuo deverá ser restituído em sua integralidade pelo MUTUÁRIO ao MUTUANTE, respeitando-se os juros e correção pactuados na cláusula 1.2 acima, até o término do prazo de vigência do presente contrato, qual seja, até o pagamento da última parcela.`);
-  addText(`1.4 Caso o MUTUÁRIO deixe de pagar integralmente o Valor do Mútuo e seus acessórios no prazo estipulado na cláusula 1.3 acima, o saldo devedor corrigido na data do término de referido prazo ficará sujeito a juros moratórios à taxa de 1% ao mês, multa de mora na ordem de ${loan.fineRate !== undefined ? loan.fineRate : 2}% sobre o valor atualizado do débito e correção monetária.`);
+  // --- CLÁUSULA CORRIGIDA COM MORA DINÂMICA ---
+  addText(`1.4 Caso o MUTUÁRIO deixe de pagar integralmente o Valor do Mútuo e seus acessórios no prazo estipulado na cláusula 1.3 acima, o saldo devedor corrigido na data do término de referido prazo ficará sujeito a juros moratórios à taxa de ${loan.moraInterestRate ?? 1}% ao mês, multa de mora na ordem de ${loan.fineRate ?? 2}% sobre o valor atualizado do débito e correção monetária.`);
 
   addSpace(5);
   addText("Cláusula Segunda – DO PRAZO DE VIGÊNCIA", true);
@@ -184,7 +178,6 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
   addText(`3.6. Eventual tolerância por qualquer das Partes no cumprimento de obrigação de outra Parte não constituirá novação, alteração tácita ou qualquer outra forma de alteração das disposições deste Contrato.`);
   addText(`3.7. Para dirimir as dúvidas porventura emergentes deste Contrato, elegem as partes o foro da Comarca de ${contractCity.toUpperCase()}, com expressa renúncia de outro, por mais privilegiado que for.`);
 
-  // CLÁUSULA DO FIADOR (SE HOUVER)
   if (hasGuarantor) {
       addSpace(5);
       addText("Cláusula Quarta – DA GARANTIA FIDEJUSSÓRIA", true);
@@ -197,7 +190,6 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
   addText(`${contractCity}, ${formatDateExtenso(new Date().toISOString())}.`, false, 'right');
 
   addSpace(15);
-  // Quebra página se necessário para assinaturas
   if (y > (hasGuarantor ? 180 : 200)) { doc.addPage(); y = 40; }
   doc.setLineWidth(0.1);
   
@@ -232,8 +224,6 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
 
   doc.save(`Contrato_${borrowerName.replace(/\s+/g, '_')}.pdf`);
 };
-
-// --- GERADOR DE PROMISSÓRIAS (MANTIDO) ---
 
 export const generatePromissoryPDF = async (loan: Loan, clientData?: Client) => {
     const settings = await settingsService.get();
