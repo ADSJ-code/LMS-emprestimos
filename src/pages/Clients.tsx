@@ -1,21 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Search, Plus, MoreVertical, Edit2, Trash2, Eye, 
-  MapPin, Phone, Mail, User, ShieldCheck, AlertCircle, RefreshCw, FileText, Upload, Loader2
+  MapPin, Phone, Mail, User, ShieldCheck, AlertCircle, RefreshCw, FileText, Upload, Loader2,
+  DollarSign, CheckCircle, XCircle, Clock
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
-import { clientService, Client, ClientDoc } from '../services/api';
+import { clientService, loanService, Client, ClientDoc, Loan } from '../services/api';
+import { formatMoney } from '../utils/finance';
 
 const Clients = () => {
   // --- Estados ---
   const [clients, setClients] = useState<Client[]>([]);
+  const [loans, setLoans] = useState<Loan[]>([]); // Para cruzar dados financeiros
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isCepLoading, setIsCepLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   
   const [editingId, setEditingId] = useState<string | number | null>(null);
+  
+  // Controle de abas do Modal de Cliente
+  const [modalTab, setModalTab] = useState<'dados' | 'financeiro'>('dados');
 
   const [formData, setFormData] = useState<Partial<Client>>({
     name: '', cpf: '', rg: '', email: '', phone: '',
@@ -54,17 +60,21 @@ const Clients = () => {
   };
 
   // --- DATA FETCHING ---
-  const fetchClients = async () => {
+  const fetchData = async () => {
     setIsLoading(true);
     try {
-      const data = await clientService.getAll();
-      setClients(data || []);
+      const [clientsData, loansData] = await Promise.all([
+          clientService.getAll(),
+          loanService.getAll()
+      ]);
+      setClients(clientsData || []);
+      setLoans(loansData || []);
     } catch (err) { console.error(err); } 
     finally { setIsLoading(false); }
   };
 
   useEffect(() => {
-    fetchClients();
+    fetchData();
     const handleGlobalClick = () => setOpenMenuId(null);
     window.addEventListener('click', handleGlobalClick);
     return () => window.removeEventListener('click', handleGlobalClick);
@@ -134,6 +144,7 @@ const Clients = () => {
 
   // --- HANDLERS PRINCIPAIS ---
   const handleOpenModal = (client?: Client) => {
+    setModalTab('dados'); // Reseta para a primeira aba
     if (client) {
       setEditingId(client.id);
       setFormData({ ...client, documents: client.documents || [] });
@@ -163,9 +174,8 @@ const Clients = () => {
         alert('Cliente cadastrado com sucesso!');
       }
       setIsModalOpen(false);
-      fetchClients();
+      fetchData();
     } catch (error: any) { 
-        // --- CORREÇÃO AQUI: EXIBE A MENSAGEM DO BACKEND ---
         console.error("Erro ao salvar:", error);
         const msg = error.response?.data || error.message || "Erro desconhecido ao salvar.";
         alert("❌ ERRO: " + msg);
@@ -176,10 +186,29 @@ const Clients = () => {
 
   const handleDelete = async (id: string | number) => {
     if (confirm('Tem certeza que deseja excluir este cliente?')) {
-      try { await clientService.delete(id.toString()); fetchClients(); } 
+      try { await clientService.delete(id.toString()); fetchData(); } 
       catch (err) { alert('Erro ao excluir cliente.'); }
     }
     setOpenMenuId(null);
+  };
+
+  // --- LÓGICA DE DÍVIDA ---
+  const getClientDebtStatus = (clientName: string) => {
+      const clientLoans = loans.filter(l => l.client === clientName);
+      if (clientLoans.length === 0) return { label: 'Sem Histórico', color: 'gray' };
+
+      const hasOverdue = clientLoans.some(l => {
+          const today = new Date(); today.setHours(0,0,0,0);
+          const due = new Date(l.nextDue); due.setMinutes(due.getMinutes() + due.getTimezoneOffset()); due.setHours(0,0,0,0);
+          return l.status !== 'Pago' && due < today;
+      });
+
+      if (hasOverdue) return { label: 'Inadimplente', color: 'red' };
+      
+      const hasActive = clientLoans.some(l => l.status !== 'Pago');
+      if (hasActive) return { label: 'Em Dia (Ativo)', color: 'blue' };
+
+      return { label: 'Quitado (Histórico)', color: 'green' };
   };
 
   const filteredClients = clients.filter(c => 
@@ -191,7 +220,7 @@ const Clients = () => {
       <header className="flex justify-between items-center mb-8">
         <div><h2 className="text-2xl font-bold text-slate-800">Gestão de Clientes</h2><p className="text-slate-500">Cadastre e gerencie sua base de clientes.</p></div>
         <div className="flex gap-2">
-          <button onClick={fetchClients} className="flex items-center gap-2 bg-white border border-gray-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm hover:bg-gray-50 transition-colors"><RefreshCw className={isLoading ? "animate-spin" : ""} size={18} /></button>
+          <button onClick={fetchData} className="flex items-center gap-2 bg-white border border-gray-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm hover:bg-gray-50 transition-colors"><RefreshCw className={isLoading ? "animate-spin" : ""} size={18} /></button>
           <button onClick={() => handleOpenModal()} className="flex items-center gap-2 bg-slate-900 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/20"><Plus size={20} /> Novo Cliente</button>
         </div>
       </header>
@@ -207,11 +236,13 @@ const Clients = () => {
           <table className="w-full text-left">
             <thead>
               <tr className="bg-slate-50/50 text-[11px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-100">
-                <th className="p-4">Cliente</th><th className="p-4">Contato</th><th className="p-4">Localização</th><th className="p-4 text-center">Status</th><th className="p-4 text-right">Ações</th>
+                <th className="p-4">Cliente</th><th className="p-4">Contato</th><th className="p-4">Localização</th><th className="p-4 text-center">Situação Financeira</th><th className="p-4 text-right">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {filteredClients.length === 0 ? (<tr><td colSpan={5} className="p-8 text-center text-slate-400">Nenhum cliente encontrado.</td></tr>) : (filteredClients.map(client => (
+              {filteredClients.length === 0 ? (<tr><td colSpan={5} className="p-8 text-center text-slate-400">Nenhum cliente encontrado.</td></tr>) : (filteredClients.map(client => {
+                  const debtStatus = getClientDebtStatus(client.name);
+                  return (
                   <tr key={client.id} className="hover:bg-slate-50/80 transition-colors group">
                     <td className="p-4">
                       <div className="flex items-center gap-3">
@@ -221,7 +252,14 @@ const Clients = () => {
                     </td>
                     <td className="p-4"><div className="text-sm text-slate-600 flex items-center gap-2 mb-1"><Mail size={14} className="text-slate-400" /> {client.email}</div><div className="text-sm text-slate-600 flex items-center gap-2"><Phone size={14} className="text-slate-400" /> {client.phone}</div></td>
                     <td className="p-4"><div className="flex items-center gap-2 text-sm text-slate-600"><MapPin size={16} className="text-slate-400" /> {client.city} {client.state ? `- ${client.state}` : ''}</div></td>
-                    <td className="p-4 text-center"><span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${client.status === 'Ativo' ? 'bg-green-100 text-green-700' : client.status === 'Bloqueado' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>{client.status}</span></td>
+                    <td className="p-4 text-center">
+                        <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase 
+                            ${debtStatus.color === 'red' ? 'bg-red-100 text-red-700' : 
+                              debtStatus.color === 'blue' ? 'bg-blue-100 text-blue-700' : 
+                              debtStatus.color === 'green' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
+                            {debtStatus.label}
+                        </span>
+                    </td>
                     <td className="p-4 text-right relative">
                         <div className="relative inline-block text-left">
                             <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === client.id ? null : client.id); }} className={`p-2 rounded-lg transition-all ${openMenuId === client.id ? 'bg-slate-200 text-slate-900' : 'text-slate-400 hover:text-slate-900 hover:bg-slate-100'}`} title="Opções"><MoreVertical size={18} /></button>
@@ -229,11 +267,11 @@ const Clients = () => {
                             {openMenuId === client.id && (
                                 <div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
                                     <div className="py-1">
-                                        <button onClick={() => handleOpenModal(client)} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
-                                            <Eye size={16} className="text-blue-500" /> Detalhes
-                                        </button>
-                                        <div className="border-t border-slate-100 my-1"></div>
-                                        <button onClick={() => handleDelete(client.id)} className="w-full text-left px-4 py-3 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"><Trash2 size={16} /> Excluir</button>
+                                            <button onClick={() => handleOpenModal(client)} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                                                <Eye size={16} className="text-blue-500" /> Detalhes
+                                            </button>
+                                            <div className="border-t border-slate-100 my-1"></div>
+                                            <button onClick={() => handleDelete(client.id)} className="w-full text-left px-4 py-3 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"><Trash2 size={16} /> Excluir</button>
                                     </div>
                                 </div>
                             )}
@@ -243,79 +281,121 @@ const Clients = () => {
                         </button>
                     </td>
                   </tr>
-                )))}
+                )
+              }))}
             </tbody>
           </table>
         </div>
       </div>
 
-      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingId ? "Detalhes do Cliente" : "Novo Cliente"}>
-        <form onSubmit={handleSave} className="space-y-5">
-          {/* DADOS PESSOAIS */}
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-              <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">Dados Pessoais</h4>
-              <div className="space-y-3">
-                  <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Nome Completo</label><input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900/5 bg-white" placeholder="Ex: João da Silva" /></div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">CPF</label><input required type="text" value={formData.cpf} maxLength={14} onChange={e => setFormData({...formData, cpf: maskCPF(e.target.value)})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" placeholder="000.000.000-00"/></div>
-                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">RG</label><input type="text" value={formData.rg || ''} onChange={e => setFormData({...formData, rg: maskRG(e.target.value)})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" placeholder="00.000.000-0"/></div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Telefone</label><input required type="text" value={formData.phone} maxLength={15} onChange={e => setFormData({...formData, phone: maskPhone(e.target.value)})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" placeholder="(00) 00000-0000"/></div>
-                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Email</label><input type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" placeholder="cliente@email.com" /></div>
-                  </div>
-              </div>
-          </div>
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingId ? `Cliente: ${formData.name}` : "Novo Cliente"}>
+        {/* --- ABAS DO MODAL --- */}
+        <div className="flex border-b border-slate-200 mb-6">
+            <button onClick={() => setModalTab('dados')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${modalTab === 'dados' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Dados Cadastrais</button>
+            {editingId && <button onClick={() => setModalTab('financeiro')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${modalTab === 'financeiro' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Histórico Financeiro</button>}
+        </div>
 
-          {/* ENDEREÇO */}
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-              <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 flex justify-between items-center">
-                  Endereço Completo
-                  {isCepLoading && <span className="text-[10px] text-blue-500 flex items-center gap-1"><Loader2 className="animate-spin" size={10}/> Buscando...</span>}
-              </h4>
-              <div className="space-y-3">
-                  <div className="grid grid-cols-3 gap-3">
-                      <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">CEP</label><input value={formData.cep || ''} onChange={e => setFormData({...formData, cep: maskCEP(e.target.value)})} onBlur={handleCepBlur} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" placeholder="00000-000"/></div>
-                      <div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Rua / Logradouro</label><input value={formData.address || ''} onChange={e => setFormData({...formData, address: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" /></div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-3">
-                      <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Número</label><input value={formData.number || ''} onChange={e => setFormData({...formData, number: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" /></div>
-                      <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Bairro</label><input value={formData.neighborhood || ''} onChange={e => setFormData({...formData, neighborhood: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" /></div>
-                      <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Cidade - UF</label><input value={formData.city || ''} onChange={e => setFormData({...formData, city: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" /></div>
-                  </div>
-              </div>
-          </div>
+        {modalTab === 'dados' ? (
+            <form onSubmit={handleSave} className="space-y-5">
+            {/* DADOS PESSOAIS */}
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">Dados Pessoais</h4>
+                <div className="space-y-3">
+                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Nome Completo</label><input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900/5 bg-white" placeholder="Ex: João da Silva" /></div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">CPF</label><input required type="text" value={formData.cpf} maxLength={14} onChange={e => setFormData({...formData, cpf: maskCPF(e.target.value)})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" placeholder="000.000.000-00"/></div>
+                        <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">RG</label><input type="text" value={formData.rg || ''} onChange={e => setFormData({...formData, rg: maskRG(e.target.value)})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" placeholder="00.000.000-0"/></div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Telefone</label><input required type="text" value={formData.phone} maxLength={15} onChange={e => setFormData({...formData, phone: maskPhone(e.target.value)})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" placeholder="(00) 00000-0000"/></div>
+                        <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Email</label><input type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" placeholder="cliente@email.com" /></div>
+                    </div>
+                </div>
+            </div>
 
-          {/* DOCUMENTOS */}
-          <div className="border-t border-slate-100 pt-4">
-              <div className="flex items-start gap-3 mb-4 bg-blue-50 p-4 rounded-xl border border-blue-100">
-                  <AlertCircle size={20} className="text-blue-600 mt-0.5"/>
-                  <div className="flex-1">
-                      <p className="text-sm font-bold text-blue-900 mb-1">Documentação Recomendada</p>
-                      <p className="text-xs text-blue-700 leading-relaxed">
-                          Para maior segurança jurídica e aprovação rápida, anexe os documentos abaixo. <br/>
-                          <span className="opacity-75">* Arquivos aceitos: Imagens (JPG, PNG) ou PDF.</span>
-                      </p>
-                  </div>
-              </div>
+            {/* ENDEREÇO */}
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 flex justify-between items-center">
+                    Endereço Completo
+                    {isCepLoading && <span className="text-[10px] text-blue-500 flex items-center gap-1"><Loader2 className="animate-spin" size={10}/> Buscando...</span>}
+                </h4>
+                <div className="space-y-3">
+                    <div className="grid grid-cols-3 gap-3">
+                        <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">CEP</label><input value={formData.cep || ''} onChange={e => setFormData({...formData, cep: maskCEP(e.target.value)})} onBlur={handleCepBlur} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" placeholder="00000-000"/></div>
+                        <div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Rua / Logradouro</label><input value={formData.address || ''} onChange={e => setFormData({...formData, address: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" /></div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                        <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Número</label><input value={formData.number || ''} onChange={e => setFormData({...formData, number: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" /></div>
+                        <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Bairro</label><input value={formData.neighborhood || ''} onChange={e => setFormData({...formData, neighborhood: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" /></div>
+                        <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Cidade - UF</label><input value={formData.city || ''} onChange={e => setFormData({...formData, city: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg bg-white" /></div>
+                    </div>
+                </div>
+            </div>
 
-              <div className="grid grid-cols-3 gap-3 mb-4">
-                  <UploadSlot label="RG (Frente)" type="RG_FRENTE" />
-                  <UploadSlot label="RG (Verso)" type="RG_VERSO" />
-                  <UploadSlot label="Comp. Residência" type="COMPROVANTE_RESIDENCIA" />
-              </div>
+            {/* DOCUMENTOS */}
+            <div className="border-t border-slate-100 pt-4">
+                <div className="flex items-start gap-3 mb-4 bg-blue-50 p-4 rounded-xl border border-blue-100">
+                    <AlertCircle size={20} className="text-blue-600 mt-0.5"/>
+                    <div className="flex-1">
+                        <p className="text-sm font-bold text-blue-900 mb-1">Documentação Recomendada</p>
+                        <p className="text-xs text-blue-700 leading-relaxed">
+                            Para maior segurança jurídica e aprovação rápida, anexe os documentos abaixo. <br/>
+                            <span className="opacity-75">* Arquivos aceitos: Imagens (JPG, PNG) ou PDF.</span>
+                        </p>
+                    </div>
+                </div>
 
-              <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Observações Internas</label>
-              <textarea value={formData.observations || ''} onChange={e => setFormData({...formData, observations: e.target.value})} className="w-full border p-3 rounded-xl h-20 text-sm bg-slate-50 focus:bg-white transition-colors outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="Anotações extras sobre o cliente..." />
-          </div>
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                    <UploadSlot label="RG (Frente)" type="RG_FRENTE" />
+                    <UploadSlot label="RG (Verso)" type="RG_VERSO" />
+                    <UploadSlot label="Comp. Residência" type="COMPROVANTE_RESIDENCIA" />
+                </div>
 
-          <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
-            <button type="button" onClick={() => setIsModalOpen(false)} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-100 rounded-xl transition-all">Cancelar</button>
-            <button type="submit" disabled={isLoading} className="px-8 py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/20 disabled:opacity-50">
-              {isLoading ? 'Salvando...' : 'Salvar Cliente'}
-            </button>
-          </div>
-        </form>
+                <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Observações Internas</label>
+                <textarea value={formData.observations || ''} onChange={e => setFormData({...formData, observations: e.target.value})} className="w-full border p-3 rounded-xl h-20 text-sm bg-slate-50 focus:bg-white transition-colors outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="Anotações extras sobre o cliente..." />
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
+                <button type="button" onClick={() => setIsModalOpen(false)} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-100 rounded-xl transition-all">Cancelar</button>
+                <button type="submit" disabled={isLoading} className="px-8 py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/20 disabled:opacity-50">
+                {isLoading ? 'Salvando...' : 'Salvar Cliente'}
+                </button>
+            </div>
+            </form>
+        ) : (
+            // --- CONTEÚDO DO HISTÓRICO FINANCEIRO ---
+            <div className="space-y-4">
+                {loans.filter(l => l.client === formData.name).length === 0 ? (
+                    <div className="text-center py-10 text-slate-400">
+                        <FileText size={48} className="mx-auto mb-3 opacity-20"/>
+                        <p>Nenhum histórico financeiro encontrado para este cliente.</p>
+                    </div>
+                ) : (
+                    loans.filter(l => l.client === formData.name).map(loan => {
+                        const isPaid = loan.status === 'Pago';
+                        return (
+                            <div key={loan.id} className={`p-4 border rounded-xl flex justify-between items-center ${isPaid ? 'bg-green-50 border-green-200' : 'bg-white border-slate-200'}`}>
+                                <div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-bold text-slate-800">Contrato #{loan.id}</span>
+                                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${isPaid ? 'bg-green-200 text-green-800' : 'bg-blue-100 text-blue-700'}`}>{loan.status}</span>
+                                    </div>
+                                    <p className="text-xs text-slate-500 mt-1">Início: {new Date(loan.startDate).toLocaleDateString('pt-BR')} • Valor: R$ {formatMoney(loan.amount)}</p>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-xs text-slate-400 font-bold uppercase">Total Pago</p>
+                                    <p className="text-green-600 font-bold">R$ {formatMoney((loan.totalPaidCapital || 0) + (loan.totalPaidInterest || 0))}</p>
+                                </div>
+                            </div>
+                        )
+                    })
+                )}
+                
+                <div className="pt-4 border-t border-slate-100 text-right">
+                    <button type="button" onClick={() => setIsModalOpen(false)} className="px-6 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition-all">Fechar</button>
+                </div>
+            </div>
+        )}
       </Modal>
     </Layout>
   );

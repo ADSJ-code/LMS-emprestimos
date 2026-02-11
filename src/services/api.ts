@@ -22,17 +22,26 @@ export interface Loan {
   nextDue: string;
   status: 'Em Dia' | 'Atrasado' | 'Pago' | 'Pendente';
   installmentValue: number;
+  
+  // Taxas Flexíveis
   fineRate?: number;
+  moraInterestRate?: number;
+  
   clientBank?: string;
   paymentMethod?: string;
-  moraInterestRate?: number;
   justification?: string;
   checklistAtApproval?: string[];
   totalPaidInterest?: number;
   totalPaidCapital?: number;
   history?: PaymentRecord[];
 
-  // --- CORREÇÃO: AGORA TUDO MINÚSCULO (camelCase) PARA BATER COM O BACKEND ---
+  // --- NOVOS CAMPOS PARA O ERP ---
+  // Periodicidade (Diário, Semanal, Mensal)
+  frequency?: 'DIARIO' | 'SEMANAL' | 'MENSAL';
+  // Lucro Projetado (Estimativa inicial)
+  projectedProfit?: number;
+
+  // Campos já existentes (camelCase)
   interestType?: 'PRICE' | 'SIMPLE'; 
   guarantorName?: string;
   guarantorCPF?: string;

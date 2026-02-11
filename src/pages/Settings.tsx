@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Save, Building, Shield, CheckCircle, RefreshCw, Download, Users, Plus, Trash2, Key, X, AlertTriangle, Upload, Loader2 } from 'lucide-react';
+import { Save, Building, Shield, CheckCircle, RefreshCw, Download, Users, Plus, Trash2, Key, X, AlertTriangle, Upload, Loader2, Bell } from 'lucide-react';
 import Layout from '../components/Layout';
 import { settingsService, clientService, loanService, authService } from '../services/api';
 
@@ -54,7 +54,11 @@ const Settings = () => {
         phone: '', 
         address: '' 
     },
-    system: { autoBackup: false, requireLogin: true }
+    system: { 
+        autoBackup: false, 
+        requireLogin: true,
+        warningDays: 3 // Padrão: Avisar 3 dias antes
+    }
   };
 
   const [settings, setSettings] = useState<any>(defaultSettings);
@@ -152,6 +156,10 @@ const Settings = () => {
     setSettings((p: any) => ({ ...p, company: { ...p.company, [f]: val } }));
   };
 
+  const updateSystem = (f: string, v: any) => {
+      setSettings((p: any) => ({ ...p, system: { ...p.system, [f]: v } }));
+  };
+
   const handleDownloadBackup = async () => {
       if(!confirm("Baixar backup completo?")) return;
       try {
@@ -227,11 +235,11 @@ const Settings = () => {
           <nav className="flex flex-col gap-2">
             <button onClick={() => setActiveTab('empresa')} className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-left ${activeTab === 'empresa' ? 'bg-slate-900 text-white shadow-md' : 'bg-white text-slate-600 hover:bg-gray-50'}`}><Building size={18} /> Dados da Empresa</button>
             <button onClick={() => setActiveTab('usuarios')} className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-left ${activeTab === 'usuarios' ? 'bg-slate-900 text-white shadow-md' : 'bg-white text-slate-600 hover:bg-gray-50'}`}><Users size={18} /> Usuários do Sistema</button>
-            <button onClick={() => setActiveTab('sistema')} className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-left ${activeTab === 'sistema' ? 'bg-slate-900 text-white shadow-md' : 'bg-white text-slate-600 hover:bg-gray-50'}`}><Shield size={18} /> Segurança e Backup</button>
+            <button onClick={() => setActiveTab('sistema')} className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-left ${activeTab === 'sistema' ? 'bg-slate-900 text-white shadow-md' : 'bg-white text-slate-600 hover:bg-gray-50'}`}><Shield size={18} /> Sistema e Backup</button>
           </nav>
           <div className="mt-8 bg-blue-50 p-4 rounded-xl border border-blue-100">
             <div className="flex items-center gap-2 mb-2"><div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div><span className="text-xs font-bold text-blue-700 uppercase">Status do Sistema</span></div>
-            <p className="text-xs text-blue-800">Versão 2.6.0 (Prod)</p>
+            <p className="text-xs text-blue-800">Versão 2.7.0 (ERP)</p>
             <p className="text-xs text-blue-600 mt-1">Ambiente Seguro</p>
           </div>
         </aside>
@@ -290,25 +298,13 @@ const Settings = () => {
                         <input type="password" placeholder="Senha" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="p-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900/10"/>
                     </div>
                     
-                    {/* BOTÃO COM LOADING */}
                     <button 
                         type="button" 
                         onClick={handleAddUser} 
                         disabled={isUserLoading}
-                        className={`mt-4 w-full font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 
-                            ${isUserLoading 
-                                ? 'bg-slate-400 cursor-not-allowed text-white' 
-                                : 'bg-slate-900 text-white hover:bg-slate-800'
-                            }`}
+                        className={`mt-4 w-full font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 ${isUserLoading ? 'bg-slate-400 cursor-not-allowed text-white' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
                     >
-                        {isUserLoading ? (
-                            <>
-                                <Loader2 className="animate-spin" size={18} />
-                                Criando Usuário...
-                            </>
-                        ) : (
-                            "Adicionar Usuário"
-                        )}
+                        {isUserLoading ? <><Loader2 className="animate-spin" size={18} /> Criando Usuário...</> : "Adicionar Usuário"}
                     </button>
                 </div>
               </div>
@@ -319,6 +315,28 @@ const Settings = () => {
               <div className="space-y-6 animate-in fade-in duration-300">
                 <div className="flex items-center gap-3 border-b border-gray-100 pb-2"><Shield className="text-slate-400" /><h3 className="text-lg font-bold text-slate-800">Manutenção</h3></div>
                 
+                {/* CONFIGURAÇÃO DE AVISOS */}
+                <div className="bg-white border border-slate-200 rounded-xl p-5 flex items-center justify-between mb-4 shadow-sm">
+                    <div className="flex items-center gap-3">
+                        <div className="bg-yellow-100 p-2 rounded-lg text-yellow-600"><Bell size={20}/></div>
+                        <div>
+                            <h4 className="font-bold text-slate-800">Alerta de Vencimento</h4>
+                            <p className="text-sm text-slate-500">Exibir contratos no Dashboard com antecedência de:</p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <input 
+                            type="number" 
+                            min="1" 
+                            max="30"
+                            value={settings.system.warningDays || 3} 
+                            onChange={(e) => updateSystem('warningDays', parseInt(e.target.value))}
+                            className="w-16 p-2 text-center border border-slate-300 rounded-lg font-bold text-slate-800"
+                        />
+                        <span className="text-sm font-bold text-slate-600">dias</span>
+                    </div>
+                </div>
+
                 {/* Backup Manual */}
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex justify-between items-center mb-4">
                     <div><h4 className="font-bold text-slate-800 flex gap-2"><Download size={18} className="text-blue-600"/> Backup Manual</h4><p className="text-sm text-slate-500">Baixar cópia dos dados locais.</p></div>
@@ -347,6 +365,7 @@ const Settings = () => {
                         </button>
                     </div>
                 </div>
+                <div className="mt-4 flex justify-end"><button type="submit" disabled={isLoading} className="flex items-center gap-2 bg-slate-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg">{isLoading ? 'Salvando...' : 'Salvar Configurações'}</button></div>
               </div>
             )}
           </form>

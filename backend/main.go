@@ -179,27 +179,34 @@ type PaymentRecord struct {
 }
 
 type Loan struct {
-	ID                  string          `json:"id" bson:"id"`
-	Client              string          `json:"client" bson:"client"`
-	Amount              float64         `json:"amount" bson:"amount"`
-	Installments        int             `json:"installments" bson:"installments"`
-	InterestRate        float64         `json:"interestRate" bson:"interestRate"`
-	StartDate           string          `json:"startDate" bson:"startDate"`
-	NextDue             string          `json:"nextDue" bson:"nextDue"`
-	Status              string          `json:"status" bson:"status"`
-	InstallmentValue    float64         `json:"installmentValue" bson:"installmentValue"`
-	FineRate            float64         `json:"fineRate" bson:"fineRate"`
-	MoraInterestRate    float64         `json:"moraInterestRate,omitempty" bson:"moraInterestRate,omitempty"`
-	ClientBank          string          `json:"clientBank" bson:"clientBank"`
-	PaymentMethod       string          `json:"paymentMethod" bson:"paymentMethod"`
-	Justification       string          `json:"justification,omitempty" bson:"justification,omitempty"`
-	ChecklistAtApproval []string        `json:"checklistAtApproval,omitempty" bson:"checklistAtApproval,omitempty"`
-	TotalPaidInterest   float64         `json:"totalPaidInterest" bson:"totalPaidInterest"`
-	TotalPaidCapital    float64         `json:"totalPaidCapital" bson:"totalPaidCapital"`
-	History             []PaymentRecord `json:"history" bson:"history"`
+	ID               string  `json:"id" bson:"id"`
+	Client           string  `json:"client" bson:"client"`
+	Amount           float64 `json:"amount" bson:"amount"`
+	Installments     int     `json:"installments" bson:"installments"`
+	InterestRate     float64 `json:"interestRate" bson:"interestRate"`
+	StartDate        string  `json:"startDate" bson:"startDate"`
+	NextDue          string  `json:"nextDue" bson:"nextDue"`
+	Status           string  `json:"status" bson:"status"`
+	InstallmentValue float64 `json:"installmentValue" bson:"installmentValue"`
 
-	// --- NOVOS CAMPOS ADICIONADOS ---
-	InterestType     string `json:"interestType,omitempty" bson:"interestType,omitempty"` // "PRICE" ou "SIMPLE" (Juros Puros)
+	// --- TAXAS E MULTAS (0 é um valor válido agora) ---
+	FineRate         float64 `json:"fineRate" bson:"fineRate"`
+	MoraInterestRate float64 `json:"moraInterestRate,omitempty" bson:"moraInterestRate,omitempty"`
+
+	ClientBank          string   `json:"clientBank" bson:"clientBank"`
+	PaymentMethod       string   `json:"paymentMethod" bson:"paymentMethod"`
+	Justification       string   `json:"justification,omitempty" bson:"justification,omitempty"`
+	ChecklistAtApproval []string `json:"checklistAtApproval,omitempty" bson:"checklistAtApproval,omitempty"`
+
+	TotalPaidInterest float64         `json:"totalPaidInterest" bson:"totalPaidInterest"`
+	TotalPaidCapital  float64         `json:"totalPaidCapital" bson:"totalPaidCapital"`
+	History           []PaymentRecord `json:"history" bson:"history"`
+
+	// --- NOVOS CAMPOS PARA O ERP ---
+	InterestType    string  `json:"interestType,omitempty" bson:"interestType,omitempty"`       // "PRICE" ou "SIMPLE"
+	Frequency       string  `json:"frequency,omitempty" bson:"frequency,omitempty"`             // "DIARIO", "SEMANAL", "MENSAL"
+	ProjectedProfit float64 `json:"projectedProfit,omitempty" bson:"projectedProfit,omitempty"` // Lucro total estimado
+
 	GuarantorName    string `json:"guarantorName,omitempty" bson:"guarantorName,omitempty"`
 	GuarantorCPF     string `json:"guarantorCPF,omitempty" bson:"guarantorCPF,omitempty"`
 	GuarantorAddress string `json:"guarantorAddress,omitempty" bson:"guarantorAddress,omitempty"`
@@ -841,13 +848,35 @@ func logsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// --- DASHBOARD ATUALIZADO (DRILL-DOWN) ---
 func dashboardSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	totalActive, _ := loanCollection.CountDocuments(ctx, bson.M{"status": bson.M{"$ne": "Pago"}})
+
+	// 1. Contagem Básica
+	totalActiveContracts, _ := loanCollection.CountDocuments(ctx, bson.M{"status": bson.M{"$ne": "Pago"}})
 	totalOverdue, _ := loanCollection.CountDocuments(ctx, bson.M{"status": "Atrasado"})
-	activeClients, _ := clientCollection.CountDocuments(ctx, bson.M{"status": "Ativo"})
-	pipeline := []bson.M{
+	totalClientsRegistered, _ := clientCollection.CountDocuments(ctx, bson.M{}) // Total Cadastrados
+
+	// 2. Clientes com Dívida Ativa (Drill-down)
+	// Agrupamos contratos não pagos pelo nome do cliente para contar quantos CPF únicos devem
+	pipelineDebtors := []bson.M{
+		{"$match": bson.M{"status": bson.M{"$ne": "Pago"}}},
+		{"$group": bson.M{"_id": "$client"}},
+		{"$count": "count"},
+	}
+	cursorDebtors, _ := loanCollection.Aggregate(ctx, pipelineDebtors)
+	var resultDebtors []bson.M
+	cursorDebtors.All(ctx, &resultDebtors)
+	clientsWithDebt := 0
+	if len(resultDebtors) > 0 {
+		if val, ok := resultDebtors[0]["count"].(int32); ok {
+			clientsWithDebt = int(val)
+		}
+	}
+
+	// 3. Capital em Aberto (Soma)
+	pipelineCapital := []bson.M{
 		{"$match": bson.M{"status": bson.M{"$ne": "Pago"}}},
 		{"$group": bson.M{
 			"_id": nil,
@@ -857,16 +886,17 @@ func dashboardSummaryHandler(w http.ResponseWriter, r *http.Request) {
 			}}},
 		}},
 	}
-	cursor, _ := loanCollection.Aggregate(ctx, pipeline)
-	var results []bson.M
-	cursor.All(ctx, &results)
+	cursorCap, _ := loanCollection.Aggregate(ctx, pipelineCapital)
+	var resultsCap []bson.M
+	cursorCap.All(ctx, &resultsCap)
 	var totalCapital float64
-	if len(results) > 0 {
-		if val, ok := results[0]["totalCapital"].(float64); ok {
+	if len(resultsCap) > 0 {
+		if val, ok := resultsCap[0]["totalCapital"].(float64); ok {
 			totalCapital = val
 		}
 	}
 
+	// 4. Recebido Hoje
 	startOfDay := time.Now().Format("2006-01-02")
 	cursorToday, _ := loanCollection.Find(ctx, bson.M{
 		"history.date": bson.M{"$regex": startOfDay},
@@ -887,11 +917,12 @@ func dashboardSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	summary := map[string]interface{}{
-		"totalActive":    totalActive,
-		"totalOverdue":   totalOverdue,
-		"totalCapital":   totalCapital,
-		"activeClients":  activeClients,
-		"recoveredToday": recoveredToday,
+		"totalActive":            totalActiveContracts,   // Contratos Abertos
+		"totalOverdue":           totalOverdue,           // Contratos Atrasados
+		"totalCapital":           totalCapital,           // Dinheiro na Rua
+		"clientsRegistered":      totalClientsRegistered, // Total de Clientes no Banco
+		"clientsWithActiveLoans": clientsWithDebt,        // Clientes que devem
+		"recoveredToday":         recoveredToday,         // Recebido Hoje
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(summary)

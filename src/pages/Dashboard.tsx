@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { 
   Users, DollarSign, AlertTriangle, TrendingUp, Plus, 
   Search, FileText, ArrowRight, Calendar, Activity, 
-  Briefcase, PieChart, Wallet, RefreshCw, ArrowLeft, Clock, Filter
+  Briefcase, PieChart, Wallet, RefreshCw, ArrowLeft, Clock, Filter,
+  UserCheck, UserX
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { calculateOverdueValue, formatMoney } from '../utils/finance';
-import { loanService, Loan } from '../services/api';
+import { loanService, clientService, Loan, Client } from '../services/api';
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -20,8 +21,9 @@ const Dashboard = () => {
   const [customEnd, setCustomEnd] = useState('');
 
   const [loading, setLoading] = useState(false);
-  const [selectedRange, setSelectedRange] = useState<'low' | 'mid' | 'high' | 'capital' | 'profit' | 'overdue' | null>(null);
+  const [selectedRange, setSelectedRange] = useState<'low' | 'mid' | 'high' | 'capital' | 'profit' | 'overdue' | 'active' | null>(null);
   const [allLoans, setAllLoans] = useState<Loan[]>([]);
+  const [allClients, setAllClients] = useState<Client[]>([]);
 
   const [metrics, setMetrics] = useState({
     capitalNaRua: 0,
@@ -31,6 +33,11 @@ const Dashboard = () => {
     atrasoJuros: 0,
     contratosAtivos: 0,
     novosClientes: 0,
+    
+    // Novas métricas para o drill-down
+    totalClientesCadastrados: 0,
+    clientesComDivida: 0,
+
     taxas: { 
         lowVal: 0, lowCount: 0,
         midVal: 0, midCount: 0,
@@ -46,14 +53,42 @@ const Dashboard = () => {
     return new Date(year, month - 1, day);
   };
 
+  // --- FUNÇÃO AUXILIAR DE CÁLCULO DE LUCRO (CORRIGIDA) ---
+  const calculateLoanProfit = (loan: Loan) => {
+      // 1. Se tiver lucro projetado manual (novo recurso), usa ele
+      if (loan.projectedProfit && loan.projectedProfit > 0) return loan.projectedProfit;
+
+      const amount = Number(loan.amount) || 0;
+      const installments = Number(loan.installments) || 0;
+      const installmentValue = Number(loan.installmentValue) || 0;
+
+      // 2. Se for JUROS SIMPLES (Cristina): A parcela inteira é lucro
+      if (loan.interestType === 'SIMPLE') {
+          return installmentValue * (installments || 1);
+      }
+
+      // 3. Se for PRICE (Amortização): Lucro = Total Pago - Capital Emprestado
+      const totalReceivable = installmentValue * installments;
+      return Math.max(0, totalReceivable - amount);
+  };
+
   const fetchAndCalculate = async () => {
     setLoading(true);
     try {
-      const loans = await loanService.getAll();
+      const [loans, clients] = await Promise.all([
+          loanService.getAll(),
+          clientService.getAll()
+      ]);
+      
       setAllLoans(loans); 
+      setAllClients(clients);
       
       const today = new Date();
       today.setHours(0,0,0,0);
+
+      // --- CÁLCULO DE CLIENTES ATIVOS ---
+      // Cria um Set com nomes de clientes que têm contratos não pagos
+      const activeDebtors = new Set(loans.filter(l => l.status !== 'Pago').map(l => l.client));
 
       // 1. FILTRAGEM POR PERÍODO
       const filteredLoans = loans.filter((loan: any) => {
@@ -64,7 +99,6 @@ const Dashboard = () => {
         loanStart.setHours(0,0,0,0);
         loanDue.setHours(0,0,0,0);
 
-        // Filtros de Histórico (Baseados em quando foi feito)
         if (period === 'hoje') return loanStart.toDateString() === today.toDateString();
         
         if (period === 'semana') {
@@ -79,16 +113,12 @@ const Dashboard = () => {
           return loanStart >= monthStart && loanStart <= monthEnd;
         }
 
-        // Filtros de Projeção (Baseados em quando vence)
         if (period === 'proximo_mes') {
             const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1);
             const nextMonthEnd = new Date(today.getFullYear(), today.getMonth() + 2, 0);
             return loanDue >= nextMonthStart && loanDue <= nextMonthEnd && loan.status !== 'Pago';
         }
 
-        // Filtro Personalizado (Intervalo de Datas) - Baseado em Vencimento (Projeção) ou Início?
-        // Híbrido: Se data futura, olha vencimento. Se passado, olha inicio.
-        // Simplificação: Vamos olhar Vencimento para permitir projeção exata.
         if (period === 'personalizado') {
             if (!customStart || !customEnd) return true;
             const start = parseLocalDate(customStart);
@@ -99,7 +129,6 @@ const Dashboard = () => {
         return true;
       });
 
-      // Variáveis acumuladoras
       let capitalTotal = 0;
       let lucroTotal = 0;
       let atrasoTotal = 0;
@@ -110,25 +139,22 @@ const Dashboard = () => {
       let rMidVal = 0, rMidCount = 0;
       let rHighVal = 0, rHighCount = 0;
 
-      // Loop Filtrado
       filteredLoans.forEach((loan: any) => {
         const status = loan.status ? loan.status.toLowerCase() : '';
         const amount = Number(loan.amount) || 0;
         const installmentValue = Number(loan.installmentValue) || 0;
         const installments = Number(loan.installments) || 0;
-        const totalReceivable = installmentValue * installments;
-        const profit = Math.max(0, totalReceivable - amount);
+        
+        // --- USO DA NOVA LÓGICA DE LUCRO ---
+        const profit = calculateLoanProfit(loan);
 
-        // Lógica de Projeção vs Histórico
         const isProjection = period === 'proximo_mes' || period === 'personalizado';
 
         if (isProjection) {
-             // Em projeção, somamos o valor da parcela como "A Entrar"
              capitalTotal += installmentValue; 
              const profitPart = profit / (installments || 1);
              lucroTotal += profitPart;
         } else {
-             // Histórico: Somamos o capital emprestado
              if (status !== 'pago') {
                  capitalTotal += amount;
                  lucroTotal += profit;
@@ -139,9 +165,17 @@ const Dashboard = () => {
         dueDate.setHours(0,0,0,0);
 
         if ((status === 'atrasado' || dueDate < today) && status !== 'pago') {
-             const valorComMulta = calculateOverdueValue(installmentValue, loan.nextDue, 'Atrasado', loan.fineRate || 2, loan.moraInterestRate || 1);
+             // Usa a mora salva no banco ou 1% padrão
+             const valorComMulta = calculateOverdueValue(
+                 installmentValue, 
+                 loan.nextDue, 
+                 'Atrasado', 
+                 loan.fineRate ?? 2, 
+                 loan.moraInterestRate ?? 1
+             );
              atrasoTotal += valorComMulta;
              
+             // Estimativa de separação Cap/Juros no atraso
              const totalOriginalEstimado = installmentValue * (installments || 1);
              const ratioCapital = totalOriginalEstimado > 0 ? amount / totalOriginalEstimado : 1;
              const parteCapital = valorComMulta * ratioCapital;
@@ -151,7 +185,6 @@ const Dashboard = () => {
         }
       });
 
-      // Loop Geral para Taxas (Capital Alocado - Sempre Total)
       loans.forEach((loan: Loan) => {
           if(loan.status !== 'Pago') {
               const capital = Number(loan.amount) || 0;
@@ -176,6 +209,8 @@ const Dashboard = () => {
         atrasoJuros: atrasoJur,
         contratosAtivos: filteredLoans.filter((l: any) => l.status !== 'Pago').length,
         novosClientes: filteredLoans.length,
+        totalClientesCadastrados: clients.length,
+        clientesComDivida: activeDebtors.size,
         taxas: {
           lowVal: rLowVal, lowCount: rLowCount,
           midVal: rMidVal, midCount: rMidCount,
@@ -212,7 +247,6 @@ const Dashboard = () => {
     } catch (error) { console.error(error); } finally { setLoading(false); }
   };
 
-  // Dispara o filtro se mudar o período ou clicar em filtrar (que muda o período para personalizado)
   useEffect(() => { 
       if (period !== 'personalizado') {
           fetchAndCalculate();
@@ -235,6 +269,9 @@ const Dashboard = () => {
               dueDate.setHours(0,0,0,0);
               return l.status !== 'Pago' && dueDate < today;
           }
+          if (selectedRange === 'active') {
+              return l.status !== 'Pago';
+          }
           if (l.status === 'Pago') return false; 
           if (selectedRange === 'capital' || selectedRange === 'profit') return true; 
           if (selectedRange === 'low') return l.interestRate < 10;
@@ -250,7 +287,8 @@ const Dashboard = () => {
       high: 'Capital em Taxa Alta (> 15%)',
       capital: (period === 'proximo_mes' || period === 'personalizado') ? 'Previsão de Recebimento' : 'Detalhamento de Capital',
       profit: 'Detalhamento de Lucro Projetado',
-      overdue: 'Contratos em Atraso (Crítico)'
+      overdue: 'Contratos em Atraso (Crítico)',
+      active: 'Carteira de Clientes Ativos'
   };
 
   return (
@@ -266,6 +304,24 @@ const Dashboard = () => {
                     </p>
                   </div>
               </header>
+
+              {/* --- HEADER ESPECIAL PARA CONTRATOS ATIVOS --- */}
+              {selectedRange === 'active' && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                      <div className="bg-white p-5 rounded-xl border border-slate-100 flex items-center gap-4 shadow-sm">
+                          <div className="p-3 bg-blue-100 text-blue-600 rounded-full"><Users size={24}/></div>
+                          <div><p className="text-xs text-slate-500 font-bold uppercase">Total Clientes</p><p className="text-2xl font-black text-slate-800">{metrics.totalClientesCadastrados}</p></div>
+                      </div>
+                      <div className="bg-white p-5 rounded-xl border border-slate-100 flex items-center gap-4 shadow-sm">
+                          <div className="p-3 bg-green-100 text-green-600 rounded-full"><UserCheck size={24}/></div>
+                          <div><p className="text-xs text-slate-500 font-bold uppercase">Com Dívida Ativa</p><p className="text-2xl font-black text-green-600">{metrics.clientesComDivida}</p></div>
+                      </div>
+                      <div className="bg-white p-5 rounded-xl border border-slate-100 flex items-center gap-4 shadow-sm">
+                          <div className="p-3 bg-slate-100 text-slate-600 rounded-full"><FileText size={24}/></div>
+                          <div><p className="text-xs text-slate-500 font-bold uppercase">Total Contratos</p><p className="text-2xl font-black text-slate-800">{metrics.contratosAtivos}</p></div>
+                      </div>
+                  </div>
+              )}
 
               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
                   <table className="w-full text-left">
@@ -291,11 +347,19 @@ const Dashboard = () => {
                           {detailedLoans.length === 0 ? (<tr><td colSpan={5} className="p-8 text-center text-slate-400">Nenhum contrato encontrado.</td></tr>) : (
                               detailedLoans.map(loan => {
                                   const amount = Number(loan.amount) || 0;
-                                  const totalVal = (Number(loan.installmentValue) || 0) * (Number(loan.installments) || 0);
-                                  const profit = totalVal - amount;
+                                  
+                                  // --- CÁLCULO DE LUCRO AJUSTADO NA TABELA ---
+                                  const profit = calculateLoanProfit(loan);
+
                                   let overdueValue = 0;
                                   if (selectedRange === 'overdue') {
-                                      overdueValue = calculateOverdueValue(loan.installmentValue, loan.nextDue, 'Atrasado', loan.fineRate !== undefined ? loan.fineRate : 2, loan.moraInterestRate || 1);
+                                      overdueValue = calculateOverdueValue(
+                                          loan.installmentValue, 
+                                          loan.nextDue, 
+                                          'Atrasado', 
+                                          loan.fineRate ?? 2, 
+                                          loan.moraInterestRate ?? 1
+                                      );
                                   }
                                   return (
                                       <tr key={loan.id} className="hover:bg-slate-50/50 transition-colors">
@@ -323,15 +387,13 @@ const Dashboard = () => {
           </div>
       ) : (
           <>
-            {/* --- BARRA DE FILTROS PADRONIZADA --- */}
+            {/* --- BARRA DE FILTROS --- */}
             <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-8 gap-4">
                 <div><h2 className="text-2xl font-bold text-slate-800">Dashboard Geral</h2><p className="text-slate-500">Visão completa da operação.</p></div>
                 
                 <div className="flex flex-col md:flex-row gap-3 items-start md:items-center w-full xl:w-auto">
-                    {/* BOTÃO ATUALIZAR */}
                     <button onClick={fetchAndCalculate} className="p-2.5 bg-white border border-gray-200 rounded-xl text-slate-500 hover:text-slate-900 transition-colors shadow-sm"><RefreshCw size={18} className={loading ? "animate-spin" : ""} /></button>
                     
-                    {/* BOTÕES DE PERÍODO FIXO */}
                     <div className="flex bg-white p-1 rounded-xl border border-gray-200 shadow-sm overflow-x-auto max-w-full">
                         <button onClick={() => setPeriod('hoje')} className={`px-4 py-2 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${period === 'hoje' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>Hoje</button>
                         <button onClick={() => setPeriod('semana')} className={`px-4 py-2 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${period === 'semana' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>Esta Semana</button>
@@ -340,7 +402,6 @@ const Dashboard = () => {
                         <button onClick={() => setPeriod('todos')} className={`px-4 py-2 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${period === 'todos' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>Total</button>
                     </div>
                     
-                    {/* SELETOR PERSONALIZADO (INTERVALO) */}
                     <div className="flex items-center gap-2 bg-white p-1.5 rounded-xl border border-gray-200 shadow-sm w-full md:w-auto">
                         <div className="flex items-center gap-2 px-2">
                             <Calendar size={16} className="text-slate-400"/>
@@ -359,12 +420,7 @@ const Dashboard = () => {
                 <div onClick={() => setSelectedRange('capital')} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-300 transition-all relative overflow-hidden cursor-pointer group">
                     <div className="absolute right-0 top-0 opacity-5 p-2"><Briefcase size={64} /></div>
                     <div className="flex justify-between items-start mb-4"><div className="p-3 bg-blue-50 text-blue-600 rounded-lg group-hover:bg-blue-600 group-hover:text-white transition-colors"><Briefcase size={24} /></div><span className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-full">Principal</span></div>
-                    
-                    {/* TÍTULO DINÂMICO BASEADO NO PERÍODO */}
-                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
-                        {period === 'proximo_mes' || period === 'personalizado' ? 'Previsão de Recebimento' : 'Capital na Rua / Emprestado'}
-                    </h3>
-                    
+                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">{period === 'proximo_mes' || period === 'personalizado' ? 'Previsão de Recebimento' : 'Capital na Rua / Emprestado'}</h3>
                     <p className="text-2xl font-black text-slate-800">{formatMoney(metrics.capitalNaRua)}</p>
                 </div>
 
@@ -381,12 +437,12 @@ const Dashboard = () => {
                     <p className="text-2xl font-black text-slate-800 mb-3">{formatMoney(metrics.atrasoGeral)}</p>
                 </div>
 
-                <div className="bg-slate-900 p-6 rounded-xl shadow-lg text-white relative overflow-hidden">
+                {/* --- CARD CONTRATOS ATIVOS (CLICÁVEL AGORA) --- */}
+                <div onClick={() => setSelectedRange('active')} className="bg-slate-900 p-6 rounded-xl shadow-lg text-white relative overflow-hidden cursor-pointer hover:bg-slate-800 transition-all">
                     <div className="absolute right-0 top-0 opacity-10 p-2"><FileText size={64} /></div>
-                    <h3 className="text-slate-300 text-xs font-bold uppercase mb-1">
-                        {period === 'proximo_mes' || period === 'personalizado' ? 'Parcelas a Vencer' : 'Contratos Ativos'}
-                    </h3>
+                    <h3 className="text-slate-300 text-xs font-bold uppercase mb-1">{period === 'proximo_mes' || period === 'personalizado' ? 'Parcelas a Vencer' : 'Contratos Ativos'}</h3>
                     <p className="text-3xl font-black text-white">{metrics.contratosAtivos}</p>
+                    <p className="text-[10px] text-slate-400 mt-2 flex items-center gap-1"><Users size={12}/> {metrics.totalClientesCadastrados} clientes cadastrados</p>
                 </div>
             </div>
 
