@@ -3,7 +3,8 @@ import {
   Search, Plus, AlertCircle, CheckCircle, Clock, Trash2,
   MoreVertical, Loader2, RefreshCw, ShieldAlert, ShieldCheck, 
   Calculator, FileText, Check, ChevronRight, DollarSign, 
-  Printer, Eye, TrendingUp, TrendingDown, History, Download, Calendar, AlertTriangle, Info, PartyPopper, UserCheck
+  Printer, Eye, TrendingUp, TrendingDown, History, Download, Calendar, AlertTriangle, Info, PartyPopper, UserCheck,
+  Percent, Landmark, CreditCard // Adicionados novos ícones
 } from 'lucide-react';
 
 import ExcelJS from 'exceljs';
@@ -23,12 +24,12 @@ interface ChecklistItem {
   stage: 1 | 2;
 }
 
-// --- TIPO DE FLUXO PARA O NOVO EMPRÉSTIMO ---
+// Controle de fluxo do Modal: Fechado -> Formulário -> Checklist
 type LoanFlowStep = 'closed' | 'form' | 'checklist';
 
 const Billing = () => {
   // --- Estados de Interface ---
-  const [loanFlowStep, setLoanFlowStep] = useState<LoanFlowStep>('closed'); // Controle unificado do Modal
+  const [loanFlowStep, setLoanFlowStep] = useState<LoanFlowStep>('closed'); 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [activeStage, setActiveStage] = useState<1 | 2>(1);
@@ -59,11 +60,11 @@ const Billing = () => {
   const [summary, setSummary] = useState({ today: 0, overdue: 0, received: 0 });
   const [loans, setLoans] = useState<Loan[]>([]);
 
-  // --- FORMULÁRIO DE CONTRATO (ATUALIZADO COM MORA) ---
+  // --- FORMULÁRIO DE CONTRATO ---
   const [formData, setFormData] = useState({ 
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
       fineRate: '2.0',        // Multa Única (Padrão 2%)
-      moraInterestRate: '1.0', // Juros Mora Mensal (Padrão 1%) -> NOVO CAMPO
+      moraInterestRate: '1.0', // Juros Mora Mensal (Padrão 1%)
       clientBank: '', paymentMethod: '',
       interestType: 'PRICE', 
       hasGuarantor: false,
@@ -134,7 +135,7 @@ const Billing = () => {
                   clientBank: lastLoan.clientBank || '',
                   paymentMethod: lastLoan.paymentMethod || '',
                   fineRate: prev.fineRate,
-                  moraInterestRate: prev.moraInterestRate, // Puxa a mora anterior também
+                  moraInterestRate: prev.moraInterestRate, // Puxa mora anterior
                   interestRate: prev.interestRate
               }));
           }
@@ -143,6 +144,7 @@ const Billing = () => {
 
   // --- CHECKLIST INTELIGENTE ---
   useEffect(() => {
+      // Executa apenas quando o passo do fluxo muda para 'checklist'
       if (loanFlowStep === 'checklist' && formData.client) {
           const clientData = availableClients.find(c => c.name === formData.client);
           const lastLoan = loans
@@ -189,20 +191,18 @@ const Billing = () => {
       return { interest, capital: capital > 0 ? capital : 0 };
   };
 
-  // --- CÁLCULO DOS TOTAIS NO TOPO DA TELA (CORRIGIDO PARA USAR A MORA INDIVIDUAL) ---
+  // --- CÁLCULO DOS TOTAIS NO TOPO DA TELA (CORRIGIDO) ---
   useEffect(() => {
     const totalOverdue = loans.reduce((acc, l) => {
       if (l.status === 'Pago') return acc;
       const realStatus = getLoanRealStatus(l);
       if (realStatus === 'Atrasado') {
-          // AQUI ESTÁ A MÁGICA: Passamos a taxa individual. Se for undefined, o finance.ts assume o padrão.
-          // Se o usuário gravou 0, passamos 0.
           const val = calculateOverdueValue(
               l.installmentValue, 
               l.nextDue, 
               'Atrasado', 
               l.fineRate ?? 2, 
-              l.moraInterestRate ?? 1 // <--- AQUI
+              l.moraInterestRate ?? 1 
           );
           return acc + val;
       }
@@ -346,6 +346,7 @@ const Billing = () => {
              currentDue.setMonth(currentDue.getMonth() + 1);
              updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
              
+             // Lógica de Parcelas
              const isSimple = updatedLoan.interestType === 'SIMPLE';
              if (!isSimple || valCapital > 0) {
                  updatedLoan.installments = Math.max(0, updatedLoan.installments - 1);
@@ -411,25 +412,22 @@ const Billing = () => {
   const toggleSelectAll = () => { if (selectedIds.length === loans.length) setSelectedIds([]); else setSelectedIds(loans.map(l => l.id)); };
   const toggleSelectOne = (id: string) => { setSelectedIds(prev => prev.includes(id) ? prev.filter(curr => curr !== id) : [...prev, id]); };
   
-  // --- FLUXO UNIFICADO DO MODAL ---
-  // Apenas mudamos o "step" interno. O Modal nunca fecha, então não há piscar ou falha.
-  
+  // --- FLUXO UNIFICADO (CORRETO) ---
   const handlePreSave = (e: React.FormEvent) => { 
       e.preventDefault(); 
       setActiveStage(1); 
-      setLoanFlowStep('checklist'); // Troca o conteúdo instantaneamente
+      setLoanFlowStep('checklist'); 
   };
   
   const handleBackToForm = () => {
-      setLoanFlowStep('form'); // Volta para o formulário
+      setLoanFlowStep('form'); 
   };
 
   const closeLoanFlow = () => {
       setLoanFlowStep('closed');
-      // Reseta formulário ao fechar tudo
       setFormData({ 
         client: '', amount: '', interestRate: '', installments: '', startDate: '', 
-        fineRate: '2.0', moraInterestRate: '1.0', // Reset
+        fineRate: '2.0', moraInterestRate: '1.0', 
         clientBank: '', paymentMethod: '', 
         interestType: 'PRICE', hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '' 
       });
@@ -458,10 +456,8 @@ const Billing = () => {
             nextDue: new Date(new Date(formData.startDate).setMonth(new Date(formData.startDate).getMonth() + 1)).toISOString().split('T')[0],
             status: 'Em Dia', 
             installmentValue: simulation.installment,
-            // --- DADOS DE ATRASO DINÂMICOS ---
-            fineRate: parseFloat(formData.fineRate) || 0, // Se vazio, vira 0 (mas o placeholder é 2.0)
-            moraInterestRate: parseFloat(formData.moraInterestRate) || 0, // Se vazio, vira 0
-            // ---------------------------------
+            fineRate: parseFloat(formData.fineRate) || 0, 
+            moraInterestRate: parseFloat(formData.moraInterestRate) || 0,
             clientBank: formData.clientBank, 
             paymentMethod: formData.paymentMethod, 
             justification: justification,
@@ -469,6 +465,7 @@ const Billing = () => {
             totalPaidCapital: 0, totalPaidInterest: 0,
             history: [{ date: new Date().toISOString(), amount: parseFloat(formData.amount), type: 'Abertura', note: 'Empréstimo Concedido' }],
             
+            // Enviando sempre em minúsculo
             interestType: formData.interestType as 'PRICE' | 'SIMPLE',
             guarantorName: formData.hasGuarantor ? formData.guarantorName : '',
             guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '',
@@ -571,21 +568,49 @@ const Billing = () => {
                             </div>
                         </div>
                     </div>
-                    {/* INFO ADICIONAL: TIPO DE CONTRATO E FIADOR */}
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-white border border-slate-100 rounded-xl p-4">
-                            <span className="text-xs font-bold text-slate-400 uppercase block mb-1">Modalidade</span>
-                            <span className="text-sm font-bold text-slate-800">
-                                {selectedLoan.interestType === 'SIMPLE' ? 'Pagamento Mínimo (Só Juros)' : 'Price (Amortização)'}
-                            </span>
-                        </div>
-                        {selectedLoan.guarantorName && (
-                            <div className="bg-white border border-slate-100 rounded-xl p-4">
-                                <span className="text-xs font-bold text-slate-400 uppercase block mb-1">Fiador Vinculado</span>
-                                <span className="text-sm font-bold text-slate-800 truncate block">{selectedLoan.guarantorName}</span>
+
+                    {/* --- FICHA TÉCNICA (Corrigido CSS: 'flex' sem 'block') --- */}
+                    <div className="mt-4 pt-4 border-t border-slate-100">
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><Info size={14}/> Ficha Técnica</h4>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                <span className="text-[10px] text-slate-500 uppercase font-bold mb-1">Modalidade</span>
+                                <span className="text-xs font-bold text-slate-800 bg-white px-2 py-1 rounded border border-slate-200 inline-block">
+                                    {selectedLoan.interestType === 'SIMPLE' ? 'Pag. Mínimo (Só Juros)' : 'Price (Amortização)'}
+                                </span>
                             </div>
-                        )}
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                <span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Percent size={10}/> Taxa de Juros</span>
+                                <span className="text-sm font-bold text-slate-800">{selectedLoan.interestRate}% a.m</span>
+                            </div>
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                <span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><AlertTriangle size={10}/> Multa (Atraso)</span>
+                                <span className="text-sm font-bold text-red-600">{selectedLoan.fineRate ?? 2}%</span>
+                            </div>
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                <span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Clock size={10}/> Mora Diária</span>
+                                <span className="text-sm font-bold text-red-600">{selectedLoan.moraInterestRate ?? 1}% a.m</span>
+                            </div>
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                <span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Landmark size={10}/> Banco</span>
+                                <span className="text-sm font-bold text-slate-800 truncate" title={selectedLoan.clientBank}>{selectedLoan.clientBank || '-'}</span>
+                            </div>
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                <span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><CreditCard size={10}/> Pagamento</span>
+                                <span className="text-sm font-bold text-slate-800 truncate" title={selectedLoan.paymentMethod}>{selectedLoan.paymentMethod || '-'}</span>
+                            </div>
+                        </div>
                     </div>
+
+                    {selectedLoan.guarantorName && (
+                        <div className="mt-2 bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-center gap-3">
+                            <div className="bg-blue-100 p-2 rounded-full text-blue-600"><UserCheck size={18}/></div>
+                            <div>
+                                <span className="text-xs font-bold text-blue-400 uppercase block">Fiador Vinculado</span>
+                                <span className="text-sm font-bold text-blue-900">{selectedLoan.guarantorName}</span>
+                            </div>
+                        </div>
+                    )}
                 </>
             ) : (
                 <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
