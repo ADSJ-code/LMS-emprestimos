@@ -23,6 +23,9 @@ const Settings = () => {
   const [activeTab, setActiveTab] = useState<'empresa' | 'sistema' | 'usuarios'>('empresa');
   const [isLoading, setIsLoading] = useState(false);
   
+  // --- SEGURANÇA: Estado para controlar permissões na tela ---
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
   // LOADING ESPECÍFICO PARA USUÁRIOS
   const [isUserLoading, setIsUserLoading] = useState(false);
   
@@ -64,6 +67,16 @@ const Settings = () => {
   const [settings, setSettings] = useState<any>(defaultSettings);
 
   useEffect(() => {
+    // 1. Identificar quem está logado para aplicar segurança
+    const userStr = localStorage.getItem('user');
+    if (userStr) {
+        try {
+            setCurrentUser(JSON.parse(userStr));
+        } catch (e) {
+            console.error("Erro ao ler usuário", e);
+        }
+    }
+
     const fetchData = async () => {
       try {
         const data = await settingsService.get();
@@ -343,28 +356,31 @@ const Settings = () => {
                     <button type="button" onClick={handleDownloadBackup} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700">Baixar (.json)</button>
                 </div>
 
-                {/* ZONA DE PERIGO (RESET E RESTORE) */}
-                <div className="bg-red-50 border border-red-200 rounded-xl p-5">
-                    <div className="flex items-center gap-2 mb-4 text-red-700 border-b border-red-200 pb-2">
-                        <AlertTriangle className="text-red-600" />
-                        <h3 className="font-semibold text-lg">Zona de Perigo</h3>
-                    </div>
-                    <p className="text-sm text-red-600 mb-6">Ações irreversíveis que afetam todo o banco de dados. Tenha certeza do que está fazendo.</p>
+                {/* ZONA DE PERIGO (SÓ PARA ADMIN) */}
+                {currentUser?.role === 'ADMIN' && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-5">
+                        <div className="flex items-center gap-2 mb-4 text-red-700 border-b border-red-200 pb-2">
+                            <AlertTriangle className="text-red-600" />
+                            <h3 className="font-semibold text-lg">Zona de Perigo</h3>
+                        </div>
+                        <p className="text-sm text-red-600 mb-6">Ações irreversíveis que afetam todo o banco de dados. Tenha certeza do que está fazendo.</p>
 
-                    <div className="flex flex-col sm:flex-row gap-4">
-                        <input type="file" accept=".json" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
-                        
-                        <button type="button" onClick={handleRestoreClick} disabled={isLoading} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-white border border-red-300 text-red-700 rounded-lg hover:bg-red-100 transition-colors font-bold shadow-sm">
-                            <Upload size={18} />
-                            {isLoading ? 'Restaurando...' : 'Restaurar Backup (.json)'}
-                        </button>
+                        <div className="flex flex-col sm:flex-row gap-4">
+                            <input type="file" accept=".json" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
+                            
+                            <button type="button" onClick={handleRestoreClick} disabled={isLoading} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-white border border-red-300 text-red-700 rounded-lg hover:bg-red-100 transition-colors font-bold shadow-sm">
+                                <Upload size={18} />
+                                {isLoading ? 'Restaurando...' : 'Restaurar Backup (.json)'}
+                            </button>
 
-                        <button type="button" onClick={() => { setConfirmText(''); setDangerModalOpen(true); }} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-bold shadow-sm">
-                            <Trash2 size={18} />
-                            Resetar Sistema (Fábrica)
-                        </button>
+                            <button type="button" onClick={() => { setConfirmText(''); setDangerModalOpen(true); }} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-bold shadow-sm">
+                                <Trash2 size={18} />
+                                Resetar Sistema (Fábrica)
+                            </button>
+                        </div>
                     </div>
-                </div>
+                )}
+                
                 <div className="mt-4 flex justify-end"><button type="submit" disabled={isLoading} className="flex items-center gap-2 bg-slate-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg">{isLoading ? 'Salvando...' : 'Salvar Configurações'}</button></div>
               </div>
             )}

@@ -4,7 +4,7 @@ import {
   MoreVertical, Loader2, RefreshCw, ShieldAlert, ShieldCheck, 
   Calculator, FileText, Check, ChevronRight, DollarSign, 
   Printer, Eye, TrendingUp, TrendingDown, History, Download, Calendar, AlertTriangle, Info, PartyPopper, UserCheck,
-  Percent, Landmark, CreditCard // Adicionados novos ícones
+  Percent, Landmark, CreditCard, Repeat
 } from 'lucide-react';
 
 import ExcelJS from 'exceljs';
@@ -60,9 +60,11 @@ const Billing = () => {
   const [summary, setSummary] = useState({ today: 0, overdue: 0, received: 0 });
   const [loans, setLoans] = useState<Loan[]>([]);
 
-  // --- FORMULÁRIO DE CONTRATO ---
+  // --- FORMULÁRIO DE CONTRATO (ATUALIZADO COM PERIODICIDADE) ---
   const [formData, setFormData] = useState({ 
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
+      firstPaymentDate: '',   // Data da 1ª Parcela (Novo)
+      frequency: 'MENSAL',    // Periodicidade (Novo)
       fineRate: '2.0',        // Multa Única (Padrão 2%)
       moraInterestRate: '1.0', // Juros Mora Mensal (Padrão 1%)
       clientBank: '', paymentMethod: '',
@@ -135,7 +137,7 @@ const Billing = () => {
                   clientBank: lastLoan.clientBank || '',
                   paymentMethod: lastLoan.paymentMethod || '',
                   fineRate: prev.fineRate,
-                  moraInterestRate: prev.moraInterestRate, // Puxa mora anterior
+                  moraInterestRate: prev.moraInterestRate,
                   interestRate: prev.interestRate
               }));
           }
@@ -144,7 +146,6 @@ const Billing = () => {
 
   // --- CHECKLIST INTELIGENTE ---
   useEffect(() => {
-      // Executa apenas quando o passo do fluxo muda para 'checklist'
       if (loanFlowStep === 'checklist' && formData.client) {
           const clientData = availableClients.find(c => c.name === formData.client);
           const lastLoan = loans
@@ -191,12 +192,14 @@ const Billing = () => {
       return { interest, capital: capital > 0 ? capital : 0 };
   };
 
-  // --- CÁLCULO DOS TOTAIS NO TOPO DA TELA (CORRIGIDO) ---
+  // --- CÁLCULO DOS TOTAIS NO TOPO DA TELA (CORRIGIDO PARA MORA ZERO) ---
   useEffect(() => {
     const totalOverdue = loans.reduce((acc, l) => {
       if (l.status === 'Pago') return acc;
       const realStatus = getLoanRealStatus(l);
       if (realStatus === 'Atrasado') {
+          // Lógica Blindada: Verifica se valor existe, senão usa padrão.
+          // O zero (0) é respeitado pois '??' só troca se for null/undefined.
           const val = calculateOverdueValue(
               l.installmentValue, 
               l.nextDue, 
@@ -231,9 +234,12 @@ const Billing = () => {
         let totalInt = 0;
 
         if (formData.interestType === 'SIMPLE') {
+            // No juros simples (pagamento mínimo), a parcela é só o juro mensal
             pmt = amount * i; 
+            // Se for semanal ou diário, ajustamos (implementação futura no cálculo, por enquanto assume taxa mensal)
             totalInt = pmt * months;
         } else {
+            // Price
             pmt = i > 0 ? amount * ( (i * Math.pow(1 + i, months)) / (Math.pow(1 + i, months) - 1) ) : amount / months;
             totalInt = (pmt * months) - amount;
         }
@@ -346,7 +352,6 @@ const Billing = () => {
              currentDue.setMonth(currentDue.getMonth() + 1);
              updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
              
-             // Lógica de Parcelas
              const isSimple = updatedLoan.interestType === 'SIMPLE';
              if (!isSimple || valCapital > 0) {
                  updatedLoan.installments = Math.max(0, updatedLoan.installments - 1);
@@ -426,8 +431,8 @@ const Billing = () => {
   const closeLoanFlow = () => {
       setLoanFlowStep('closed');
       setFormData({ 
-        client: '', amount: '', interestRate: '', installments: '', startDate: '', 
-        fineRate: '2.0', moraInterestRate: '1.0', 
+        client: '', amount: '', interestRate: '', installments: '', startDate: '', firstPaymentDate: '',
+        fineRate: '2.0', moraInterestRate: '1.0', frequency: 'MENSAL',
         clientBank: '', paymentMethod: '', 
         interestType: 'PRICE', hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '' 
       });
@@ -446,6 +451,33 @@ const Billing = () => {
         const newID = `${nextSeq.toString().padStart(2, '0')}/${year}`;
         const checkedItems = checklistItems.filter(i => i.checked).map(i => i.id);
 
+        // --- CÁLCULO DA DATA DE VENCIMENTO ---
+        // Se o usuário informou "Primeiro Vencimento", usa ele.
+        // Se não, calcula baseado na frequência.
+        let nextDueDate = new Date(formData.startDate);
+        if (formData.firstPaymentDate) {
+            nextDueDate = new Date(formData.firstPaymentDate);
+        } else {
+            if (formData.frequency === 'SEMANAL') nextDueDate.setDate(nextDueDate.getDate() + 7);
+            else if (formData.frequency === 'DIARIO') nextDueDate.setDate(nextDueDate.getDate() + 1);
+            else nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+        }
+
+        // --- CÁLCULO DO LUCRO PROJETADO ---
+        // Para Juros Simples, assumimos lucro = parcela * qtd (ou mensal recorrente)
+        // Para Price, lucro = total - montante
+        const totalReceivable = simulation.installment * parseInt(formData.installments);
+        const projectedProfit = formData.interestType === 'SIMPLE' 
+            ? totalReceivable 
+            : Math.max(0, totalReceivable - parseFloat(formData.amount));
+
+        // --- PARSER SEGURO PARA ZERO ---
+        const parseRate = (val: string) => {
+            if (val === '') return 0; // Se apagar o campo, vira 0
+            const num = parseFloat(val);
+            return isNaN(num) ? 0 : num;
+        };
+
         const newLoan: Loan = {
             id: newID,
             client: formData.client,
@@ -453,11 +485,14 @@ const Billing = () => {
             installments: parseInt(formData.installments),
             interestRate: parseFloat(formData.interestRate),
             startDate: formData.startDate,
-            nextDue: new Date(new Date(formData.startDate).setMonth(new Date(formData.startDate).getMonth() + 1)).toISOString().split('T')[0],
+            nextDue: nextDueDate.toISOString().split('T')[0],
             status: 'Em Dia', 
             installmentValue: simulation.installment,
-            fineRate: parseFloat(formData.fineRate) || 0, 
-            moraInterestRate: parseFloat(formData.moraInterestRate) || 0,
+            
+            // --- BLINDAGEM DO ZERO ---
+            fineRate: parseRate(formData.fineRate), 
+            moraInterestRate: parseRate(formData.moraInterestRate),
+            
             clientBank: formData.clientBank, 
             paymentMethod: formData.paymentMethod, 
             justification: justification,
@@ -465,8 +500,11 @@ const Billing = () => {
             totalPaidCapital: 0, totalPaidInterest: 0,
             history: [{ date: new Date().toISOString(), amount: parseFloat(formData.amount), type: 'Abertura', note: 'Empréstimo Concedido' }],
             
-            // Enviando sempre em minúsculo
+            // Campos ERP
             interestType: formData.interestType as 'PRICE' | 'SIMPLE',
+            frequency: formData.frequency as 'MENSAL' | 'SEMANAL' | 'DIARIO',
+            projectedProfit: projectedProfit,
+
             guarantorName: formData.hasGuarantor ? formData.guarantorName : '',
             guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '',
             guarantorAddress: formData.hasGuarantor ? formData.guarantorAddress : ''
@@ -569,12 +607,12 @@ const Billing = () => {
                         </div>
                     </div>
 
-                    {/* --- FICHA TÉCNICA (Corrigido CSS: 'flex' sem 'block') --- */}
+                    {/* --- FICHA TÉCNICA (CSS CORRIGIDO) --- */}
                     <div className="mt-4 pt-4 border-t border-slate-100">
                         <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><Info size={14}/> Ficha Técnica</h4>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                                <span className="text-[10px] text-slate-500 uppercase font-bold mb-1">Modalidade</span>
+                                <span className="text-[10px] text-slate-500 uppercase font-bold mb-1 block">Modalidade</span>
                                 <span className="text-xs font-bold text-slate-800 bg-white px-2 py-1 rounded border border-slate-200 inline-block">
                                     {selectedLoan.interestType === 'SIMPLE' ? 'Pag. Mínimo (Só Juros)' : 'Price (Amortização)'}
                                 </span>
@@ -650,62 +688,6 @@ const Billing = () => {
         )}
       </Modal>
 
-      <Modal isOpen={isPaymentModalOpen} onClose={() => setIsPaymentModalOpen(false)} title="Baixa Flexível">
-        <div className="space-y-5">
-            {selectedLoan && (cycleAcc.interest > 0 || cycleAcc.capital > 0) && (
-                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
-                    <div className="flex items-center gap-2 mb-2">
-                        <Info size={16} className="text-blue-600"/>
-                        <span className="text-xs font-bold text-blue-900">Juros Acumulados no Ciclo</span>
-                    </div>
-                    <div className="flex justify-between text-xs text-blue-800 mb-1">
-                        <span>Pago: R$ {formatMoney(cycleAcc.interest)}</span>
-                        <span>Meta: R$ {formatMoney(getBreakdown(selectedLoan).interest)}</span>
-                    </div>
-                    <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
-                        <div className="bg-blue-600 h-full transition-all" style={{ width: `${Math.min(100, (cycleAcc.interest / getBreakdown(selectedLoan).interest) * 100)}%` }}></div>
-                    </div>
-                </div>
-            )}
-
-            {selectedLoan && !settleInterest && (parseFloat(payInterest || '0') + cycleAcc.interest) >= (selectedLoan.amount * (selectedLoan.interestRate/100) - 0.10) && (
-                <div className="flex items-center gap-2 bg-green-50 text-green-700 p-2 rounded-lg text-xs animate-in fade-in slide-in-from-top-1">
-                    <PartyPopper size={16}/>
-                    <span>✨ Este valor completa os juros do mês! O vencimento avançará.</span>
-                </div>
-            )}
-
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                <label className="flex items-center gap-2 text-xs font-bold uppercase text-slate-500 mb-2"><Calendar size={14}/> Data e Hora do Pagamento</label>
-                <input type="datetime-local" value={payDate} onChange={(e) => setPayDate(e.target.value)} className="w-full p-3 border border-slate-200 rounded-lg bg-white outline-none focus:ring-2 focus:ring-slate-900/5 font-mono text-sm"/>
-                <p className="text-[10px] text-slate-400 mt-1 italic">Use para registrar pagamentos feitos anteriormente.</p>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-                <div>
-                    <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Capital (Amortização)</label>
-                    <small className="block text-[10px] text-slate-400 mb-1">Esperado: R$ {selectedLoan && formatMoney(getBreakdown(selectedLoan).capital)}</small>
-                    <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">R$</span><input type="number" step="0.01" value={payCapital} onChange={(e) => setPayCapital(e.target.value)} className="w-full pl-10 p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 font-bold text-slate-700" placeholder="0.00"/></div>
-                </div>
-                <div>
-                    <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros (Lucro)</label>
-                    <small className="block text-[10px] text-slate-400 mb-1">Esperado: R$ {selectedLoan && formatMoney(getBreakdown(selectedLoan).interest)}</small>
-                    <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-green-500 font-bold">R$</span><input type="number" step="0.01" value={payInterest} onChange={(e) => setPayInterest(e.target.value)} className="w-full pl-10 p-3 border border-green-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500/20 font-bold text-green-600 bg-green-50/30" placeholder="0.00"/></div>
-                </div>
-            </div>
-            <div className="flex items-center gap-2 py-2"><input type="checkbox" id="settleInterest" checked={settleInterest} onChange={(e) => setSettleInterest(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500"/><label htmlFor="settleInterest" className="text-xs font-bold text-slate-600">Quitar Juros do Mês?</label></div>
-            
-            {settleInterest && selectedLoan && (parseFloat(payInterest || '0') + cycleAcc.interest) < (selectedLoan.amount * (selectedLoan.interestRate/100) - 0.10) && (
-                <div className="flex items-center gap-2 bg-orange-50 text-orange-700 p-2 rounded-lg text-xs">
-                    <AlertTriangle size={14}/>
-                    <span>Atenção: Juros somado menor que o devido. O histórico registrará desconto.</span>
-                </div>
-            )}
-
-            <div className="bg-slate-900 p-4 rounded-xl text-center shadow-lg"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Recebido</span><p className="text-3xl font-black text-white mt-1">R$ {formatMoney(payTotal)}</p></div>
-            <button onClick={confirmPayment} className="w-full py-4 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 transition-all shadow-lg flex items-center justify-center gap-2"><Check size={20}/> Confirmar Baixa</button>
-        </div>
-      </Modal>
-
       {/* --- MODAL UNIFICADO PARA O FLUXO DE NOVO EMPRÉSTIMO --- */}
       <Modal 
         isOpen={loanFlowStep !== 'closed'} 
@@ -727,6 +709,25 @@ const Billing = () => {
                 
                 <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="0,00"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="5.0"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Data da Operação</label><input required type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" /></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.installments} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="12"/></div></div>
                 
+                {/* --- NOVOS CAMPOS: PERIODICIDADE E 1º VENCIMENTO --- */}
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Periodicidade</label>
+                        <div className="relative">
+                            <Repeat size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+                            <select value={formData.frequency} onChange={e => setFormData({...formData, frequency: e.target.value})} className="w-full pl-10 p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5">
+                                <option value="MENSAL">Mensal</option>
+                                <option value="SEMANAL">Semanal</option>
+                                <option value="DIARIO">Diário</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Primeiro Vencimento</label>
+                        <input type="date" value={formData.firstPaymentDate} onChange={e => setFormData({...formData, firstPaymentDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 text-sm" placeholder="Opcional" title="Deixe vazio para automático"/>
+                    </div>
+                </div>
+
                 <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl">
                     <input type="checkbox" id="interestType" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" />
                     <label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros) <span className="text-xs font-normal text-blue-600 block">O cliente paga apenas os juros mensais. O capital não abate.</span></label>

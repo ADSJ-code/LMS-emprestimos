@@ -268,7 +268,10 @@ const Clients = () => {
                                 <div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
                                     <div className="py-1">
                                             <button onClick={() => handleOpenModal(client)} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
-                                                <Eye size={16} className="text-blue-500" /> Detalhes
+                                                <Edit2 size={16} className="text-blue-500" /> Editar
+                                            </button>
+                                            <button onClick={() => handleOpenModal(client)} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                                                <Eye size={16} className="text-gray-500" /> Detalhes
                                             </button>
                                             <div className="border-t border-slate-100 my-1"></div>
                                             <button onClick={() => handleDelete(client.id)} className="w-full text-left px-4 py-3 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"><Trash2 size={16} /> Excluir</button>
