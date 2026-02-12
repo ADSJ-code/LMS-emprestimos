@@ -289,7 +289,8 @@ const Billing = () => {
     setCycleAcc({ interest: accInt, capital: accCap });
     
     setIsDetailsOpen(false);
-    setIsPaymentModalOpen(true);
+    // FORÇANDO ABERTURA DO MODAL (Bug Fix)
+    setTimeout(() => setIsPaymentModalOpen(true), 100);
   };
 
   useEffect(() => {
@@ -452,8 +453,6 @@ const Billing = () => {
         const checkedItems = checklistItems.filter(i => i.checked).map(i => i.id);
 
         // --- CÁLCULO DA DATA DE VENCIMENTO ---
-        // Se o usuário informou "Primeiro Vencimento", usa ele.
-        // Se não, calcula baseado na frequência.
         let nextDueDate = new Date(formData.startDate);
         if (formData.firstPaymentDate) {
             nextDueDate = new Date(formData.firstPaymentDate);
@@ -463,9 +462,6 @@ const Billing = () => {
             else nextDueDate.setMonth(nextDueDate.getMonth() + 1);
         }
 
-        // --- CÁLCULO DO LUCRO PROJETADO ---
-        // Para Juros Simples, assumimos lucro = parcela * qtd (ou mensal recorrente)
-        // Para Price, lucro = total - montante
         const totalReceivable = simulation.installment * parseInt(formData.installments);
         const projectedProfit = formData.interestType === 'SIMPLE' 
             ? totalReceivable 
@@ -473,7 +469,7 @@ const Billing = () => {
 
         // --- PARSER SEGURO PARA ZERO ---
         const parseRate = (val: string) => {
-            if (val === '') return 0; // Se apagar o campo, vira 0
+            if (val === '') return 0;
             const num = parseFloat(val);
             return isNaN(num) ? 0 : num;
         };
@@ -607,7 +603,7 @@ const Billing = () => {
                         </div>
                     </div>
 
-                    {/* --- FICHA TÉCNICA (CSS CORRIGIDO) --- */}
+                    {/* --- FICHA TÉCNICA (CORRIGIDA) --- */}
                     <div className="mt-4 pt-4 border-t border-slate-100">
                         <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><Info size={14}/> Ficha Técnica</h4>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -623,11 +619,17 @@ const Billing = () => {
                             </div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
                                 <span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><AlertTriangle size={10}/> Multa (Atraso)</span>
-                                <span className="text-sm font-bold text-red-600">{selectedLoan.fineRate ?? 2}%</span>
+                                <span className="text-sm font-bold text-red-600">
+                                    {/* BLINDAGEM: Se for 0, mostra 0. Se for undefined, mostra 2 */}
+                                    {selectedLoan.fineRate !== undefined ? selectedLoan.fineRate : 2}%
+                                </span>
                             </div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
                                 <span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Clock size={10}/> Mora Diária</span>
-                                <span className="text-sm font-bold text-red-600">{selectedLoan.moraInterestRate ?? 1}% a.m</span>
+                                <span className="text-sm font-bold text-red-600">
+                                    {/* BLINDAGEM: Se for 0, mostra 0. Se for undefined, mostra 1 */}
+                                    {selectedLoan.moraInterestRate !== undefined ? selectedLoan.moraInterestRate : 1}% a.m
+                                </span>
                             </div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
                                 <span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Landmark size={10}/> Banco</span>
