@@ -5,7 +5,7 @@ import axios from 'axios';
 export interface PaymentRecord {
   date: string;
   amount: number;
-  type: 'Entrada' | 'Renovação' | 'Amortização' | 'Quitação' | 'Abertura' | 'Parcela' | 'Juros' | string;
+  type: 'Entrada' | 'Renovação' | 'Amortização' | 'Quitação' | 'Abertura' | 'Parcela' | 'Juros' | 'Acordo' | string;
   note?: string;
   capitalPaid?: number;
   interestPaid?: number;
@@ -20,10 +20,10 @@ export interface Loan {
   interestRate: number;
   startDate: string;
   nextDue: string;
-  status: 'Em Dia' | 'Atrasado' | 'Pago' | 'Pendente';
+  status: 'Em Dia' | 'Atrasado' | 'Pago' | 'Pendente' | 'Acordo';
   installmentValue: number;
   
-  // Taxas Flexíveis
+  // Taxas Flexíveis (Permite 0)
   fineRate?: number;
   moraInterestRate?: number;
   
@@ -35,11 +35,13 @@ export interface Loan {
   totalPaidCapital?: number;
   history?: PaymentRecord[];
 
-  // --- NOVOS CAMPOS PARA O ERP ---
-  // Periodicidade (Diário, Semanal, Mensal)
+  // --- NOVOS CAMPOS PARA O ERP (Adicionados) ---
   frequency?: 'DIARIO' | 'SEMANAL' | 'MENSAL';
-  // Lucro Projetado (Estimativa inicial)
   projectedProfit?: number;
+  
+  // Campos para Acordo/Renegociação
+  agreementDate?: string; 
+  agreementValue?: number;
 
   // Campos já existentes (camelCase)
   interestType?: 'PRICE' | 'SIMPLE'; 
@@ -279,7 +281,8 @@ export const settingsService = {
              },
              system: {
                  autoBackup: settings.autoBackup || false,
-                 requireLogin: true
+                 requireLogin: true,
+                 warningDays: settings.warningDays || 3 // Garante que o campo existe
              }
          };
     }

@@ -160,6 +160,7 @@ type CompanySettings struct {
 type SystemSettings struct {
 	AutoBackup   bool `json:"autoBackup" bson:"autoBackup"`
 	RequireLogin bool `json:"requireLogin" bson:"requireLogin"`
+	WarningDays  int  `json:"warningDays" bson:"warningDays"` // Novo campo para o Alerta
 }
 
 type Settings struct {
@@ -191,7 +192,7 @@ type Loan struct {
 
 	// --- TAXAS E MULTAS (0 é um valor válido agora) ---
 	FineRate         float64 `json:"fineRate" bson:"fineRate"`
-	MoraInterestRate float64 `json:"moraInterestRate,omitempty" bson:"moraInterestRate,omitempty"`
+	MoraInterestRate float64 `json:"moraInterestRate" bson:"moraInterestRate"`
 
 	ClientBank          string   `json:"clientBank" bson:"clientBank"`
 	PaymentMethod       string   `json:"paymentMethod" bson:"paymentMethod"`
@@ -206,6 +207,10 @@ type Loan struct {
 	InterestType    string  `json:"interestType,omitempty" bson:"interestType,omitempty"`       // "PRICE" ou "SIMPLE"
 	Frequency       string  `json:"frequency,omitempty" bson:"frequency,omitempty"`             // "DIARIO", "SEMANAL", "MENSAL"
 	ProjectedProfit float64 `json:"projectedProfit,omitempty" bson:"projectedProfit,omitempty"` // Lucro total estimado
+
+	// --- CAMPOS PARA ACORDO ---
+	AgreementDate  string  `json:"agreementDate,omitempty" bson:"agreementDate,omitempty"`
+	AgreementValue float64 `json:"agreementValue,omitempty" bson:"agreementValue,omitempty"`
 
 	GuarantorName    string `json:"guarantorName,omitempty" bson:"guarantorName,omitempty"`
 	GuarantorCPF     string `json:"guarantorCPF,omitempty" bson:"guarantorCPF,omitempty"`
