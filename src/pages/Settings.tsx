@@ -55,12 +55,13 @@ const Settings = () => {
 
   useEffect(() => {
     // 1. Identificação do Usuário e Role
-    const userStr = localStorage.getItem('user');
-    if (userStr) {
+    const sessionStr = localStorage.getItem('lms_active_session');
+    if (sessionStr) {
         try {
-            const userObj = JSON.parse(userStr);
+            const sessionObj = JSON.parse(sessionStr);
+            const userObj = sessionObj.user;
             setCurrentUser(userObj);
-            const userRole = (userObj.role || "").toUpperCase();
+            const userRole = (userObj?.role || "").toUpperCase();
             if (userRole.includes('ADMIN')) {
                 setIsAdmin(true);
             }
