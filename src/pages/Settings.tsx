@@ -25,7 +25,7 @@ const Settings = () => {
   
   // --- SEGURANÇA ---
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [isAdmin, setIsAdmin] = useState(false); // Estado explícito para Admin
+  const [isAdmin, setIsAdmin] = useState(false); 
 
   const [isUserLoading, setIsUserLoading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
@@ -54,14 +54,14 @@ const Settings = () => {
   const [settings, setSettings] = useState<any>(defaultSettings);
 
   useEffect(() => {
-    // 1. Identificação Robusta do Admin
+    // 1. Identificação Robusta do Admin (Correção de Case-Sensitive)
     const userStr = localStorage.getItem('user');
     if (userStr) {
         try {
             const userObj = JSON.parse(userStr);
             setCurrentUser(userObj);
-            // Verifica maiúsculo ou minúsculo para garantir
-            if (userObj.role && userObj.role.toUpperCase() === 'ADMIN') {
+            // Verifica se o cargo é ADMIN independente de como está escrito
+            if (userObj.role && (userObj.role.toUpperCase() === 'ADMIN' || userObj.role.toUpperCase() === 'ADMINISTRADOR')) {
                 setIsAdmin(true);
             }
         } catch (e) {
@@ -240,7 +240,7 @@ const Settings = () => {
           </nav>
           <div className="mt-8 bg-blue-50 p-4 rounded-xl border border-blue-100">
             <div className="flex items-center gap-2 mb-2"><div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div><span className="text-xs font-bold text-blue-700 uppercase">Status do Sistema</span></div>
-            <p className="text-xs text-blue-800">Versão 2.7.0 (ERP)</p>
+            <p className="text-xs text-blue-800">Versão 2.7.5 (ERP)</p>
             <p className="text-xs text-blue-600 mt-1">Ambiente Seguro</p>
           </div>
         </aside>
@@ -279,13 +279,13 @@ const Settings = () => {
                             {users.map(user => (
                                 <tr key={user.id} className="hover:bg-white transition-colors">
                                     <td className="p-4 font-medium text-slate-800 flex items-center gap-2">
-                                        {user.role === 'ADMIN' && <Shield size={14} className="text-blue-600"/>}
+                                        {(user.role?.toUpperCase() === 'ADMIN') && <Shield size={14} className="text-blue-600"/>}
                                         {user.name}
                                     </td>
                                     <td className="p-4 text-slate-600">{user.username || user.email}</td>
                                     <td className="p-4 text-right flex justify-end gap-2">
                                         <button type="button" onClick={() => openResetModal(user.username || user.email)} className="text-blue-600 hover:bg-blue-100 p-2 rounded-lg transition-all" title="Alterar Senha"><Key size={16}/></button>
-                                        {user.role !== 'ADMIN' && (
+                                        {(user.role?.toUpperCase() !== 'ADMIN') && (
                                             <button type="button" onClick={() => handleRemoveUser(user.username || user.email)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg transition-all" title="Remover"><Trash2 size={16}/></button>
                                         )}
                                     </td>
@@ -350,12 +350,12 @@ const Settings = () => {
                     <button type="button" onClick={handleDownloadBackup} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700">Baixar (.json)</button>
                 </div>
 
-                {/* ZONA DE PERIGO (SÓ PARA ADMIN) */}
+                {/* ZONA DE PERIGO (SÓ PARA ADMIN - AGORA COM VERIFICAÇÃO REFORÇADA) */}
                 {isAdmin && (
                     <div className="bg-red-50 border border-red-200 rounded-xl p-5">
                         <div className="flex items-center gap-2 mb-4 text-red-700 border-b border-red-200 pb-2">
                             <AlertTriangle className="text-red-600" />
-                            <h3 className="font-semibold text-lg">Zona de Perigo</h3>
+                            <h3 className="font-semibold text-lg">Zona de Perigo (Administrador)</h3>
                         </div>
                         <p className="text-sm text-red-600 mb-6">Ações irreversíveis que afetam todo o banco de dados. Tenha certeza do que está fazendo.</p>
 
