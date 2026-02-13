@@ -25,14 +25,81 @@ var jwtKey = []byte(os.Getenv("JWT_SECRET"))
 
 func init() {
 	if len(jwtKey) == 0 {
-		jwtKey = []byte("secret_key_123")
+		jwtKey = []byte("secret_key_123_mudar_em_producao")
+	}
+}
+
+// --- MIDDLEWARES ---
+
+func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, "Token não fornecido", http.StatusUnauthorized)
+			return
+		}
+		bearerToken := strings.Split(authHeader, " ")
+		if len(bearerToken) != 2 {
+			http.Error(w, "Token malformado", http.StatusUnauthorized)
+			return
+		}
+		tokenString := bearerToken[1]
+		claims := &Claims{}
+		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+			return jwtKey, nil
+		})
+		if err != nil || !token.Valid {
+			http.Error(w, "Token inválido", http.StatusUnauthorized)
+			return
+		}
+		ctx := context.WithValue(r.Context(), "username", claims.Username)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	}
+}
+
+func adminMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Reutiliza lógica de validação básica ou reimplementa para garantir
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, "Acesso negado", http.StatusUnauthorized)
+			return
+		}
+		bearerToken := strings.Split(authHeader, " ")
+		if len(bearerToken) != 2 {
+			http.Error(w, "Token inválido", http.StatusUnauthorized)
+			return
+		}
+		tokenString := bearerToken[1]
+		claims := &Claims{}
+		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+			return jwtKey, nil
+		})
+
+		if err != nil || !token.Valid {
+			http.Error(w, "Token inválido", http.StatusUnauthorized)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var user User
+		err = userCollection.FindOne(ctx, bson.M{"username": claims.Username}).Decode(&user)
+
+		if err != nil || strings.ToUpper(user.Role) != "ADMIN" {
+			logAction("ACESSO NEGADO ADMIN", claims.Username)
+			http.Error(w, "Acesso restrito a Administradores.", http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
 	}
 }
 
 // --- FUNÇÕES AUXILIARES ---
 
 func hashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 12)
 	return string(bytes), err
 }
 
@@ -41,26 +108,20 @@ func checkPasswordHash(password, hash string) bool {
 	return err == nil
 }
 
-// LOG ACTION
 func logAction(action string, details string) {
 	fmt.Printf("\033[32m[AUDITORIA %s]\033[0m %s - %s\n", time.Now().Format("15:04:05"), action, details)
-
 	if logCollection != nil {
 		entry := LogEntry{
-			ID:        strconv.FormatInt(time.Now().UnixNano(), 10),
+			ID:        primitive.NewObjectID().Hex(),
 			Action:    action,
 			User:      "Sistema",
 			Details:   details,
 			Timestamp: time.Now(),
 		}
-
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_, err := logCollection.InsertOne(ctx, entry)
-			if err != nil {
-				fmt.Printf("ERRO AO SALVAR LOG: %v\n", err)
-			}
+			logCollection.InsertOne(ctx, entry)
 		}()
 	}
 }
@@ -68,27 +129,29 @@ func logAction(action string, details string) {
 func logSysAction(action string, details string) {
 	if logCollection != nil {
 		entry := LogEntry{
-			ID:        strconv.FormatInt(time.Now().UnixNano(), 10),
+			ID:        primitive.NewObjectID().Hex(),
 			Action:    action,
 			User:      "Sistema",
 			Details:   details,
 			Timestamp: time.Now(),
 		}
-		context.Background()
-		go logCollection.InsertOne(context.Background(), entry)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			logCollection.InsertOne(ctx, entry)
+		}()
 	}
 }
 
-// --- ROTINAS DE BACKGROUND ---
+// --- BACKGROUND ---
 
 func StartBackgroundSystemLogs() {
 	go func() {
 		ticker := time.NewTicker(6 * time.Hour)
 		time.Sleep(5 * time.Second)
-		logSysAction("Sistema Iniciado", "Servidor online e conexões estabelecidas")
-
+		logSysAction("Sistema Iniciado", "Servidor online.")
 		for range ticker.C {
-			logSysAction("Monitoramento", "Verificação de integridade do sistema realizada.")
+			logSysAction("Monitoramento", "Integridade OK.")
 		}
 	}()
 }
@@ -101,39 +164,35 @@ func StartDailyBackupRoutine() {
 			if now.After(nextRun) {
 				nextRun = nextRun.Add(24 * time.Hour)
 			}
-			duration := nextRun.Sub(now)
-			log.Printf("🕒 Próximo Backup Automático agendado para: %s", nextRun.Format("02/01 15:04"))
-			time.Sleep(duration)
+			time.Sleep(time.Until(nextRun))
 			performInternalBackup()
 		}
 	}()
 }
 
 func performInternalBackup() {
-	log.Println("🔄 Iniciando Backup Diário...")
+	log.Println("🔄 Backup Automático...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	db := mongoClient.Database("lms")
-	db.Collection("clients_backup").Drop(ctx)
 	cursor, _ := clientCollection.Find(ctx, bson.M{})
 	var clients []interface{}
 	if err := cursor.All(ctx, &clients); err == nil && len(clients) > 0 {
+		db.Collection("clients_backup").Drop(ctx)
 		db.Collection("clients_backup").InsertMany(ctx, clients)
 	}
 
-	db.Collection("loans_backup").Drop(ctx)
 	cursorLoans, _ := loanCollection.Find(ctx, bson.M{})
 	var loans []interface{}
 	if err := cursorLoans.All(ctx, &loans); err == nil && len(loans) > 0 {
+		db.Collection("loans_backup").Drop(ctx)
 		db.Collection("loans_backup").InsertMany(ctx, loans)
 	}
-	logSysAction("BACKUP AUTOMÁTICO", "Cópia de segurança realizada com sucesso.")
+	logSysAction("BACKUP AUTOMÁTICO", "Sucesso.")
 }
 
-// ----------------------------------------------
-// STRUCTS
-// ----------------------------------------------
+// --- STRUCTS ---
 
 type Claims struct {
 	Username string `json:"username"`
@@ -160,7 +219,7 @@ type CompanySettings struct {
 type SystemSettings struct {
 	AutoBackup   bool `json:"autoBackup" bson:"autoBackup"`
 	RequireLogin bool `json:"requireLogin" bson:"requireLogin"`
-	WarningDays  int  `json:"warningDays" bson:"warningDays"` // Novo campo para o Alerta
+	WarningDays  int  `json:"warningDays" bson:"warningDays"`
 }
 
 type Settings struct {
@@ -180,41 +239,33 @@ type PaymentRecord struct {
 }
 
 type Loan struct {
-	ID               string  `json:"id" bson:"id"`
-	Client           string  `json:"client" bson:"client"`
-	Amount           float64 `json:"amount" bson:"amount"`
-	Installments     int     `json:"installments" bson:"installments"`
-	InterestRate     float64 `json:"interestRate" bson:"interestRate"`
-	StartDate        string  `json:"startDate" bson:"startDate"`
-	NextDue          string  `json:"nextDue" bson:"nextDue"`
-	Status           string  `json:"status" bson:"status"`
-	InstallmentValue float64 `json:"installmentValue" bson:"installmentValue"`
+	ID                  string          `json:"id" bson:"id"`
+	Client              string          `json:"client" bson:"client"`
+	Amount              float64         `json:"amount" bson:"amount"`
+	Installments        int             `json:"installments" bson:"installments"`
+	InterestRate        float64         `json:"interestRate" bson:"interestRate"`
+	StartDate           string          `json:"startDate" bson:"startDate"`
+	NextDue             string          `json:"nextDue" bson:"nextDue"`
+	Status              string          `json:"status" bson:"status"`
+	InstallmentValue    float64         `json:"installmentValue" bson:"installmentValue"`
+	FineRate            float64         `json:"fineRate" bson:"fineRate"`
+	MoraInterestRate    float64         `json:"moraInterestRate" bson:"moraInterestRate"`
+	ClientBank          string          `json:"clientBank" bson:"clientBank"`
+	PaymentMethod       string          `json:"paymentMethod" bson:"paymentMethod"`
+	Justification       string          `json:"justification,omitempty" bson:"justification,omitempty"`
+	ChecklistAtApproval []string        `json:"checklistAtApproval,omitempty" bson:"checklistAtApproval,omitempty"`
+	TotalPaidInterest   float64         `json:"totalPaidInterest" bson:"totalPaidInterest"`
+	TotalPaidCapital    float64         `json:"totalPaidCapital" bson:"totalPaidCapital"`
+	History             []PaymentRecord `json:"history" bson:"history"`
 
-	// --- TAXAS E MULTAS (0 é um valor válido agora) ---
-	FineRate         float64 `json:"fineRate" bson:"fineRate"`
-	MoraInterestRate float64 `json:"moraInterestRate" bson:"moraInterestRate"`
-
-	ClientBank          string   `json:"clientBank" bson:"clientBank"`
-	PaymentMethod       string   `json:"paymentMethod" bson:"paymentMethod"`
-	Justification       string   `json:"justification,omitempty" bson:"justification,omitempty"`
-	ChecklistAtApproval []string `json:"checklistAtApproval,omitempty" bson:"checklistAtApproval,omitempty"`
-
-	TotalPaidInterest float64         `json:"totalPaidInterest" bson:"totalPaidInterest"`
-	TotalPaidCapital  float64         `json:"totalPaidCapital" bson:"totalPaidCapital"`
-	History           []PaymentRecord `json:"history" bson:"history"`
-
-	// --- NOVOS CAMPOS PARA O ERP ---
-	InterestType    string  `json:"interestType,omitempty" bson:"interestType,omitempty"`       // "PRICE" ou "SIMPLE"
-	Frequency       string  `json:"frequency,omitempty" bson:"frequency,omitempty"`             // "DIARIO", "SEMANAL", "MENSAL"
-	ProjectedProfit float64 `json:"projectedProfit,omitempty" bson:"projectedProfit,omitempty"` // Lucro total estimado
-
-	// --- CAMPOS PARA ACORDO ---
-	AgreementDate  string  `json:"agreementDate,omitempty" bson:"agreementDate,omitempty"`
-	AgreementValue float64 `json:"agreementValue,omitempty" bson:"agreementValue,omitempty"`
-
-	GuarantorName    string `json:"guarantorName,omitempty" bson:"guarantorName,omitempty"`
-	GuarantorCPF     string `json:"guarantorCPF,omitempty" bson:"guarantorCPF,omitempty"`
-	GuarantorAddress string `json:"guarantorAddress,omitempty" bson:"guarantorAddress,omitempty"`
+	InterestType     string  `json:"interestType,omitempty" bson:"interestType,omitempty"`
+	Frequency        string  `json:"frequency,omitempty" bson:"frequency,omitempty"`
+	ProjectedProfit  float64 `json:"projectedProfit,omitempty" bson:"projectedProfit,omitempty"`
+	AgreementDate    string  `json:"agreementDate,omitempty" bson:"agreementDate,omitempty"`
+	AgreementValue   float64 `json:"agreementValue,omitempty" bson:"agreementValue,omitempty"`
+	GuarantorName    string  `json:"guarantorName,omitempty" bson:"guarantorName,omitempty"`
+	GuarantorCPF     string  `json:"guarantorCPF,omitempty" bson:"guarantorCPF,omitempty"`
+	GuarantorAddress string  `json:"guarantorAddress,omitempty" bson:"guarantorAddress,omitempty"`
 }
 
 type ClientDoc struct {
@@ -298,19 +349,18 @@ func main() {
 		mongoURI = "mongodb://127.0.0.1:27017"
 	}
 
-	// TIMEOUT DE CONEXÃO: 60 SEGUNDOS
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var err error
 	mongoClient, err = mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
 	if err != nil {
-		log.Fatal("Failed to connect to MongoDB:", err)
+		log.Fatal("Falha ao conectar ao MongoDB:", err)
 	}
 
 	err = mongoClient.Ping(ctx, nil)
 	if err != nil {
-		log.Fatal("Could not ping MongoDB:", err)
+		log.Fatal("Não foi possível pingar o MongoDB:", err)
 	}
 
 	db := mongoClient.Database("lms")
@@ -321,7 +371,7 @@ func main() {
 	logCollection = db.Collection("logs")
 	blacklistCollection = db.Collection("blacklist")
 	settingsCollection = db.Collection("settings")
-	log.Println("Connected to MongoDB!")
+	log.Println("✅ MongoDB Conectado!")
 
 	seedAdminUser()
 	StartBackgroundSystemLogs()
@@ -329,25 +379,24 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// --- ROTAS ---
 	mux.HandleFunc("/api/auth/login", loginHandler)
-	mux.HandleFunc("/api/users", usersHandler)
-	mux.HandleFunc("/api/users/", userDetailHandler)
-	mux.HandleFunc("/api/admin/reset", resetDatabaseHandler)
-	mux.HandleFunc("/api/admin/restore", restoreDatabaseHandler)
-	mux.HandleFunc("/api/loans", loansHandler)
-	mux.HandleFunc("/api/loans/", loanUpdateHandler)
-	mux.HandleFunc("/api/clients", clientsHandler)
-	mux.HandleFunc("/api/clients/", clientUpdateHandler)
-	mux.HandleFunc("/api/affiliates", affiliatesHandler)
-	mux.HandleFunc("/api/affiliates/", affiliateUpdateHandler)
-	mux.HandleFunc("/api/blacklist", blacklistHandler)
-	mux.HandleFunc("/api/blacklist/", blacklistUpdateHandler)
-	mux.HandleFunc("/api/logs", logsHandler)
-	mux.HandleFunc("/api/settings", settingsHandler)
-	mux.HandleFunc("/api/dashboard/summary", dashboardSummaryHandler)
+	mux.HandleFunc("/api/users", authMiddleware(usersHandler))
+	mux.HandleFunc("/api/users/", authMiddleware(userDetailHandler))
+	mux.HandleFunc("/api/loans", authMiddleware(loansHandler))
+	mux.HandleFunc("/api/loans/", authMiddleware(loanUpdateHandler))
+	mux.HandleFunc("/api/clients", authMiddleware(clientsHandler))
+	mux.HandleFunc("/api/clients/", authMiddleware(clientUpdateHandler))
+	mux.HandleFunc("/api/affiliates", authMiddleware(affiliatesHandler))
+	mux.HandleFunc("/api/affiliates/", authMiddleware(affiliateUpdateHandler))
+	mux.HandleFunc("/api/blacklist", authMiddleware(blacklistHandler))
+	mux.HandleFunc("/api/blacklist/", authMiddleware(blacklistUpdateHandler))
+	mux.HandleFunc("/api/logs", authMiddleware(logsHandler))
+	mux.HandleFunc("/api/settings", authMiddleware(settingsHandler))
+	mux.HandleFunc("/api/dashboard/summary", authMiddleware(dashboardSummaryHandler))
 
-	// --- FRONTEND ---
+	mux.HandleFunc("/api/admin/reset", adminMiddleware(resetDatabaseHandler))
+	mux.HandleFunc("/api/admin/restore", adminMiddleware(restoreDatabaseHandler))
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		possiveisCaminhos := []string{"dist", "backend/dist", "../backend/dist"}
 		var caminhoDist string
@@ -358,7 +407,7 @@ func main() {
 			}
 		}
 		if caminhoDist == "" {
-			http.Error(w, "Erro Crítico: Pasta 'dist' do Frontend não encontrada.", http.StatusInternalServerError)
+			http.Error(w, "Erro Crítico: Pasta 'dist' não encontrada.", http.StatusInternalServerError)
 			return
 		}
 		path := filepath.Join(caminhoDist, r.URL.Path)
@@ -379,25 +428,32 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	log.Println("Server starting on :" + port)
+	log.Println("🚀 Servidor rodando na porta :" + port)
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
 
 func seedAdminUser() {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var user User
 	err := userCollection.FindOne(ctx, bson.M{"username": "admin@creditnow.com"}).Decode(&user)
 	if err == mongo.ErrNoDocuments {
 		log.Println("⚠️ Admin não encontrado. Criando agora...")
-		passwordHash, _ := hashPassword("123456")
+		hash, _ := hashPassword("123456")
 		user = User{
-			ID: strconv.FormatInt(time.Now().UnixNano(), 10), Name: "Administrador Mestre", Username: "admin@creditnow.com", Password: passwordHash, Role: "ADMIN",
+			ID:       primitive.NewObjectID().Hex(),
+			Name:     "Admin",
+			Username: "admin@creditnow.com",
+			Password: hash,
+			Role:     "ADMIN",
 		}
 		userCollection.InsertOne(ctx, user)
-		log.Println("✅ SUCESSO: Usuário Admin criado!")
+	} else if err == nil && user.Role != "ADMIN" {
+		userCollection.UpdateOne(ctx, bson.M{"username": "admin@creditnow.com"}, bson.M{"$set": bson.M{"role": "ADMIN"}})
 	}
 }
+
+// --- HANDLERS ---
 
 func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -419,8 +475,6 @@ func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Sistema resetado."})
 }
 
-// --- HANDLERS ---
-
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -431,108 +485,372 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var storedUser User
 	if err := userCollection.FindOne(ctx, bson.M{"username": creds.Username}).Decode(&storedUser); err != nil {
-		logAction("LOGIN FALHA", "User: "+creds.Username)
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 	if !checkPasswordHash(creds.Password, storedUser.Password) {
-		logAction("LOGIN FALHA", "Senha errada: "+creds.Username)
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
-	logAction("LOGIN SUCESSO", "User: "+creds.Username)
-	expirationTime := time.Now().Add(24 * time.Hour)
-	claims := &Claims{Username: creds.Username, RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(expirationTime)}}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, _ := token.SignedString(jwtKey)
+	exp := time.Now().Add(24 * time.Hour)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, &Claims{Username: creds.Username, RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(exp)}})
+	tokenStr, _ := token.SignedString(jwtKey)
 	storedUser.Password = ""
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"token": tokenString, "user": storedUser})
+	json.NewEncoder(w).Encode(map[string]interface{}{"token": tokenStr, "user": storedUser})
 }
 
 func usersHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-
 	switch r.Method {
 	case http.MethodGet:
 		cursor, _ := userCollection.Find(ctx, bson.M{})
-		defer cursor.Close(ctx)
 		var results []User
 		cursor.All(ctx, &results)
 		for i := range results {
 			results[i].Password = ""
 		}
 		json.NewEncoder(w).Encode(results)
-
 	case http.MethodPost:
 		var u User
-		if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
-			http.Error(w, "JSON Inválido", http.StatusBadRequest)
-			return
-		}
-
-		fmt.Printf("DEBUG: Recebido Usuário: %+v\n", u)
-
+		json.NewDecoder(r.Body).Decode(&u)
 		if u.Username == "" || u.Password == "" {
-			http.Error(w, "Erro: Email e Senha são obrigatórios", http.StatusBadRequest)
+			http.Error(w, "Incompleto", http.StatusBadRequest)
 			return
 		}
-
 		count, _ := userCollection.CountDocuments(ctx, bson.M{"username": u.Username})
 		if count > 0 {
-			http.Error(w, "Erro: Usuário já existe", http.StatusConflict)
+			http.Error(w, "Já existe", http.StatusConflict)
 			return
 		}
-		hash, _ := hashPassword(u.Password)
-		u.Password = hash
-
-		if u.ID == "" {
-			u.ID = primitive.NewObjectID().Hex()
-		}
+		u.Password, _ = hashPassword(u.Password)
+		u.ID = primitive.NewObjectID().Hex()
 		u.Role = "OPERATOR"
-
-		_, err := userCollection.InsertOne(ctx, u)
-		if err != nil {
-			fmt.Printf("ERRO CRÍTICO MONGO: %v\n", err)
-			http.Error(w, "Erro no Banco de Dados: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		logAction("NOVO USUÁRIO", u.Username)
-		u.Password = ""
+		userCollection.InsertOne(ctx, u)
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(u)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
 func userDetailHandler(w http.ResponseWriter, r *http.Request) {
 	email := strings.TrimPrefix(r.URL.Path, "/api/users/")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	switch r.Method {
 	case http.MethodPut:
-		var updateData struct {
+		var d struct {
 			Password string `json:"password"`
 		}
-		json.NewDecoder(r.Body).Decode(&updateData)
-		if updateData.Password != "" {
-			hash, _ := hashPassword(updateData.Password)
+		json.NewDecoder(r.Body).Decode(&d)
+		if d.Password != "" {
+			hash, _ := hashPassword(d.Password)
 			userCollection.UpdateOne(ctx, bson.M{"username": email}, bson.M{"$set": bson.M{"password": hash}})
-			logAction("ALTERAÇÃO SENHA", email)
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]string{"message": "Senha atualizada"})
 		}
 	case http.MethodDelete:
 		userCollection.DeleteOne(ctx, bson.M{"username": email})
-		logAction("REMOÇÃO USUÁRIO", email)
 		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func loansHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	switch r.Method {
+	case http.MethodGet:
+		cursor, _ := loanCollection.Find(ctx, bson.M{})
+		var results []Loan
+		cursor.All(ctx, &results)
+		if results == nil {
+			results = []Loan{}
+		}
+		json.NewEncoder(w).Encode(results)
+	case http.MethodPost:
+		var l Loan
+		json.NewDecoder(r.Body).Decode(&l)
+		var c Client
+		clientCollection.FindOne(ctx, bson.M{"name": l.Client}).Decode(&c)
+		count, _ := blacklistCollection.CountDocuments(ctx, bson.M{"cpf": c.CPF})
+		if count > 0 {
+			http.Error(w, "Blacklist", http.StatusForbidden)
+			return
+		}
+		if l.History == nil {
+			l.History = []PaymentRecord{}
+		}
+		loanCollection.InsertOne(ctx, l)
+		logAction("NOVO EMPRÉSTIMO", l.Client)
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(l)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/loans/")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	switch r.Method {
+	case http.MethodPut:
+		var l Loan
+		json.NewDecoder(r.Body).Decode(&l)
+		var cap, jur float64
+		for _, rec := range l.History {
+			if rec.Type != "Abertura" && rec.Type != "Acordo" {
+				cap += rec.CapitalPaid
+				jur += rec.InterestPaid
+			}
+		}
+		l.TotalPaidCapital = cap
+		l.TotalPaidInterest = jur
+		if l.Amount <= 0.10 {
+			l.Status = "Pago"
+		} else if l.Status == "Pago" {
+			l.Status = "Em Dia"
+		}
+		loanCollection.ReplaceOne(ctx, bson.M{"id": id}, l)
+		json.NewEncoder(w).Encode(l)
+	case http.MethodDelete:
+		loanCollection.DeleteOne(ctx, bson.M{"id": id})
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func clientsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	switch r.Method {
+	case http.MethodGet:
+		cursor, _ := clientCollection.Find(ctx, bson.M{})
+		var results []Client
+		cursor.All(ctx, &results)
+		if results == nil {
+			results = []Client{}
+		}
+		json.NewEncoder(w).Encode(results)
+	case http.MethodPost:
+		var c Client
+		json.NewDecoder(r.Body).Decode(&c)
+		count, _ := blacklistCollection.CountDocuments(ctx, bson.M{"cpf": c.CPF})
+		if count > 0 {
+			http.Error(w, "Blacklist", http.StatusForbidden)
+			return
+		}
+		if c.ID == 0 {
+			c.ID = time.Now().UnixNano() / 1e6
+		}
+		clientCollection.InsertOne(ctx, c)
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(c)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func clientUpdateHandler(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/clients/")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	filter := bson.M{"id": id}
+	if err != nil {
+		filter = bson.M{"cpf": idStr}
+	}
+	switch r.Method {
+	case http.MethodPut:
+		var c Client
+		json.NewDecoder(r.Body).Decode(&c)
+		clientCollection.ReplaceOne(ctx, filter, c)
+		json.NewEncoder(w).Encode(c)
+	case http.MethodDelete:
+		clientCollection.DeleteOne(ctx, filter)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func affiliatesHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	switch r.Method {
+	case http.MethodGet:
+		cursor, _ := affiliateCollection.Find(ctx, bson.M{})
+		var res []Affiliate
+		cursor.All(ctx, &res)
+		if res == nil {
+			res = []Affiliate{}
+		}
+		json.NewEncoder(w).Encode(res)
+	case http.MethodPost:
+		var a Affiliate
+		json.NewDecoder(r.Body).Decode(&a)
+		if a.ID == "" {
+			a.ID = primitive.NewObjectID().Hex()
+		}
+		affiliateCollection.InsertOne(ctx, a)
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(a)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func affiliateUpdateHandler(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/affiliates/")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	switch r.Method {
+	case http.MethodPut:
+		var a Affiliate
+		json.NewDecoder(r.Body).Decode(&a)
+		affiliateCollection.ReplaceOne(ctx, bson.M{"id": id}, a)
+		json.NewEncoder(w).Encode(a)
+	case http.MethodDelete:
+		affiliateCollection.DeleteOne(ctx, bson.M{"id": id})
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func blacklistHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	switch r.Method {
+	case http.MethodGet:
+		cursor, _ := blacklistCollection.Find(ctx, bson.M{})
+		var res []BlacklistEntry
+		cursor.All(ctx, &res)
+		if res == nil {
+			res = []BlacklistEntry{}
+		}
+		json.NewEncoder(w).Encode(res)
+	case http.MethodPost:
+		var b BlacklistEntry
+		json.NewDecoder(r.Body).Decode(&b)
+		if b.ID == "" {
+			b.ID = primitive.NewObjectID().Hex()
+		}
+		blacklistCollection.InsertOne(ctx, b)
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(b)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func blacklistUpdateHandler(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/blacklist/")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	switch r.Method {
+	case http.MethodPut:
+		var b BlacklistEntry
+		json.NewDecoder(r.Body).Decode(&b)
+		blacklistCollection.ReplaceOne(ctx, bson.M{"id": id}, b)
+		json.NewEncoder(w).Encode(b)
+	case http.MethodDelete:
+		blacklistCollection.DeleteOne(ctx, bson.M{"id": id})
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func settingsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	switch r.Method {
+	case http.MethodGet:
+		var s Settings
+		err := settingsCollection.FindOne(ctx, bson.M{}).Decode(&s)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{})
+		} else {
+			json.NewEncoder(w).Encode(s)
+		}
+	case http.MethodPost, http.MethodPut:
+		var s Settings
+		json.NewDecoder(r.Body).Decode(&s)
+		opts := options.Replace().SetUpsert(true)
+		settingsCollection.ReplaceOne(ctx, bson.M{}, s, opts)
+		json.NewEncoder(w).Encode(s)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func logsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if r.Method == http.MethodGet {
+		cursor, _ := logCollection.Find(ctx, bson.M{})
+		var res []LogEntry
+		cursor.All(ctx, &res)
+		if res == nil {
+			res = []LogEntry{}
+		}
+		json.NewEncoder(w).Encode(res)
+	} else {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func dashboardSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	totalActive, _ := loanCollection.CountDocuments(ctx, bson.M{"status": bson.M{"$ne": "Pago"}})
+	totalOverdue, _ := loanCollection.CountDocuments(ctx, bson.M{"status": "Atrasado"})
+	totalClients, _ := clientCollection.CountDocuments(ctx, bson.M{})
+
+	pipeline := []bson.M{
+		{"$match": bson.M{"status": bson.M{"$ne": "Pago"}}},
+		{"$group": bson.M{"_id": nil, "totalCapital": bson.M{"$sum": bson.M{"$subtract": []interface{}{bson.M{"$ifNull": []interface{}{"$amount", 0}}, bson.M{"$ifNull": []interface{}{"$totalPaidCapital", 0}}}}}}},
+	}
+	cursorCap, _ := loanCollection.Aggregate(ctx, pipeline)
+	var resCap []bson.M
+	cursorCap.All(ctx, &resCap)
+	var capital float64
+	if len(resCap) > 0 {
+		if val, ok := resCap[0]["totalCapital"].(float64); ok {
+			capital = val
+		}
+	}
+
+	today := time.Now().Format("2006-01-02")
+	cursorToday, _ := loanCollection.Find(ctx, bson.M{"history.date": bson.M{"$regex": today}})
+	var loansToday []Loan
+	cursorToday.All(ctx, &loansToday)
+	var recToday float64
+	for _, l := range loansToday {
+		for _, h := range l.History {
+			if strings.HasPrefix(h.Date, today) && h.Type != "Abertura" && h.Type != "Acordo" {
+				recToday += h.Amount
+			}
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"totalActive":       totalActive,
+		"totalOverdue":      totalOverdue,
+		"totalCapital":      capital,
+		"clientsRegistered": totalClients,
+		"recoveredToday":    recToday,
+	})
 }
 
 func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
@@ -554,25 +872,25 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	userCollection.Drop(ctx)
 	settingsCollection.Drop(ctx)
 	if len(data.Clients) > 0 {
-		newClients := make([]interface{}, len(data.Clients))
-		for i, v := range data.Clients {
-			newClients[i] = v
+		var c []interface{}
+		for _, v := range data.Clients {
+			c = append(c, v)
 		}
-		clientCollection.InsertMany(ctx, newClients)
+		clientCollection.InsertMany(ctx, c)
 	}
 	if len(data.Loans) > 0 {
-		newLoans := make([]interface{}, len(data.Loans))
-		for i, v := range data.Loans {
-			newLoans[i] = v
+		var l []interface{}
+		for _, v := range data.Loans {
+			l = append(l, v)
 		}
-		loanCollection.InsertMany(ctx, newLoans)
+		loanCollection.InsertMany(ctx, l)
 	}
 	if len(data.Users) > 0 {
-		newUsers := make([]interface{}, len(data.Users))
-		for i, v := range data.Users {
-			newUsers[i] = v
+		var u []interface{}
+		for _, v := range data.Users {
+			u = append(u, v)
 		}
-		userCollection.InsertMany(ctx, newUsers)
+		userCollection.InsertMany(ctx, u)
 	} else {
 		seedAdminUser()
 	}
@@ -580,355 +898,4 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	logAction("RESTAURAÇÃO", "Sistema restaurado.")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Sucesso!"})
-}
-
-// --- DEMAIS HANDLERS (LOANS COM NOVOS CAMPOS) ---
-
-func loansHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	switch r.Method {
-	case http.MethodGet:
-		cursor, _ := loanCollection.Find(ctx, bson.M{})
-		var results []Loan
-		cursor.All(ctx, &results)
-		if results == nil {
-			results = []Loan{}
-		}
-		json.NewEncoder(w).Encode(results)
-	case http.MethodPost:
-		var l Loan
-		json.NewDecoder(r.Body).Decode(&l)
-
-		var clientData Client
-		err := clientCollection.FindOne(ctx, bson.M{"name": l.Client}).Decode(&clientData)
-		if err == nil {
-			countBL, _ := blacklistCollection.CountDocuments(ctx, bson.M{"cpf": clientData.CPF})
-			if countBL > 0 {
-				http.Error(w, "OPERAÇÃO BLOQUEADA: Este cliente consta na Lista Negra.", http.StatusForbidden)
-				return
-			}
-		}
-
-		if l.History == nil {
-			l.History = []PaymentRecord{}
-		}
-		loanCollection.InsertOne(ctx, l)
-		logAction("NOVO EMPRÉSTIMO", fmt.Sprintf("%s - R$ %.2f", l.Client, l.Amount))
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(l)
-	}
-}
-
-func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/loans/")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	switch r.Method {
-	case http.MethodPut:
-		var l Loan
-		json.NewDecoder(r.Body).Decode(&l)
-		var calcCapital, calcInterest float64
-		for _, record := range l.History {
-			tipo := strings.ToLower(record.Type)
-			if strings.Contains(tipo, "empréstimo") || strings.Contains(tipo, "contrato") || strings.Contains(tipo, "abertura") {
-				continue
-			}
-			if record.CapitalPaid > 0 || record.InterestPaid > 0 {
-				calcCapital += record.CapitalPaid
-				calcInterest += record.InterestPaid
-			} else {
-				if strings.Contains(tipo, "juros") {
-					calcInterest += record.Amount
-				} else {
-					calcCapital += record.Amount
-				}
-			}
-		}
-		l.TotalPaidCapital = calcCapital
-		l.TotalPaidInterest = calcInterest
-		if l.Amount <= 0.10 {
-			l.Status = "Pago"
-		} else if l.Status == "Pago" {
-			l.Status = "Em Dia"
-		}
-		loanCollection.ReplaceOne(ctx, bson.M{"id": id}, l)
-		logAction("ATUALIZAÇÃO CONTRATO", id)
-		json.NewEncoder(w).Encode(l)
-	case http.MethodDelete:
-		loanCollection.DeleteOne(ctx, bson.M{"id": id})
-		logAction("EXCLUSÃO EMPRÉSTIMO", id)
-		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
-func clientsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	switch r.Method {
-	case http.MethodGet:
-		cursor, _ := clientCollection.Find(ctx, bson.M{})
-		var results []Client
-		cursor.All(ctx, &results)
-		if results == nil {
-			results = []Client{}
-		}
-		json.NewEncoder(w).Encode(results)
-	case http.MethodPost:
-		var c Client
-		json.NewDecoder(r.Body).Decode(&c)
-
-		countBL, _ := blacklistCollection.CountDocuments(ctx, bson.M{"cpf": c.CPF})
-		if countBL > 0 {
-			http.Error(w, "CPF BLOQUEADO: Este CPF consta na Lista Negra.", http.StatusForbidden)
-			return
-		}
-
-		if c.ID == 0 {
-			c.ID = time.Now().UnixNano() / 1e6
-		}
-		clientCollection.InsertOne(ctx, c)
-		logAction("NOVO CLIENTE", c.Name)
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(c)
-	}
-}
-
-func clientUpdateHandler(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/clients/")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	filter := bson.M{"id": id}
-	if err != nil {
-		filter = bson.M{"cpf": idStr}
-	}
-	switch r.Method {
-	case http.MethodPut:
-		var c Client
-		json.NewDecoder(r.Body).Decode(&c)
-		clientCollection.ReplaceOne(ctx, filter, c)
-		logAction("EDIÇÃO CLIENTE", c.Name)
-		json.NewEncoder(w).Encode(c)
-	case http.MethodDelete:
-		clientCollection.DeleteOne(ctx, filter)
-		logAction("EXCLUSÃO CLIENTE", idStr)
-		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
-func affiliatesHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	switch r.Method {
-	case http.MethodGet:
-		cursor, _ := affiliateCollection.Find(ctx, bson.M{})
-		var results []Affiliate
-		cursor.All(ctx, &results)
-		if results == nil {
-			results = []Affiliate{}
-		}
-		json.NewEncoder(w).Encode(results)
-	case http.MethodPost:
-		var a Affiliate
-		json.NewDecoder(r.Body).Decode(&a)
-		if a.ID == "" {
-			a.ID = strconv.FormatInt(time.Now().UnixNano(), 10)
-		}
-		affiliateCollection.InsertOne(ctx, a)
-		logAction("NOVO AFILIADO", a.Name)
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(a)
-	}
-}
-
-func affiliateUpdateHandler(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/affiliates/")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	switch r.Method {
-	case http.MethodPut:
-		var a Affiliate
-		json.NewDecoder(r.Body).Decode(&a)
-		affiliateCollection.ReplaceOne(ctx, bson.M{"id": id}, a)
-		logAction("EDIÇÃO AFILIADO", a.Name)
-		json.NewEncoder(w).Encode(a)
-	case http.MethodDelete:
-		affiliateCollection.DeleteOne(ctx, bson.M{"id": id})
-		logAction("EXCLUSÃO AFILIADO", id)
-		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
-func blacklistHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	switch r.Method {
-	case http.MethodGet:
-		cursor, _ := blacklistCollection.Find(ctx, bson.M{})
-		var results []BlacklistEntry
-		cursor.All(ctx, &results)
-		if results == nil {
-			results = []BlacklistEntry{}
-		}
-		json.NewEncoder(w).Encode(results)
-	case http.MethodPost:
-		var b BlacklistEntry
-		json.NewDecoder(r.Body).Decode(&b)
-		if b.ID == "" {
-			b.ID = strconv.FormatInt(time.Now().UnixNano(), 10)
-		}
-		blacklistCollection.InsertOne(ctx, b)
-		logAction("BLACKLIST ADIÇÃO", b.Name)
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(b)
-	}
-}
-
-func blacklistUpdateHandler(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/blacklist/")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	switch r.Method {
-	case http.MethodPut:
-		var b BlacklistEntry
-		json.NewDecoder(r.Body).Decode(&b)
-		blacklistCollection.ReplaceOne(ctx, bson.M{"id": id}, b)
-		json.NewEncoder(w).Encode(b)
-	case http.MethodDelete:
-		blacklistCollection.DeleteOne(ctx, bson.M{"id": id})
-		logAction("BLACKLIST REMOÇÃO", id)
-		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
-func settingsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	switch r.Method {
-	case http.MethodGet:
-		var s Settings
-		err := settingsCollection.FindOne(ctx, bson.M{}).Decode(&s)
-		if err != nil {
-			if err == mongo.ErrNoDocuments {
-				json.NewEncoder(w).Encode(map[string]interface{}{})
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		json.NewEncoder(w).Encode(s)
-	case http.MethodPost, http.MethodPut:
-		var s Settings
-		if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		opts := options.Replace().SetUpsert(true)
-		_, err := settingsCollection.ReplaceOne(ctx, bson.M{}, s, opts)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		logAction("CONFIGURAÇÃO", "Configurações globais do sistema foram alteradas")
-		json.NewEncoder(w).Encode(s)
-	}
-}
-
-func logsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	if r.Method == http.MethodGet {
-		cursor, err := logCollection.Find(ctx, bson.M{})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		var results []LogEntry
-		cursor.All(ctx, &results)
-		if results == nil {
-			results = []LogEntry{}
-		}
-		json.NewEncoder(w).Encode(results)
-	}
-}
-
-// --- DASHBOARD ATUALIZADO (DRILL-DOWN) ---
-func dashboardSummaryHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	// 1. Contagem Básica
-	totalActiveContracts, _ := loanCollection.CountDocuments(ctx, bson.M{"status": bson.M{"$ne": "Pago"}})
-	totalOverdue, _ := loanCollection.CountDocuments(ctx, bson.M{"status": "Atrasado"})
-	totalClientsRegistered, _ := clientCollection.CountDocuments(ctx, bson.M{}) // Total Cadastrados
-
-	// 2. Clientes com Dívida Ativa (Drill-down)
-	// Agrupamos contratos não pagos pelo nome do cliente para contar quantos CPF únicos devem
-	pipelineDebtors := []bson.M{
-		{"$match": bson.M{"status": bson.M{"$ne": "Pago"}}},
-		{"$group": bson.M{"_id": "$client"}},
-		{"$count": "count"},
-	}
-	cursorDebtors, _ := loanCollection.Aggregate(ctx, pipelineDebtors)
-	var resultDebtors []bson.M
-	cursorDebtors.All(ctx, &resultDebtors)
-	clientsWithDebt := 0
-	if len(resultDebtors) > 0 {
-		if val, ok := resultDebtors[0]["count"].(int32); ok {
-			clientsWithDebt = int(val)
-		}
-	}
-
-	// 3. Capital em Aberto (Soma)
-	pipelineCapital := []bson.M{
-		{"$match": bson.M{"status": bson.M{"$ne": "Pago"}}},
-		{"$group": bson.M{
-			"_id": nil,
-			"totalCapital": bson.M{"$sum": bson.M{"$subtract": []interface{}{
-				bson.M{"$ifNull": []interface{}{"$amount", 0}},
-				bson.M{"$ifNull": []interface{}{"$totalPaidCapital", 0}},
-			}}},
-		}},
-	}
-	cursorCap, _ := loanCollection.Aggregate(ctx, pipelineCapital)
-	var resultsCap []bson.M
-	cursorCap.All(ctx, &resultsCap)
-	var totalCapital float64
-	if len(resultsCap) > 0 {
-		if val, ok := resultsCap[0]["totalCapital"].(float64); ok {
-			totalCapital = val
-		}
-	}
-
-	// 4. Recebido Hoje
-	startOfDay := time.Now().Format("2006-01-02")
-	cursorToday, _ := loanCollection.Find(ctx, bson.M{
-		"history.date": bson.M{"$regex": startOfDay},
-	})
-	var loansToday []Loan
-	cursorToday.All(ctx, &loansToday)
-	var recoveredToday float64
-	for _, loan := range loansToday {
-		for _, rec := range loan.History {
-			if strings.HasPrefix(rec.Date, startOfDay) {
-				tipo := strings.ToLower(rec.Type)
-				if strings.Contains(tipo, "abertura") || strings.Contains(tipo, "empréstimo") || strings.Contains(tipo, "contrato") {
-					continue
-				}
-				recoveredToday += rec.Amount
-			}
-		}
-	}
-
-	summary := map[string]interface{}{
-		"totalActive":            totalActiveContracts,   // Contratos Abertos
-		"totalOverdue":           totalOverdue,           // Contratos Atrasados
-		"totalCapital":           totalCapital,           // Dinheiro na Rua
-		"clientsRegistered":      totalClientsRegistered, // Total de Clientes no Banco
-		"clientsWithActiveLoans": clientsWithDebt,        // Clientes que devem
-		"recoveredToday":         recoveredToday,         // Recebido Hoje
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(summary)
 }

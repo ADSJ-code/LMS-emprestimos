@@ -4,7 +4,7 @@ import {
   MoreVertical, Loader2, RefreshCw, ShieldAlert, ShieldCheck, 
   Calculator, FileText, Check, ChevronRight, DollarSign, 
   Printer, Eye, TrendingUp, TrendingDown, History, Download, Calendar, AlertTriangle, Info, PartyPopper, UserCheck,
-  Percent, Landmark, CreditCard, Repeat
+  Percent, Landmark, CreditCard, Repeat, BellRing, X, FileSignature
 } from 'lucide-react';
 
 import ExcelJS from 'exceljs';
@@ -33,6 +33,7 @@ const Billing = () => {
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isAgreementModalOpen, setIsAgreementModalOpen] = useState(false);
+  const [isDailyAlertOpen, setIsDailyAlertOpen] = useState(false); // NOVO: Pop-up do dia
   const [activeStage, setActiveStage] = useState<1 | 2>(1);
   const [detailTab, setDetailTab] = useState<'info' | 'history'>('info');
 
@@ -68,6 +69,7 @@ const Billing = () => {
   const [availableClients, setAvailableClients] = useState<Client[]>([]);
   const [summary, setSummary] = useState({ today: 0, overdue: 0, received: 0 });
   const [loans, setLoans] = useState<Loan[]>([]);
+  const [todaysLoans, setTodaysLoans] = useState<Loan[]>([]); // Lista filtrada de hoje
 
   // --- FORMULÁRIO DE CONTRATO ---
   const [formData, setFormData] = useState({ 
@@ -203,8 +205,24 @@ const Billing = () => {
       return { interest, capital: capital > 0 ? capital : 0 };
   };
 
-  // --- CÁLCULO DOS TOTAIS NO TOPO DA TELA ---
+  // --- CÁLCULO DOS TOTAIS NO TOPO DA TELA + ALERTA DO DIA ---
   useEffect(() => {
+    const today = new Date(); today.setHours(0,0,0,0);
+    
+    // Lista de hoje (para o Pop-up)
+    const dueToday = loans.filter(l => {
+       const d = new Date(l.nextDue); d.setMinutes(d.getMinutes() + d.getTimezoneOffset()); d.setHours(0,0,0,0);
+       return d.getTime() === today.getTime() && l.status !== 'Pago';
+    });
+    setTodaysLoans(dueToday);
+
+    // Se houver cobrança hoje e for a primeira vez carregando, abre o alerta
+    if (dueToday.length > 0 && loans.length > 0) {
+       // Pequeno delay para garantir que a UI carregou
+       const timer = setTimeout(() => setIsDailyAlertOpen(true), 1000);
+       return () => clearTimeout(timer);
+    }
+
     const totalOverdue = loans.reduce((acc, l) => {
       if (l.status === 'Pago') return acc;
       const realStatus = getLoanRealStatus(l);
@@ -221,12 +239,8 @@ const Billing = () => {
       return acc;
     }, 0);
     const totalProfit = loans.reduce((acc, l) => acc + (l.totalPaidInterest || 0), 0);
-    const totalToday = loans.filter(l => {
-        const today = new Date(); today.setHours(0,0,0,0);
-        const dueDate = new Date(l.nextDue); dueDate.setMinutes(dueDate.getMinutes() + dueDate.getTimezoneOffset()); dueDate.setHours(0,0,0,0);
-        return dueDate.getTime() === today.getTime() && l.status !== 'Pago';
-    }).reduce((acc, l) => acc + l.installmentValue, 0);
-    setSummary({ overdue: totalOverdue, received: totalProfit, today: totalToday });
+    const totalTodayValue = dueToday.reduce((acc, l) => acc + l.installmentValue, 0);
+    setSummary({ overdue: totalOverdue, received: totalProfit, today: totalTodayValue });
   }, [loans]);
 
   // --- SIMULAÇÃO DE PARCELAS ---
@@ -245,10 +259,9 @@ const Billing = () => {
         if (formData.interestType === 'SIMPLE') {
             // No juros simples (pagamento mínimo), a parcela é só o juro mensal
             pmt = amount * i; 
-            // Se for semanal ou diário, ajustamos (implementação futura no cálculo, por enquanto assume taxa mensal)
             totalInt = pmt * months;
         } else {
-            // Price
+            // Price (Parcela Fixa)
             pmt = i > 0 ? amount * ( (i * Math.pow(1 + i, months)) / (Math.pow(1 + i, months) - 1) ) : amount / months;
             totalInt = (pmt * months) - amount;
         }
@@ -267,12 +280,9 @@ const Billing = () => {
     }
   }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType]);
 
-  // --- ABERTURA DO MODAL DE PAGAMENTO (CORRIGIDO) ---
+  // --- ABERTURA DO MODAL DE PAGAMENTO ---
   const handleOpenPayment = (loan: Loan) => {
-    // 1. Define o empréstimo selecionado
     setSelectedLoan(loan);
-    
-    // 2. Prepara dados iniciais
     const now = new Date();
     const offsetMs = now.getTimezoneOffset() * 60 * 1000;
     const localISOTime = (new Date(now.getTime() - offsetMs)).toISOString().slice(0, 16);
@@ -282,7 +292,6 @@ const Billing = () => {
     setPayTotal(0);
     setSettleInterest(false); 
 
-    // 3. Calcula acumulados do ciclo
     const dueDate = new Date(loan.nextDue);
     const cycleStart = new Date(dueDate);
     cycleStart.setMonth(cycleStart.getMonth() - 1);
@@ -302,9 +311,8 @@ const Billing = () => {
     }
     setCycleAcc({ interest: accInt, capital: accCap });
     
-    // 4. Manipula os estados dos modais
-    setIsDetailsOpen(false); // Fecha o de detalhes se estiver aberto
-    setIsPaymentModalOpen(true); // Abre o de pagamento
+    setIsDetailsOpen(false);
+    setIsPaymentModalOpen(true);
   };
 
   useEffect(() => {
@@ -320,12 +328,14 @@ const Billing = () => {
     const valInterest = parseFloat(payInterest) || 0;
     const valTotal = valCapital + valInterest;
 
-    if (valTotal <= 0) { alert("Valor deve ser maior que zero."); return; }
+    // Permitir valor 0 apenas se for correção, mas idealmente deve ser > 0
+    if (valTotal < 0) { alert("Valor não pode ser negativo."); return; }
 
     const expectedInterest = selectedLoan.amount * (selectedLoan.interestRate / 100);
     const totalInterestInCycle = valInterest + cycleAcc.interest;
 
-    if (totalInterestInCycle < (expectedInterest - 0.10) && !settleInterest) {
+    // Validação de pagamento parcial
+    if (totalInterestInCycle < (expectedInterest - 0.10) && !settleInterest && valTotal > 0) {
         const remaining = expectedInterest - totalInterestInCycle;
         const userConfirmed = window.confirm(
             `⚠️ ATENÇÃO: Faltam R$ ${formatMoney(remaining)} de Juros neste mês.\n` +
@@ -361,10 +371,19 @@ const Billing = () => {
         updatedLoan.status = 'Pago';
         updatedLoan.installments = 0;
     } else {
+        // Se tinha acordo, volta para Em Dia ao pagar, ou mantém se for parcial?
+        // Geralmente volta para o fluxo normal 'Em Dia' se pagou o que devia.
         updatedLoan.status = 'Em Dia';
+        
+        // Lógica de avanço de parcela
         if (valCapital > 0 || settleInterest || cycleCompletedNow) {
              const currentDue = new Date(updatedLoan.nextDue);
-             currentDue.setMonth(currentDue.getMonth() + 1);
+             
+             // Avança conforme periodicidade
+             if (updatedLoan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
+             else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
+             else currentDue.setMonth(currentDue.getMonth() + 1);
+             
              updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
              
              const isSimple = updatedLoan.interestType === 'SIMPLE';
@@ -411,9 +430,18 @@ const Billing = () => {
       let updatedLoan = { ...selectedLoan };
       updatedLoan.status = 'Acordo';
       updatedLoan.nextDue = agreementDate;
-      // Registra o acordo no histórico
+      
       const note = `ACORDO: Vencimento alterado para ${new Date(agreementDate).toLocaleDateString('pt-BR')} com valor R$ ${formatMoney(parseFloat(agreementValue))}.`;
-      updatedLoan.history = [...(updatedLoan.history || []), { date: new Date().toISOString(), amount: 0, type: 'Acordo', note, capitalPaid: 0, interestPaid: 0 }];
+      
+      // Registra como evento no histórico, mas sem valor financeiro
+      updatedLoan.history = [...(updatedLoan.history || []), { 
+          date: new Date().toISOString(), 
+          amount: 0, 
+          type: 'Acordo', 
+          note, 
+          capitalPaid: 0, 
+          interestPaid: 0 
+      }];
       
       try {
           await loanService.update(selectedLoan.id, updatedLoan);
@@ -434,12 +462,12 @@ const Billing = () => {
         { header: 'ID', key: 'id', width: 10 },
         { header: 'Cliente', key: 'client', width: 30 },
         { header: 'Vencimento', key: 'due', width: 12 },
-        { header: 'Status', key: 'status', width: 12 },
-        { header: 'Parcela (Nº)', key: 'instNum', width: 15 },
+        { header: 'Status', key: 'status', width: 15 },
+        { header: 'Parcela Ref.', key: 'instNum', width: 18 }, // Nova Coluna
         { header: 'Data Baixa', key: 'paidDate', width: 15 },
-        { header: 'Valor Pago', key: 'amountPaid', width: 15 },
-        { header: 'Capital', key: 'capital', width: 15 },
-        { header: 'Juros', key: 'interest', width: 15 }
+        { header: 'Valor Total Pago', key: 'amountPaid', width: 18 },
+        { header: 'Amortização', key: 'capital', width: 15 },
+        { header: 'Juros (Lucro)', key: 'interest', width: 15 }
     ];
 
     const loansToProcess = selectedIds.length > 0 ? loans.filter(l => selectedIds.includes(l.id)) : loans;
@@ -449,15 +477,18 @@ const Billing = () => {
             const start = new Date(excelStart); start.setHours(0,0,0,0);
             const end = new Date(excelEnd); end.setHours(23,59,59,999);
             
-            // --- CORREÇÃO DO ERRO DE HISTÓRICO INDEFINIDO ---
+            // Filtra histórico por data
             (loan.history || []).forEach((h, index) => {
                 const hDate = new Date(h.date);
                 if (hDate >= start && hDate <= end && h.amount > 0) {
+                    // Tenta estimar o número da parcela pela ordem do histórico
+                    const parcelaRef = index + 1;
+                    
                     worksheet.addRow({
                         id: loan.id, client: loan.client,
                         due: new Date(loan.nextDue),
                         status: getLoanRealStatus(loan),
-                        instNum: `${index + 1}/${(loan.history || []).length}`,
+                        instNum: `Pagto ${parcelaRef}`, 
                         paidDate: new Date(h.date).toLocaleDateString('pt-BR'),
                         amountPaid: h.amount,
                         capital: h.capitalPaid || 0,
@@ -466,6 +497,7 @@ const Billing = () => {
                 }
             });
         } else {
+            // Relatório Geral (Saldo Atual)
             worksheet.addRow({
                 id: loan.id, client: loan.client,
                 due: new Date(loan.nextDue), status: getLoanRealStatus(loan),
@@ -476,7 +508,7 @@ const Billing = () => {
     });
 
     const buffer = await workbook.xlsx.writeBuffer();
-    saveAs(new Blob([buffer]), `Relatorio_Financeiro.xlsx`);
+    saveAs(new Blob([buffer]), `Relatorio_Financeiro_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.xlsx`);
     setShowExcelFilters(false);
     setSelectedIds([]);
   };
@@ -498,7 +530,7 @@ const Billing = () => {
       setLoanFlowStep('closed');
       setFormData({ 
         client: '', amount: '', interestRate: '', installments: '', startDate: '', 
-        firstPaymentDate: '', frequency: 'MENSAL', // RESET NOVO
+        firstPaymentDate: '', frequency: 'MENSAL', 
         fineRate: '2.0', moraInterestRate: '1.0', 
         clientBank: '', paymentMethod: '', 
         interestType: 'PRICE', hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '' 
@@ -518,7 +550,7 @@ const Billing = () => {
         const newID = `${nextSeq.toString().padStart(2, '0')}/${year}`;
         const checkedItems = checklistItems.filter(i => i.checked).map(i => i.id);
 
-        // --- CÁLCULO DA DATA DE VENCIMENTO (NOVO) ---
+        // --- CÁLCULO DA DATA DE VENCIMENTO (COM FREQUÊNCIA) ---
         let nextDueDate = new Date(formData.startDate);
         if (formData.firstPaymentDate) {
             nextDueDate = new Date(formData.firstPaymentDate);
@@ -533,7 +565,7 @@ const Billing = () => {
             ? totalReceivable 
             : Math.max(0, totalReceivable - parseFloat(formData.amount));
 
-        // --- PARSER SEGURO PARA ZERO ---
+        // Parser seguro para permitir 0
         const parseRate = (val: string) => {
             if (val === '') return 0;
             const num = parseFloat(val);
@@ -551,7 +583,7 @@ const Billing = () => {
             status: 'Em Dia', 
             installmentValue: simulation.installment,
             
-            // --- BLINDAGEM DO ZERO ---
+            // Campos com Zero permitido
             fineRate: parseRate(formData.fineRate), 
             moraInterestRate: parseRate(formData.moraInterestRate),
             
@@ -562,7 +594,6 @@ const Billing = () => {
             totalPaidCapital: 0, totalPaidInterest: 0,
             history: [{ date: new Date().toISOString(), amount: parseFloat(formData.amount), type: 'Abertura', note: 'Empréstimo Concedido' }],
             
-            // Novos Campos
             interestType: formData.interestType as 'PRICE' | 'SIMPLE',
             frequency: formData.frequency as 'MENSAL' | 'SEMANAL' | 'DIARIO',
             projectedProfit: projectedProfit,
@@ -598,12 +629,54 @@ const Billing = () => {
         </div>
       </header>
 
-      {/* PAINEL DE FILTROS DO EXCEL (NOVO) */}
+      {/* --- POP-UP ALERTA DO DIA (NOVO) --- */}
+      {isDailyAlertOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
+             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 border border-slate-200">
+                 <div className="bg-slate-900 p-5 flex justify-between items-center">
+                     <div className="flex items-center gap-2 text-white font-bold"><BellRing className="text-yellow-400" size={20}/> <span>Vencimentos de Hoje</span></div>
+                     <button onClick={() => setIsDailyAlertOpen(false)} className="text-white/50 hover:text-white transition-colors"><X size={24}/></button>
+                 </div>
+                 <div className="p-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                     {todaysLoans.length === 0 ? (
+                         <div className="text-center py-8">
+                             <CheckCircle size={48} className="mx-auto text-green-500 mb-2 opacity-50"/>
+                             <p className="text-slate-500 font-medium">Nenhum vencimento para hoje!</p>
+                         </div>
+                     ) : (
+                         <div className="space-y-3">
+                             <p className="text-xs font-bold uppercase text-slate-400 mb-2">Clientes para cobrar:</p>
+                             {todaysLoans.map(l => (
+                                 <div key={l.id} className="flex justify-between items-center p-4 bg-slate-50 border border-slate-100 rounded-xl hover:bg-blue-50 hover:border-blue-100 transition-all cursor-pointer group" onClick={() => { setSelectedLoan(l); setDetailTab('info'); setIsDetailsOpen(true); setIsDailyAlertOpen(false); }}>
+                                     <div className="flex items-center gap-3">
+                                         <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-slate-700 font-bold border border-slate-200 shadow-sm">{l.client.charAt(0)}</div>
+                                         <div>
+                                             <p className="font-bold text-slate-800 text-sm group-hover:text-blue-700">{l.client}</p>
+                                             <p className="text-[10px] text-slate-400 font-mono">Contrato: {l.id}</p>
+                                         </div>
+                                     </div>
+                                     <div className="text-right">
+                                         <p className="font-black text-green-600 text-sm">R$ {formatMoney(l.installmentValue)}</p>
+                                         <p className="text-[10px] text-slate-400 uppercase font-bold">Parcela Fixa</p>
+                                     </div>
+                                 </div>
+                             ))}
+                         </div>
+                     )}
+                 </div>
+                 <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end">
+                     <button onClick={() => setIsDailyAlertOpen(false)} className="px-6 py-2 bg-slate-900 text-white rounded-xl text-sm font-bold shadow-lg hover:bg-slate-800 transition-all">Entendido</button>
+                 </div>
+             </div>
+        </div>
+      )}
+
+      {/* PAINEL DE FILTROS DO EXCEL */}
       {showExcelFilters && (
           <div className="mb-6 bg-green-50 border border-green-200 p-4 rounded-xl flex items-end gap-4 animate-in slide-in-from-top-2">
-              <div><label className="text-xs font-bold text-green-800 block mb-1">Data Inicial</label><input type="date" value={excelStart} onChange={e => setExcelStart(e.target.value)} className="p-2 rounded border border-green-300"/></div>
-              <div><label className="text-xs font-bold text-green-800 block mb-1">Data Final</label><input type="date" value={excelEnd} onChange={e => setExcelEnd(e.target.value)} className="p-2 rounded border border-green-300"/></div>
-              <button onClick={handleExportExcel} className="px-4 py-2 bg-green-700 text-white font-bold rounded hover:bg-green-800">Baixar Filtrado</button>
+              <div><label className="text-xs font-bold text-green-800 block mb-1">Data Inicial</label><input type="date" value={excelStart} onChange={e => setExcelStart(e.target.value)} className="p-2 rounded border border-green-300 outline-none focus:ring-2 focus:ring-green-500/20"/></div>
+              <div><label className="text-xs font-bold text-green-800 block mb-1">Data Final</label><input type="date" value={excelEnd} onChange={e => setExcelEnd(e.target.value)} className="p-2 rounded border border-green-300 outline-none focus:ring-2 focus:ring-green-500/20"/></div>
+              <button onClick={handleExportExcel} className="px-4 py-2 bg-green-700 text-white font-bold rounded hover:bg-green-800 transition-colors shadow-lg">Baixar Filtrado</button>
           </div>
       )}
 
@@ -643,13 +716,20 @@ const Billing = () => {
                             <td className="p-4 text-center"><span className={`font-bold text-sm ${displayStatus === 'Atrasado' ? 'text-red-600' : 'text-slate-700'}`}>{new Date(loan.nextDue).toLocaleDateString('pt-BR')}</span></td>
                             <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(calculateRealBalance(loan))}</td>
                             <td className="p-4 text-right font-bold text-green-600 bg-green-50/30 rounded">R$ {formatMoney(loan.totalPaidInterest || 0)}</td>
-                            <td className="p-4 text-center"><span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${displayStatus === 'Em Dia' ? 'bg-blue-50 text-blue-600' : displayStatus === 'Atrasado' ? 'bg-red-50 text-red-600' : displayStatus === 'Acordo' ? 'bg-orange-100 text-orange-700' : 'bg-green-50 text-green-600'}`}>{displayStatus}</span></td>
+                            <td className="p-4 text-center">
+                                <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${
+                                    displayStatus === 'Em Dia' ? 'bg-blue-50 text-blue-600' : 
+                                    displayStatus === 'Atrasado' ? 'bg-red-50 text-red-600' : 
+                                    displayStatus === 'Acordo' ? 'bg-orange-100 text-orange-700' : 
+                                    'bg-green-50 text-green-600'}`}>
+                                    {displayStatus}
+                                </span>
+                            </td>
                             <td className="p-4 text-right relative"><div className="relative inline-block text-left"><button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === loan.id ? null : loan.id); }} className={`p-2 rounded-lg transition-all ${openMenuId === loan.id ? 'bg-slate-200 text-slate-900' : 'text-slate-400 hover:text-slate-900 hover:bg-slate-100'}`}><MoreVertical size={18} /></button>
                                 {openMenuId === loan.id && (<div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right"><div className="py-1">
                                     <button onClick={() => { setSelectedLoan(loan); setDetailTab('info'); setIsDetailsOpen(true); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><Eye size={16} className="text-blue-500" /> Ver Detalhes</button>
                                     <button onClick={() => { handleOpenPayment(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><DollarSign size={16} className="text-green-600" /> Registrar Baixa</button>
-                                    {/* --- BOTÃO DE ACORDO (SUBSTITUÍDO ÍCONE) --- */}
-                                    <button onClick={() => { handleOpenAgreement(loan); }} className="w-full text-left px-4 py-3 text-sm text-orange-700 hover:bg-orange-50 flex items-center gap-2"><FileText size={16} /> Registrar Acordo</button>
+                                    <button onClick={() => { handleOpenAgreement(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-orange-700 hover:bg-orange-50 flex items-center gap-2"><FileSignature size={16} /> Registrar Acordo</button>
                                     <div className="border-t border-slate-100 my-1"></div>
                                     <button onClick={() => { const c = availableClients.find(cl => cl.name === loan.client); generateContractPDF(loan, c); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><Printer size={16} /> Contrato PDF</button>
                                     <button onClick={() => { const c = availableClients.find(cl => cl.name === loan.client); generatePromissoryPDF(loan, c); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><FileText size={16} /> Promissórias</button>
@@ -692,9 +772,8 @@ const Billing = () => {
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 block">Modalidade</span><span className="text-xs font-bold text-slate-800 bg-white px-2 py-1 rounded border border-slate-200 inline-block">{selectedLoan.interestType === 'SIMPLE' ? 'Pag. Mínimo (Só Juros)' : 'Price (Amortização)'}</span></div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Percent size={10}/> Taxa de Juros</span><span className="text-sm font-bold text-slate-800">{selectedLoan.interestRate}% a.m</span></div>
-                            {/* --- CORREÇÃO VISUAL DA MORA (!== undefined) --- */}
-                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><AlertTriangle size={10}/> Multa (Atraso)</span><span className="text-sm font-bold text-red-600">{selectedLoan.fineRate !== undefined ? selectedLoan.fineRate : 2}%</span></div>
-                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Clock size={10}/> Mora Diária</span><span className="text-sm font-bold text-red-600">{selectedLoan.moraInterestRate !== undefined ? selectedLoan.moraInterestRate : 1}% a.m</span></div>
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><AlertTriangle size={10}/> Multa (Atraso)</span><span className="text-sm font-bold text-red-600">{selectedLoan.fineRate}%</span></div>
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Clock size={10}/> Mora Diária</span><span className="text-sm font-bold text-red-600">{selectedLoan.moraInterestRate}% a.m</span></div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Landmark size={10}/> Banco</span><span className="text-sm font-bold text-slate-800 truncate" title={selectedLoan.clientBank}>{selectedLoan.clientBank || '-'}</span></div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><CreditCard size={10}/> Pagamento</span><span className="text-sm font-bold text-slate-800 truncate" title={selectedLoan.paymentMethod}>{selectedLoan.paymentMethod || '-'}</span></div>
                         </div>
@@ -716,11 +795,12 @@ const Billing = () => {
                         <div className="relative border-l-2 border-slate-100 ml-3 space-y-6 py-2">
                             {selectedLoan.history.slice().reverse().map((record, idx) => {
                                 const isOpening = record.type.toLowerCase().includes('abertura') || record.type.toLowerCase().includes('empréstimo');
+                                const isAgreement = record.type.toLowerCase().includes('acordo');
                                 return (
                                     <div key={idx} className="relative pl-6">
-                                        <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-2 border-white ${isOpening ? 'bg-green-500' : 'bg-blue-500'}`}></div>
+                                        <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-2 border-white ${isOpening ? 'bg-green-500' : isAgreement ? 'bg-orange-500' : 'bg-blue-500'}`}></div>
                                         <div>
-                                            <div className="flex justify-between items-start mb-1"><p className="text-xs text-slate-400 font-mono">{new Date(record.date).toLocaleDateString('pt-BR')} às {new Date(record.date).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}</p><span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${isOpening ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>{record.type}</span></div>
+                                            <div className="flex justify-between items-start mb-1"><p className="text-xs text-slate-400 font-mono">{new Date(record.date).toLocaleDateString('pt-BR')} às {new Date(record.date).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}</p><span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${isOpening ? 'bg-blue-100 text-blue-700' : isAgreement ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>{record.type}</span></div>
                                             <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                                                 <div className="flex justify-between items-center mb-1 border-b border-slate-200 pb-1"><span className="text-xs font-bold text-slate-500">{isOpening ? 'VALOR CONCEDIDO:' : 'TOTAL PAGO:'}</span><span className="font-black text-slate-800">R$ {formatMoney(record.amount)}</span></div>
                                                 <div className="grid grid-cols-2 gap-2 mt-2"><div><span className="block text-[10px] uppercase text-slate-400 font-bold">Amortização</span><span className="text-xs font-bold text-slate-700">R$ {formatMoney(record.capitalPaid || 0)}</span></div><div><span className="block text-[10px] uppercase text-slate-400 font-bold">Lucro (Juros)</span><span className="text-xs font-bold text-green-600">R$ {formatMoney(record.interestPaid || 0)}</span></div></div>
@@ -768,8 +848,8 @@ const Billing = () => {
       <Modal isOpen={isAgreementModalOpen} onClose={() => setIsAgreementModalOpen(false)} title="Registrar Acordo">
           <div className="space-y-5">
               <div className="bg-orange-50 border border-orange-200 p-4 rounded-xl">
-                  <div className="flex items-center gap-2 text-orange-800 font-bold mb-2"><FileText size={20}/> Negociação Pontual</div>
-                  <p className="text-xs text-orange-700">Este acordo alterará o vencimento e o valor esperado apenas para a próxima parcela. O status do cliente mudará para "Em Acordo".</p>
+                  <div className="flex items-center gap-2 text-orange-800 font-bold mb-2"><FileSignature size={20}/> Negociação Pontual</div>
+                  <p className="text-xs text-orange-700">Este acordo alterará o vencimento e o status para "Em Acordo". O valor acordado será registrado, mas não haverá cobrança automática de juros adicionais neste período.</p>
               </div>
               <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nova Data de Vencimento</label><input type="date" value={agreementDate} onChange={e => setAgreementDate(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-orange-500/20"/></div>
               <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Valor Acordado (R$)</label><input type="number" step="0.01" value={agreementValue} onChange={e => setAgreementValue(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-orange-500/20 font-bold text-slate-800"/></div>
@@ -784,13 +864,12 @@ const Billing = () => {
         title={loanFlowStep === 'form' ? "Novo Empréstimo" : "Checklist de Segurança"}
       >
         {loanFlowStep === 'form' ? (
-            // --- CONTEÚDO DO FORMULÁRIO ---
             <form onSubmit={handlePreSave} className="space-y-6">
             <div className="space-y-4">
                 <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Cliente Selecionado</label><select required value={formData.client} onChange={e => setFormData({...formData, client: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5"><option value="">Selecione o titular...</option>{availableClients.map((c) => (<option key={c.id} value={c.name}>{c.name}</option>))}</select></div>
                 <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100"><div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Banco do Cliente</label><input value={formData.clientBank} onChange={e => setFormData({...formData, clientBank: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Ex: Nubank, Itaú..."/></div><div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Forma de Pagamento</label><input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="CPF, Email, Ag/Conta..."/></div>
-                <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="2.0"/></div>
-                <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros Mora Diária (%)</label><input value={formData.moraInterestRate} onChange={e => setFormData({...formData, moraInterestRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="1.0 (ao mês)"/></div>
+                <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="0.0"/></div>
+                <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros Mora Diária (%)</label><input value={formData.moraInterestRate} onChange={e => setFormData({...formData, moraInterestRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="0.0"/></div>
                 </div>
                 <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="0,00"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="5.0"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Data da Operação</label><input required type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" /></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.installments} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="12"/></div></div>
                 <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Periodicidade</label><div className="relative"><Repeat size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/><select value={formData.frequency} onChange={e => setFormData({...formData, frequency: e.target.value})} className="w-full pl-10 p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5"><option value="MENSAL">Mensal</option><option value="SEMANAL">Semanal</option><option value="DIARIO">Diário</option></select></div></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Primeiro Vencimento</label><input type="date" value={formData.firstPaymentDate} onChange={e => setFormData({...formData, firstPaymentDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 text-sm" placeholder="Opcional" title="Deixe vazio para automático"/></div></div>
@@ -802,7 +881,6 @@ const Billing = () => {
             <div className="flex justify-end gap-3 pt-4 border-t border-slate-100"><button type="button" onClick={closeLoanFlow} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all">Cancelar</button><button type="submit" disabled={!simulation.isValid} className="px-8 py-3 bg-slate-900 text-white rounded-xl flex items-center gap-2 font-bold shadow-xl shadow-slate-900/20 disabled:opacity-50 hover:bg-slate-800 transition-all">Iniciar Triagem <ChevronRight size={18} /></button></div>
             </form>
         ) : (
-            // --- CONTEÚDO DO CHECKLIST ---
             <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
                 <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
                 <div className="flex justify-between items-end mb-3">

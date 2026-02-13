@@ -60,6 +60,7 @@ const Settings = () => {
         try {
             const userObj = JSON.parse(userStr);
             setCurrentUser(userObj);
+            // Verifica se a role contém ADMIN (case insensitive)
             const userRole = (userObj.role || "").toUpperCase();
             if (userRole.includes('ADMIN')) {
                 setIsAdmin(true);
@@ -89,10 +90,11 @@ const Settings = () => {
         }
 
         try {
+            // Tenta listar usuários (se não for admin, o backend pode retornar erro ou lista vazia)
             const userList = await authService.listUsers();
             setUsers(userList || []);
         } catch (uErr) {
-            console.warn("Não foi possível listar usuários.");
+            console.warn("Não foi possível listar usuários (provavelmente sem permissão).");
         }
       } catch (err) { console.error('Erro ao carregar configurações', err); }
     };
@@ -169,6 +171,10 @@ const Settings = () => {
   };
 
   const handleDownloadBackup = async () => {
+      // Permitir download de backup para todos ou só admin? Geralmente admin.
+      if (!isAdmin) {
+          return alert("Apenas administradores podem baixar o backup completo.");
+      }
       if(!confirm("Deseja baixar uma cópia de segurança completa do sistema?")) return;
       try {
           const [clients, loans] = await Promise.all([clientService.getAll(), loanService.getAll()]);
@@ -248,7 +254,7 @@ const Settings = () => {
           </nav>
           <div className="mt-8 bg-blue-50 p-4 rounded-xl border border-blue-100">
             <div className="flex items-center gap-2 mb-2"><div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div><span className="text-xs font-bold text-blue-700 uppercase">Status do Sistema</span></div>
-            <p className="text-xs text-blue-800">Versão 2.8.1 (ERP)</p>
+            <p className="text-xs text-blue-800">Versão 2.8.2 (Secure)</p>
             <p className="text-xs text-blue-600 mt-1 font-medium">Conexão Criptografada</p>
           </div>
         </aside>
@@ -294,9 +300,15 @@ const Settings = () => {
                                     </td>
                                     <td className="p-4 text-slate-600">{u.username || u.email}</td>
                                     <td className="p-4 text-right flex justify-end gap-2">
-                                        <button type="button" onClick={() => openResetModal(u.username || u.email)} className="text-blue-600 hover:bg-blue-100 p-2 rounded-lg transition-all" title="Alterar Senha"><Key size={16}/></button>
-                                        {(u.role?.toUpperCase() !== 'ADMIN') && (
-                                            <button type="button" onClick={() => handleRemoveUser(u.username || u.email)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg transition-all" title="Remover"><Trash2 size={16}/></button>
+                                        {/* Lógica de Visibilidade dos Botões */}
+                                        {isAdmin ? (
+                                            <>
+                                                <button type="button" onClick={() => openResetModal(u.username || u.email)} className="text-blue-600 hover:bg-blue-100 p-2 rounded-lg transition-all" title="Alterar Senha"><Key size={16}/></button>
+                                                <button type="button" onClick={() => handleRemoveUser(u.username || u.email)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg transition-all" title="Remover"><Trash2 size={16}/></button>
+                                            </>
+                                        ) : (
+                                            // Se não for admin, só pode ver. Não pode editar nem excluir ninguém (nem a si mesmo por aqui, por segurança)
+                                            <span className="text-xs text-slate-400 italic">Visualização</span>
                                         )}
                                     </td>
                                 </tr>
@@ -341,17 +353,19 @@ const Settings = () => {
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
-                        <input type="number" min="1" max="30" value={settings.system.warningDays || 3} 
+                        <input type="number" min="0" max="30" value={settings.system.warningDays || 3} 
                                onChange={(e) => updateSystem('warningDays', parseInt(e.target.value))}
                                className="w-16 p-2 text-center border border-slate-300 rounded-lg font-bold text-slate-800" />
                         <span className="text-sm font-bold text-slate-600">dias</span>
                     </div>
                 </div>
 
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex justify-between items-center">
-                    <div><h4 className="font-bold text-slate-800 flex gap-2"><Download size={18} className="text-blue-600"/> Exportar Base de Dados</h4><p className="text-sm text-slate-500">Gera um arquivo JSON com todos os dados atuais.</p></div>
-                    <button type="button" onClick={handleDownloadBackup} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700">Baixar Backup</button>
-                </div>
+                {isAdmin && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex justify-between items-center">
+                        <div><h4 className="font-bold text-slate-800 flex gap-2"><Download size={18} className="text-blue-600"/> Exportar Base de Dados</h4><p className="text-sm text-slate-500">Gera um arquivo JSON com todos os dados atuais.</p></div>
+                        <button type="button" onClick={handleDownloadBackup} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700">Baixar Backup</button>
+                    </div>
+                )}
 
                 {isAdmin && (
                     <div className="mt-10 pt-6 border-t-2 border-red-100">
