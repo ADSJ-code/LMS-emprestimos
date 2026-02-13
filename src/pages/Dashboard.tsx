@@ -4,7 +4,7 @@ import {
   Users, AlertTriangle, TrendingUp, Plus, 
   Search, FileText, ArrowRight, Calendar, Activity, 
   Briefcase, PieChart, RefreshCw, ArrowLeft, Filter,
-  UserCheck, Bell, X, Clock
+  UserCheck, Bell, X, Clock, CalendarDays // Adicionado CalendarDays
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { calculateOverdueValue, formatMoney } from '../utils/finance';
@@ -15,6 +15,8 @@ const Dashboard = () => {
   
   // --- ESTADOS DE FILTRO ---
   const [period, setPeriod] = useState<'hoje' | 'semana' | 'mes' | 'proximo_mes' | 'personalizado' | 'todos'>('todos');
+  
+  // Datas para o filtro personalizado
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
 
@@ -23,7 +25,7 @@ const Dashboard = () => {
   const [allLoans, setAllLoans] = useState<Loan[]>([]);
   const [allClients, setAllClients] = useState<Client[]>([]);
   
-  // Estado do Modal "Bom Dia" (NOVO)
+  // Estado do Modal "Bom Dia" / Resumo
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
   const [dailyAlerts, setDailyAlerts] = useState<{today: Loan[], warning: Loan[]}>({ today: [], warning: [] });
 
@@ -45,6 +47,7 @@ const Dashboard = () => {
     return new Date(year, month - 1, day);
   };
 
+  // Função para calcular lucro baseado na regra (Price ou Simples)
   const calculateLoanProfit = (loan: Loan) => {
       if (loan.projectedProfit && loan.projectedProfit > 0) return loan.projectedProfit;
       const amount = Number(loan.amount) || 0;
@@ -70,7 +73,7 @@ const Dashboard = () => {
       const today = new Date();
       today.setHours(0,0,0,0);
 
-      // --- LÓGICA DE ALERTAS DIÁRIOS (NOVO) ---
+      // --- LÓGICA DE ALERTAS DIÁRIOS (POP-UP) ---
       const warningDays = (settings as any).system?.warningDays || 3;
       const dueToday: Loan[] = [];
       const dueSoon: Loan[] = [];
@@ -89,44 +92,58 @@ const Dashboard = () => {
 
       setDailyAlerts({ today: dueToday, warning: dueSoon });
       
-      // Só abre o modal se houver algo relevante e não tiver sido fechado na sessão
+      // Abre o modal automaticamente apenas se tiver alertas e ainda não tiver visto na sessão
       if ((dueToday.length > 0 || dueSoon.length > 0) && !sessionStorage.getItem('welcomeModalSeen')) {
           setShowWelcomeModal(true);
           sessionStorage.setItem('welcomeModalSeen', 'true');
       }
 
-      // --- CÁLCULO DE MÉTRICAS ---
+      // --- CÁLCULO DE MÉTRICAS (FILTROS) ---
       const activeDebtors = new Set(loans.filter(l => l.status !== 'Pago').map(l => l.client));
 
       const filteredLoans = loans.filter((loan: any) => {
+        // Se selecionar "Personalizado", força o uso das datas dos inputs
+        if (period === 'personalizado') {
+            if (!customStart || !customEnd) return true; // Se não preencheu, mostra tudo ou nada (opcional)
+            const start = parseLocalDate(customStart);
+            const end = parseLocalDate(customEnd);
+            end.setHours(23, 59, 59, 999); // Garante o final do dia
+            
+            const loanDue = parseLocalDate(loan.nextDue);
+            loanDue.setHours(0,0,0,0);
+
+            // Filtra por VENCIMENTO dentro do período
+            return loanDue >= start && loanDue <= end;
+        }
+
+        // Filtros Padrão
         if (period === 'todos') return true;
+        
         const loanStart = parseLocalDate(loan.startDate);
         const loanDue = parseLocalDate(loan.nextDue);
         loanStart.setHours(0,0,0,0);
         loanDue.setHours(0,0,0,0);
 
-        if (period === 'hoje') return loanStart.toDateString() === today.toDateString();
+        if (period === 'hoje') return loanDue.getTime() === today.getTime(); // Alterado para olhar Vencimento
+        
         if (period === 'semana') {
-          const weekAgo = new Date(today);
-          weekAgo.setDate(today.getDate() - 7);
-          return loanStart >= weekAgo && loanStart <= today;
+          const weekEnd = new Date(today);
+          weekEnd.setDate(today.getDate() + 7);
+          return loanDue >= today && loanDue <= weekEnd;
         }
+        
         if (period === 'mes') {
           const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
           const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-          return loanStart >= monthStart && loanStart <= monthEnd;
+          return loanDue >= monthStart && loanDue <= monthEnd;
         }
+        
         if (period === 'proximo_mes') {
             const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1);
             const nextMonthEnd = new Date(today.getFullYear(), today.getMonth() + 2, 0);
-            return loanDue >= nextMonthStart && loanDue <= nextMonthEnd && loan.status !== 'Pago';
+            return loanDue >= nextMonthStart && loanDue <= nextMonthEnd;
         }
-        if (period === 'personalizado') {
-            if (!customStart || !customEnd) return true;
-            const start = parseLocalDate(customStart);
-            const end = parseLocalDate(customEnd);
-            return loanDue >= start && loanDue <= end && loan.status !== 'Pago';
-        }
+        
         return true;
       });
 
@@ -144,6 +161,8 @@ const Dashboard = () => {
         const installmentValue = Number(loan.installmentValue) || 0;
         const installments = Number(loan.installments) || 0;
         const profit = calculateLoanProfit(loan);
+
+        // Se for filtro futuro, projetamos o recebimento
         const isProjection = period === 'proximo_mes' || period === 'personalizado';
 
         if (isProjection) {
@@ -192,9 +211,9 @@ const Dashboard = () => {
         return {
           id: loan.id,
           type: isOverdue ? 'atraso' : 'novo_contrato',
-          text: isOverdue ? `Atraso: ${loan.client}` : `Novo: ${loan.client}`,
-          time: parseLocalDate(loan.startDate).toLocaleDateString('pt-BR'), 
-          value: isOverdue ? 'Cobrar' : `+ ${formatMoney(loan.amount)}`
+          text: isOverdue ? `Atraso: ${loan.client}` : `Vencimento: ${loan.client}`,
+          time: dueDate.toLocaleDateString('pt-BR'), 
+          value: isOverdue ? 'Cobrar' : `R$ ${formatMoney(loan.installmentValue)}`
         };
       });
       setRecentActivities(activities);
@@ -203,11 +222,13 @@ const Dashboard = () => {
   };
 
   useEffect(() => { 
+      // Se não for personalizado, busca automaticamente ao mudar o botão
       if (period !== 'personalizado') {
           fetchAndCalculate();
       }
   }, [period]);
 
+  // Função chamada manualmente pelo botão de filtro
   const handleCustomFilter = () => {
       setPeriod('personalizado');
       fetchAndCalculate();
@@ -240,21 +261,21 @@ const Dashboard = () => {
       low: 'Capital em Taxa Baixa (< 10%)',
       mid: 'Capital em Taxa Média (10% - 15%)',
       high: 'Capital em Taxa Alta (> 15%)',
-      capital: 'Detalhamento de Capital',
-      profit: 'Detalhamento de Lucro Projetado',
+      capital: 'Previsão de Fluxo / Capital',
+      profit: 'Detalhamento de Lucro',
       overdue: 'Contratos em Atraso (Crítico)',
       active: 'Carteira de Clientes Ativos'
   };
 
   return (
     <Layout>
-      {/* MODAL BOM DIA (NOVO) */}
+      {/* --- MODAL "BOM DIA" / RESUMO DIÁRIO --- */}
       {showWelcomeModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
               <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95">
                   <div className="bg-slate-900 p-6 flex justify-between items-center">
                       <div>
-                          <h3 className="text-xl font-bold text-white flex items-center gap-2">👋 Bom dia!</h3>
+                          <h3 className="text-xl font-bold text-white flex items-center gap-2">☀️ Resumo do Dia</h3>
                           <p className="text-slate-400 text-sm">Resumo operacional de hoje.</p>
                       </div>
                       <button onClick={() => setShowWelcomeModal(false)} className="text-white/50 hover:text-white"><X size={24}/></button>
@@ -274,7 +295,7 @@ const Dashboard = () => {
                           )}
                       </div>
                       <div>
-                          <h4 className="text-sm font-bold text-slate-500 uppercase mb-3 flex items-center gap-2"><AlertTriangle size={16}/> Próximos Vencimentos</h4>
+                          <h4 className="text-sm font-bold text-slate-500 uppercase mb-3 flex items-center gap-2"><AlertTriangle size={16}/> Próximos Vencimentos (Alerta)</h4>
                           {dailyAlerts.warning.length === 0 ? <p className="text-sm text-slate-400 italic">Nada no radar próximo.</p> : (
                               <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
                                   {dailyAlerts.warning.map(l => (
@@ -289,7 +310,7 @@ const Dashboard = () => {
                               </div>
                           )}
                       </div>
-                      <button onClick={() => setShowWelcomeModal(false)} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800">Entendido</button>
+                      <button onClick={() => setShowWelcomeModal(false)} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800">Fechar</button>
                   </div>
               </div>
           </div>
@@ -335,27 +356,45 @@ const Dashboard = () => {
           </div>
       ) : (
           <>
+            {/* --- HEADER DE FILTROS (RESTAURADO E MELHORADO) --- */}
             <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-8 gap-4">
-                <div><h2 className="text-2xl font-bold text-slate-800">Dashboard Geral</h2><p className="text-slate-500">Visão completa da operação.</p></div>
-                <div className="flex flex-col md:flex-row gap-3 items-start md:items-center w-full xl:w-auto">
+                <div><h2 className="text-2xl font-bold text-slate-800">Dashboard</h2><p className="text-slate-500">Visão geral e projeções.</p></div>
+                
+                <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center w-full xl:w-auto">
+                    {/* Botão de Refresh */}
                     <button onClick={fetchAndCalculate} className="p-2.5 bg-white border border-gray-200 rounded-xl text-slate-500 hover:text-slate-900 transition-colors shadow-sm"><RefreshCw size={18} className={loading ? "animate-spin" : ""} /></button>
+                    
+                    {/* Botões de Período Rápido */}
                     <div className="flex bg-white p-1 rounded-xl border border-gray-200 shadow-sm overflow-x-auto max-w-full">
                         {['hoje', 'semana', 'mes', 'proximo_mes', 'todos'].map(p => (
                             <button key={p} onClick={() => setPeriod(p as any)} className={`px-4 py-2 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${period === p ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>{p.replace('_', ' ').toUpperCase()}</button>
                         ))}
                     </div>
+
+                    {/* Filtro Personalizado (Datas) - Sempre Visível */}
+                    <div className="flex items-center gap-2 bg-white p-1.5 rounded-xl border border-gray-200 shadow-sm">
+                        <div className="flex items-center gap-2 px-2">
+                            <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="text-xs font-bold text-slate-600 bg-transparent outline-none w-28 border border-slate-100 rounded p-1"/>
+                            <span className="text-slate-300">até</span>
+                            <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="text-xs font-bold text-slate-600 bg-transparent outline-none w-28 border border-slate-100 rounded p-1"/>
+                        </div>
+                        <button onClick={handleCustomFilter} className={`p-2 rounded-lg transition-all ${period === 'personalizado' ? 'bg-slate-900 text-white' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`} title="Aplicar Filtro de Datas">
+                            <Filter size={16}/>
+                        </button>
+                    </div>
                 </div>
             </header>
 
+            {/* KPI CARDS */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 <div onClick={() => setSelectedRange('capital')} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-300 transition-all cursor-pointer group">
                     <div className="flex justify-between items-start mb-4"><div className="p-3 bg-blue-50 text-blue-600 rounded-lg"><Briefcase size={24} /></div></div>
-                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">Capital na Rua</h3>
+                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">Capital no Período</h3>
                     <p className="text-2xl font-black text-slate-800">{formatMoney(metrics.capitalNaRua)}</p>
                 </div>
                 <div onClick={() => setSelectedRange('profit')} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-green-300 transition-all cursor-pointer group">
                     <div className="flex justify-between items-start mb-4"><div className="p-3 bg-green-50 text-green-600 rounded-lg"><TrendingUp size={24} /></div></div>
-                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">Lucro Projetado</h3>
+                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">Lucro Estimado</h3>
                     <p className="text-2xl font-black text-green-600">+{formatMoney(metrics.lucroProjetado)}</p>
                 </div>
                 <div onClick={() => setSelectedRange('overdue')} className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-red-500 hover:shadow-md hover:bg-red-50/10 transition-all cursor-pointer group">
@@ -365,7 +404,7 @@ const Dashboard = () => {
                 </div>
                 <div onClick={() => setSelectedRange('active')} className="bg-slate-900 p-6 rounded-xl shadow-lg text-white relative overflow-hidden cursor-pointer hover:bg-slate-800 transition-all">
                     <div className="absolute right-0 top-0 opacity-10 p-2"><FileText size={64} /></div>
-                    <h3 className="text-slate-300 text-xs font-bold uppercase mb-1">Contratos Ativos</h3>
+                    <h3 className="text-slate-300 text-xs font-bold uppercase mb-1">Contratos no Filtro</h3>
                     <p className="text-3xl font-black text-white">{metrics.contratosAtivos}</p>
                     <p className="text-[10px] text-slate-400 mt-2 flex items-center gap-1"><Users size={12}/> {metrics.totalClientesCadastrados} clientes cadastrados</p>
                 </div>
@@ -379,34 +418,33 @@ const Dashboard = () => {
                             <div onClick={() => setSelectedRange('low')} className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center cursor-pointer hover:bg-slate-100 transition-colors group">
                                 <p className="text-xs font-bold text-slate-500 uppercase mb-1 group-hover:text-blue-600 transition-colors">1% a 9% (Baixa)</p>
                                 <p className="text-2xl font-black text-slate-700">R$ {formatMoney(metrics.taxas.lowVal)}</p>
-                                <p className="text-[10px] text-slate-400">Capital Alocado</p>
                             </div>
                             <div onClick={() => setSelectedRange('mid')} className="p-4 bg-blue-50 rounded-lg border border-blue-100 text-center cursor-pointer hover:bg-blue-100 transition-colors group">
                                 <p className="text-xs font-bold text-blue-500 uppercase mb-1 group-hover:text-blue-700 transition-colors">10% a 15% (Média)</p>
                                 <p className="text-2xl font-black text-blue-700">R$ {formatMoney(metrics.taxas.midVal)}</p>
-                                <p className="text-[10px] text-blue-400">Capital Alocado</p>
                             </div>
                             <div onClick={() => setSelectedRange('high')} className="p-4 bg-indigo-50 rounded-lg border border-indigo-100 text-center cursor-pointer hover:bg-indigo-100 transition-colors group">
                                 <p className="text-xs font-bold text-indigo-500 uppercase mb-1 group-hover:text-indigo-700 transition-colors">Acima de 15% (Alta)</p>
                                 <p className="text-2xl font-black text-indigo-700">R$ {formatMoney(metrics.taxas.highVal)}</p>
-                                <p className="text-[10px] text-indigo-400">Capital Alocado</p>
                             </div>
                         </div>
                     </div>
 
+                    {/* ACESSO RÁPIDO (COM BOTÃO RESUMO DO DIA) */}
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
                         <h3 className="font-bold text-lg text-slate-800 mb-4">Acesso Rápido</h3>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                             <button onClick={() => navigate('/billing')} className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-blue-500 hover:bg-blue-50 transition-all group"><div className="p-3 bg-blue-100 text-blue-600 rounded-full mb-2 group-hover:scale-110 transition-transform"><Plus size={20} /></div><span className="text-sm font-medium text-slate-700">Novo Empréstimo</span></button>
                             <button onClick={() => navigate('/clients')} className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all group"><div className="p-3 bg-purple-100 text-purple-600 rounded-full mb-2 group-hover:scale-110 transition-transform"><Users size={20} /></div><span className="text-sm font-medium text-slate-700">Novo Cliente</span></button>
-                            <button onClick={() => navigate('/history')} className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-green-500 hover:bg-green-50 transition-all group"><div className="p-3 bg-green-100 text-green-600 rounded-full mb-2 group-hover:scale-110 transition-transform"><Clock size={20} /></div><span className="text-sm font-medium text-slate-700">Histórico Completo</span></button>
+                            {/* NOVO BOTÃO: RESUMO DO DIA */}
+                            <button onClick={() => setShowWelcomeModal(true)} className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-orange-500 hover:bg-orange-50 transition-all group"><div className="p-3 bg-orange-100 text-orange-600 rounded-full mb-2 group-hover:scale-110 transition-transform"><CalendarDays size={20} /></div><span className="text-sm font-medium text-slate-700">Resumo do Dia</span></button>
                             <button onClick={() => navigate('/overdue')} className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all group"><div className="p-3 bg-yellow-100 text-yellow-600 rounded-full mb-2 group-hover:scale-110 transition-transform"><FileText size={20} /></div><span className="text-sm font-medium text-slate-700">Relatórios</span></button>
                         </div>
                     </div>
                 </div>
 
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 h-fit">
-                    <div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg text-slate-800">Atividade</h3><button onClick={() => navigate('/history')} className="text-blue-600 text-xs font-medium hover:underline flex items-center gap-1">Ver tudo <ArrowRight size={12} /></button></div>
+                    <div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg text-slate-800">Atividade Recente</h3><button onClick={() => navigate('/history')} className="text-blue-600 text-xs font-medium hover:underline flex items-center gap-1">Ver tudo <ArrowRight size={12} /></button></div>
                     <div className="space-y-6">
                         {recentActivities.length > 0 ? (recentActivities.map((activity) => (<div key={activity.id} className="flex gap-4 items-start"><div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${activity.type === 'atraso' ? 'bg-red-500' : 'bg-green-500'}`} /><div><p className="text-sm font-medium text-slate-800 leading-tight">{activity.text}</p><p className="text-xs text-slate-400 mt-1">{activity.time}</p></div>{activity.value !== '-' && (<span className={`ml-auto text-xs font-bold whitespace-nowrap ${activity.type === 'atraso' ? 'text-red-600 bg-red-50 px-2 py-1 rounded' : 'text-slate-600'}`}>{activity.value}</span>)}</div>))) : (<div className="text-center py-8 text-slate-400 text-sm"><Activity size={24} className="mx-auto mb-2 opacity-50"/>Nenhuma atividade.</div>)}
                     </div>

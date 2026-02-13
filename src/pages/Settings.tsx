@@ -23,55 +23,47 @@ const Settings = () => {
   const [activeTab, setActiveTab] = useState<'empresa' | 'sistema' | 'usuarios'>('empresa');
   const [isLoading, setIsLoading] = useState(false);
   
-  // --- SEGURANÇA: Estado para controlar permissões na tela ---
+  // --- SEGURANÇA ---
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false); // Estado explícito para Admin
 
-  // LOADING ESPECÍFICO PARA USUÁRIOS
   const [isUserLoading, setIsUserLoading] = useState(false);
-  
   const [showSuccess, setShowSuccess] = useState(false);
   
-  // Referência para o input de arquivo (Upload)
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Estados de Usuários
   const [users, setUsers] = useState<any[]>([]);
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '' });
   
-  // Estado para Reset de Senha
   const [resetModalOpen, setResetModalOpen] = useState(false);
   const [selectedUserEmail, setSelectedUserEmail] = useState<string | null>(null);
   const [newPasswordReset, setNewPasswordReset] = useState('');
 
-  // Estado para Reset de Fábrica (Zona de Perigo)
   const [dangerModalOpen, setDangerModalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState('');
 
-  // --- CONFIGURAÇÃO INICIAL ---
   const defaultSettings = {
     company: { 
-        name: localStorage.getItem('lms_company_name_cache') || '', 
-        cnpj: '', 
-        pixKey: '', 
-        email: '', 
-        phone: '', 
-        address: '' 
+        name: localStorage.getItem('lms_company_name_cache') || '', cnpj: '', pixKey: '', email: '', phone: '', address: '' 
     },
     system: { 
-        autoBackup: false, 
-        requireLogin: true,
-        warningDays: 3 // Padrão: Avisar 3 dias antes
+        autoBackup: false, requireLogin: true, warningDays: 3 
     }
   };
 
   const [settings, setSettings] = useState<any>(defaultSettings);
 
   useEffect(() => {
-    // 1. Identificar quem está logado para aplicar segurança
+    // 1. Identificação Robusta do Admin
     const userStr = localStorage.getItem('user');
     if (userStr) {
         try {
-            setCurrentUser(JSON.parse(userStr));
+            const userObj = JSON.parse(userStr);
+            setCurrentUser(userObj);
+            // Verifica maiúsculo ou minúsculo para garantir
+            if (userObj.role && userObj.role.toUpperCase() === 'ADMIN') {
+                setIsAdmin(true);
+            }
         } catch (e) {
             console.error("Erro ao ler usuário", e);
         }
@@ -119,12 +111,9 @@ const Settings = () => {
     } catch (err) { alert('Falha ao salvar.'); setIsLoading(false); }
   };
 
-  // --- LÓGICA DE USUÁRIOS (COM LOADING) ---
   const handleAddUser = async () => {
       if (!newUser.name || !newUser.email || !newUser.password) return alert("Preencha todos os campos.");
-      
-      setIsUserLoading(true); // ATIVA O LOADING
-      
+      setIsUserLoading(true); 
       try {
           const created = await authService.addUser(newUser);
           setUsers([...users, created]);
@@ -133,7 +122,7 @@ const Settings = () => {
       } catch (err: any) { 
           alert(err.response?.data || err.message || "Erro ao adicionar usuário"); 
       } finally {
-          setIsUserLoading(false); // DESATIVA O LOADING
+          setIsUserLoading(false);
       }
   };
 
@@ -158,7 +147,6 @@ const Settings = () => {
       } catch (error) { alert("Erro ao alterar senha."); }
   };
 
-  // --- Helpers e Máscaras ---
   const maskCNPJ = (v: string) => v.replace(/\D/g, '').replace(/^(\d{2})(\d)/, '$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3').replace(/\.(\d{3})(\d)/, '.$1/$2').replace(/(\d{4})(\d)/, '$1-$2').slice(0, 18);
   const maskPhone = (v: string) => v.replace(/\D/g, '').replace(/^(\d{2})(\d)/, '($1) $2').replace(/(\d{5})(\d)/, '$1-$2').slice(0, 15);
   
@@ -202,7 +190,7 @@ const Settings = () => {
       reader.onload = async (e) => {
           try {
               const json = JSON.parse(e.target?.result as string);
-              setIsLoading(true); // Loading Geral
+              setIsLoading(true); 
               await settingsService.restoreBackup(json);
               alert("Sistema restaurado com sucesso! Você será desconectado.");
               localStorage.clear(); 
@@ -288,14 +276,18 @@ const Settings = () => {
                             <tr><th className="p-4">Nome</th><th className="p-4">Email</th><th className="p-4 text-right">Ações</th></tr>
                         </thead>
                         <tbody className="divide-y divide-slate-200">
-                            <tr className="bg-blue-50/50"><td className="p-4 font-bold text-slate-800">Admin Mestre</td><td className="p-4 text-slate-600">admin@creditnow.com</td><td className="p-4 text-right"><span className="text-[10px] font-bold bg-blue-200 text-blue-800 px-2 py-1 rounded">SISTEMA</span></td></tr>
                             {users.map(user => (
                                 <tr key={user.id} className="hover:bg-white transition-colors">
-                                    <td className="p-4 font-medium text-slate-800">{user.name}</td>
+                                    <td className="p-4 font-medium text-slate-800 flex items-center gap-2">
+                                        {user.role === 'ADMIN' && <Shield size={14} className="text-blue-600"/>}
+                                        {user.name}
+                                    </td>
                                     <td className="p-4 text-slate-600">{user.username || user.email}</td>
                                     <td className="p-4 text-right flex justify-end gap-2">
                                         <button type="button" onClick={() => openResetModal(user.username || user.email)} className="text-blue-600 hover:bg-blue-100 p-2 rounded-lg transition-all" title="Alterar Senha"><Key size={16}/></button>
-                                        <button type="button" onClick={() => handleRemoveUser(user.username || user.email)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg transition-all" title="Remover"><Trash2 size={16}/></button>
+                                        {user.role !== 'ADMIN' && (
+                                            <button type="button" onClick={() => handleRemoveUser(user.username || user.email)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg transition-all" title="Remover"><Trash2 size={16}/></button>
+                                        )}
                                     </td>
                                 </tr>
                             ))}
@@ -303,23 +295,25 @@ const Settings = () => {
                     </table>
                 </div>
 
-                <div className="bg-white border border-slate-200 rounded-xl p-5 mt-4">
-                    <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Plus size={18} className="text-green-600"/> Cadastrar Novo</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <input type="text" placeholder="Nome" value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} className="p-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900/10"/>
-                        <input type="email" placeholder="Email" value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} className="p-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900/10"/>
-                        <input type="password" placeholder="Senha" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="p-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900/10"/>
+                {isAdmin && (
+                    <div className="bg-white border border-slate-200 rounded-xl p-5 mt-4">
+                        <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Plus size={18} className="text-green-600"/> Cadastrar Novo</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <input type="text" placeholder="Nome" value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} className="p-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900/10"/>
+                            <input type="email" placeholder="Email" value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} className="p-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900/10"/>
+                            <input type="password" placeholder="Senha" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="p-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-slate-900/10"/>
+                        </div>
+                        
+                        <button 
+                            type="button" 
+                            onClick={handleAddUser} 
+                            disabled={isUserLoading}
+                            className={`mt-4 w-full font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 ${isUserLoading ? 'bg-slate-400 cursor-not-allowed text-white' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
+                        >
+                            {isUserLoading ? <><Loader2 className="animate-spin" size={18} /> Criando Usuário...</> : "Adicionar Usuário"}
+                        </button>
                     </div>
-                    
-                    <button 
-                        type="button" 
-                        onClick={handleAddUser} 
-                        disabled={isUserLoading}
-                        className={`mt-4 w-full font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 ${isUserLoading ? 'bg-slate-400 cursor-not-allowed text-white' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
-                    >
-                        {isUserLoading ? <><Loader2 className="animate-spin" size={18} /> Criando Usuário...</> : "Adicionar Usuário"}
-                    </button>
-                </div>
+                )}
               </div>
             )}
 
@@ -357,7 +351,7 @@ const Settings = () => {
                 </div>
 
                 {/* ZONA DE PERIGO (SÓ PARA ADMIN) */}
-                {currentUser?.role === 'ADMIN' && (
+                {isAdmin && (
                     <div className="bg-red-50 border border-red-200 rounded-xl p-5">
                         <div className="flex items-center gap-2 mb-4 text-red-700 border-b border-red-200 pb-2">
                             <AlertTriangle className="text-red-600" />
