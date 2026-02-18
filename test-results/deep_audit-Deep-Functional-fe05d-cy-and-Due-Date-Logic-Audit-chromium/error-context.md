@@ -1,0 +1,359 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - generic [ref=e5]:
+        - heading "TESTE EMPREENDIMENTO" [level=1] [ref=e6]
+        - paragraph [ref=e7]: Sistema de Gestão
+      - navigation [ref=e8]:
+        - list [ref=e9]:
+          - listitem [ref=e10]:
+            - link "Dashboard" [ref=e11] [cursor=pointer]:
+              - /url: /dashboard
+              - img [ref=e12]
+              - text: Dashboard
+          - listitem [ref=e17]:
+            - link "Lista de Clientes" [ref=e18] [cursor=pointer]:
+              - /url: /clients
+              - img [ref=e19]
+              - text: Lista de Clientes
+          - listitem [ref=e24]:
+            - link "Cobrança" [ref=e25] [cursor=pointer]:
+              - /url: /billing
+              - img [ref=e26]
+              - text: Cobrança
+          - listitem [ref=e29]:
+            - link "Atrasados" [ref=e30] [cursor=pointer]:
+              - /url: /overdue
+              - img [ref=e31]
+              - text: Atrasados
+          - listitem [ref=e33]:
+            - link "Lista Negra" [ref=e34] [cursor=pointer]:
+              - /url: /blacklist
+              - img [ref=e35]
+              - text: Lista Negra
+          - listitem [ref=e37]:
+            - link "Lista de Afiliados" [ref=e38] [cursor=pointer]:
+              - /url: /affiliates
+              - img [ref=e39]
+              - text: Lista de Afiliados
+          - listitem [ref=e45]:
+            - link "Histórico" [ref=e46] [cursor=pointer]:
+              - /url: /history
+              - img [ref=e47]
+              - text: Histórico
+          - listitem [ref=e51]:
+            - link "Configurações" [ref=e52] [cursor=pointer]:
+              - /url: /settings
+              - img [ref=e53]
+              - text: Configurações
+      - button "AD Administrador Mestre Sair do Sistema" [ref=e57] [cursor=pointer]:
+        - generic [ref=e58]: AD
+        - generic [ref=e59]:
+          - paragraph [ref=e60]: Administrador Mestre
+          - generic [ref=e61]:
+            - img [ref=e62]
+            - generic [ref=e65]: Sair do Sistema
+    - main [ref=e66]:
+      - generic [ref=e67]:
+        - generic [ref=e68]:
+          - generic [ref=e69]:
+            - heading "Cobrança e Empréstimos" [level=2] [ref=e70]
+            - paragraph [ref=e71]: Gestão financeira completa.
+          - generic [ref=e72]:
+            - button "Cobrança" [ref=e73] [cursor=pointer]:
+              - img [ref=e74]
+              - text: Cobrança
+            - button [ref=e79] [cursor=pointer]:
+              - img [ref=e80]
+            - button "Novo Contrato" [ref=e85] [cursor=pointer]:
+              - img [ref=e86]
+              - text: Novo Contrato
+        - generic [ref=e87]:
+          - generic [ref=e88]:
+            - generic [ref=e89]:
+              - img [ref=e90]
+              - textbox "Buscar cliente..." [ref=e93]
+            - generic [ref=e94]:
+              - button "Filtros" [ref=e95] [cursor=pointer]:
+                - img [ref=e96]
+                - text: Filtros
+              - combobox [ref=e98]:
+                - option "Todos" [selected]
+                - option "Em Dia"
+                - option "Atrasado"
+                - option "Em Acordo"
+                - option "Pago"
+              - button "Excel" [ref=e99] [cursor=pointer]:
+                - img [ref=e100]
+                - text: Excel
+          - table [ref=e104]:
+            - rowgroup [ref=e105]:
+              - row "Cliente Parcelas Vencimento Saldo Capital Juros Pagos Parcela Fixa Status Ações" [ref=e106]:
+                - columnheader [ref=e107]:
+                  - checkbox [ref=e108] [cursor=pointer]
+                - columnheader "Cliente" [ref=e109]
+                - columnheader "Parcelas" [ref=e110]
+                - columnheader "Vencimento" [ref=e111]
+                - columnheader "Saldo Capital" [ref=e112]
+                - columnheader "Juros Pagos" [ref=e113]
+                - columnheader "Parcela Fixa" [ref=e114]
+                - columnheader "Status" [ref=e115]
+                - columnheader "Ações" [ref=e116]
+            - rowgroup [ref=e117]:
+              - row "Cristiano Ferreira 04/2026 0x 18/12/2026 R$ 0,00 R$ 1.385,23 R$ 238,52 Pago" [ref=e118]:
+                - cell [ref=e119]:
+                  - checkbox [ref=e120] [cursor=pointer]
+                - cell "Cristiano Ferreira 04/2026" [ref=e121]:
+                  - generic [ref=e122]: Cristiano Ferreira
+                  - generic [ref=e123]: 04/2026
+                - cell "0x" [ref=e124]:
+                  - generic [ref=e125]: 0x
+                - cell "18/12/2026" [ref=e126]
+                - cell "R$ 0,00" [ref=e127]
+                - cell "R$ 1.385,23" [ref=e128]
+                - cell "R$ 238,52" [ref=e129]
+                - cell "Pago" [ref=e130]
+                - cell [ref=e131]:
+                  - button [ref=e133] [cursor=pointer]:
+                    - img [ref=e134]
+              - row "Cristiano Ferreira 05/2026 0x 18/09/2026 R$ 0,00 R$ 1.127,77 R$ 238,52 Pago" [ref=e138]:
+                - cell [ref=e139]:
+                  - checkbox [ref=e140] [cursor=pointer]
+                - cell "Cristiano Ferreira 05/2026" [ref=e141]:
+                  - generic [ref=e142]: Cristiano Ferreira
+                  - generic [ref=e143]: 05/2026
+                - cell "0x" [ref=e144]:
+                  - generic [ref=e145]: 0x
+                - cell "18/09/2026" [ref=e146]
+                - cell "R$ 0,00" [ref=e147]
+                - cell "R$ 1.127,77" [ref=e148]
+                - cell "R$ 238,52" [ref=e149]
+                - cell "Pago" [ref=e150]
+                - cell [ref=e151]:
+                  - button [ref=e153] [cursor=pointer]:
+                    - img [ref=e154]
+              - row "FREQ TEST 1771437756989 06/2026 3x 04/03/2026 R$ 784,53 R$ 100,00 R$ 315,47 Em Dia" [ref=e158]:
+                - cell [ref=e159]:
+                  - checkbox [ref=e160] [cursor=pointer]
+                - cell "FREQ TEST 1771437756989 06/2026" [ref=e161]:
+                  - generic [ref=e162]: FREQ TEST 1771437756989
+                  - generic [ref=e163]: 06/2026
+                - cell "3x" [ref=e164]:
+                  - generic [ref=e165]: 3x
+                - cell "04/03/2026" [ref=e166]
+                - cell "R$ 784,53" [ref=e167]
+                - cell "R$ 100,00" [ref=e168]
+                - cell "R$ 315,47" [ref=e169]
+                - cell "Em Dia" [ref=e170]
+                - cell [ref=e171]:
+                  - button [ref=e173] [cursor=pointer]:
+                    - img [ref=e174]
+              - row "FREQ TEST 1771438144125 07/2026 3x 04/03/2026 R$ 784,53 R$ 100,00 R$ 315,47 Em Dia" [ref=e178]:
+                - cell [ref=e179]:
+                  - checkbox [ref=e180] [cursor=pointer]
+                - cell "FREQ TEST 1771438144125 07/2026" [ref=e181]:
+                  - generic [ref=e182]: FREQ TEST 1771438144125
+                  - generic [ref=e183]: 07/2026
+                - cell "3x" [ref=e184]:
+                  - generic [ref=e185]: 3x
+                - cell "04/03/2026" [ref=e186]
+                - cell "R$ 784,53" [ref=e187]
+                - cell "R$ 100,00" [ref=e188]
+                - cell "R$ 315,47" [ref=e189]
+                - cell "Em Dia" [ref=e190]
+                - cell [ref=e191]:
+                  - button [ref=e193] [cursor=pointer]:
+                    - img [ref=e194]
+              - row "AGREE TEST 1771438164250 08/2026 5x 31/12/2027 R$ 2.000,00 R$ 0,00 R$ 461,95 Acordo" [ref=e198]:
+                - cell [ref=e199]:
+                  - checkbox [ref=e200] [cursor=pointer]
+                - cell "AGREE TEST 1771438164250 08/2026" [ref=e201]:
+                  - generic [ref=e202]: AGREE TEST 1771438164250
+                  - generic [ref=e203]: 08/2026
+                - cell "5x" [ref=e204]:
+                  - generic [ref=e205]: 5x
+                - cell "31/12/2027" [ref=e206]
+                - cell "R$ 2.000,00" [ref=e207]
+                - cell "R$ 0,00" [ref=e208]
+                - cell "R$ 461,95" [ref=e209]
+                - cell "Acordo" [ref=e210]
+                - cell [ref=e211]:
+                  - button [ref=e213] [cursor=pointer]:
+                    - img [ref=e214]
+              - row "FREQ TEST 1771438555904 09/2026 3x 04/03/2026 R$ 784,53 R$ 100,00 R$ 315,47 Em Dia" [ref=e218]:
+                - cell [ref=e219]:
+                  - checkbox [ref=e220] [cursor=pointer]
+                - cell "FREQ TEST 1771438555904 09/2026" [ref=e221]:
+                  - generic [ref=e222]: FREQ TEST 1771438555904
+                  - generic [ref=e223]: 09/2026
+                - cell "3x" [ref=e224]:
+                  - generic [ref=e225]: 3x
+                - cell "04/03/2026" [ref=e226]
+                - cell "R$ 784,53" [ref=e227]
+                - cell "R$ 100,00" [ref=e228]
+                - cell "R$ 315,47" [ref=e229]
+                - cell "Em Dia" [ref=e230]
+                - cell [ref=e231]:
+                  - button [ref=e233] [cursor=pointer]:
+                    - img [ref=e234]
+              - row "AGR 1771438857470 10/2026 5x 31/12/2027 R$ 2.000,00 R$ 0,00 R$ 461,95 Acordo" [ref=e238]:
+                - cell [ref=e239]:
+                  - checkbox [ref=e240] [cursor=pointer]
+                - cell "AGR 1771438857470 10/2026" [ref=e241]:
+                  - generic [ref=e242]: AGR 1771438857470
+                  - generic [ref=e243]: 10/2026
+                - cell "5x" [ref=e244]:
+                  - generic [ref=e245]: 5x
+                - cell "31/12/2027" [ref=e246]
+                - cell "R$ 2.000,00" [ref=e247]
+                - cell "R$ 0,00" [ref=e248]
+                - cell "R$ 461,95" [ref=e249]
+                - cell "Acordo" [ref=e250]
+                - cell [ref=e251]:
+                  - button [ref=e253] [cursor=pointer]:
+                    - img [ref=e254]
+              - row "FREQ TEST 1771438960864 11/2026 3x 04/03/2026 R$ 784,53 R$ 100,00 R$ 315,47 Em Dia" [ref=e258]:
+                - cell [ref=e259]:
+                  - checkbox [ref=e260] [cursor=pointer]
+                - cell "FREQ TEST 1771438960864 11/2026" [ref=e261]:
+                  - generic [ref=e262]: FREQ TEST 1771438960864
+                  - generic [ref=e263]: 11/2026
+                - cell "3x" [ref=e264]:
+                  - generic [ref=e265]: 3x
+                - cell "04/03/2026" [ref=e266]
+                - cell "R$ 784,53" [ref=e267]
+                - cell "R$ 100,00" [ref=e268]
+                - cell "R$ 315,47" [ref=e269]
+                - cell "Em Dia" [ref=e270]
+                - cell [ref=e271]:
+                  - button [ref=e273] [cursor=pointer]:
+                    - img [ref=e274]
+              - row "FREQ TEST 1771439351264 12/2026 3x 04/03/2026 R$ 784,53 R$ 100,00 R$ 315,47 Em Dia" [ref=e278]:
+                - cell [ref=e279]:
+                  - checkbox [ref=e280] [cursor=pointer]
+                - cell "FREQ TEST 1771439351264 12/2026" [ref=e281]:
+                  - generic [ref=e282]: FREQ TEST 1771439351264
+                  - generic [ref=e283]: 12/2026
+                - cell "3x" [ref=e284]:
+                  - generic [ref=e285]: 3x
+                - cell "04/03/2026" [ref=e286]
+                - cell "R$ 784,53" [ref=e287]
+                - cell "R$ 100,00" [ref=e288]
+                - cell "R$ 315,47" [ref=e289]
+                - cell "Em Dia" [ref=e290]
+                - cell [ref=e291]:
+                  - button [ref=e293] [cursor=pointer]:
+                    - img [ref=e294]
+              - row "AGR 1771439652462 13/2026 5x 31/12/2027 R$ 2.000,00 R$ 0,00 R$ 461,95 Acordo" [ref=e298]:
+                - cell [ref=e299]:
+                  - checkbox [ref=e300] [cursor=pointer]
+                - cell "AGR 1771439652462 13/2026" [ref=e301]:
+                  - generic [ref=e302]: AGR 1771439652462
+                  - generic [ref=e303]: 13/2026
+                - cell "5x" [ref=e304]:
+                  - generic [ref=e305]: 5x
+                - cell "31/12/2027" [ref=e306]
+                - cell "R$ 2.000,00" [ref=e307]
+                - cell "R$ 0,00" [ref=e308]
+                - cell "R$ 461,95" [ref=e309]
+                - cell "Acordo" [ref=e310]
+                - cell [ref=e311]:
+                  - button [ref=e313] [cursor=pointer]:
+                    - img [ref=e314]
+              - row "FREQ 1771439722662 14/2026 3x 04/03/2026 R$ 784,53 R$ 100,00 R$ 315,47 Em Dia" [ref=e318]:
+                - cell [ref=e319]:
+                  - checkbox [ref=e320] [cursor=pointer]
+                - cell "FREQ 1771439722662 14/2026" [ref=e321]:
+                  - generic [ref=e322]: FREQ 1771439722662
+                  - generic [ref=e323]: 14/2026
+                - cell "3x" [ref=e324]:
+                  - generic [ref=e325]: 3x
+                - cell "04/03/2026" [ref=e326]
+                - cell "R$ 784,53" [ref=e327]
+                - cell "R$ 100,00" [ref=e328]
+                - cell "R$ 315,47" [ref=e329]
+                - cell "Em Dia" [ref=e330]
+                - cell [ref=e331]:
+                  - button [ref=e333] [cursor=pointer]:
+                    - img [ref=e334]
+              - row "FREQ 1771439766893 15/2026 3x 04/03/2026 R$ 784,53 R$ 100,00 R$ 315,47 Em Dia" [ref=e338]:
+                - cell [ref=e339]:
+                  - checkbox [ref=e340] [cursor=pointer]
+                - cell "FREQ 1771439766893 15/2026" [ref=e341]:
+                  - generic [ref=e342]: FREQ 1771439766893
+                  - generic [ref=e343]: 15/2026
+                - cell "3x" [ref=e344]:
+                  - generic [ref=e345]: 3x
+                - cell "04/03/2026" [ref=e346]
+                - cell "R$ 784,53" [ref=e347]
+                - cell "R$ 100,00" [ref=e348]
+                - cell "R$ 315,47" [ref=e349]
+                - cell "Em Dia" [ref=e350]
+                - cell [ref=e351]:
+                  - button [ref=e353] [cursor=pointer]:
+                    - img [ref=e354]
+              - row "FREQ 1771439854574 16/2026 3x 04/03/2026 R$ 784,53 R$ 100,00 R$ 315,47 Em Dia" [ref=e358]:
+                - cell [ref=e359]:
+                  - checkbox [ref=e360] [cursor=pointer]
+                - cell "FREQ 1771439854574 16/2026" [ref=e361]:
+                  - generic [ref=e362]: FREQ 1771439854574
+                  - generic [ref=e363]: 16/2026
+                - cell "3x" [ref=e364]:
+                  - generic [ref=e365]: 3x
+                - cell "04/03/2026" [ref=e366]
+                - cell "R$ 784,53" [ref=e367]
+                - cell "R$ 100,00" [ref=e368]
+                - cell "R$ 315,47" [ref=e369]
+                - cell "Em Dia" [ref=e370]
+                - cell [ref=e371]:
+                  - button [ref=e373] [cursor=pointer]:
+                    - img [ref=e374]
+  - generic [ref=e379]:
+    - generic [ref=e380]:
+      - heading "Detalhes do Contrato" [level=3] [ref=e381]
+      - button [ref=e382] [cursor=pointer]:
+        - img [ref=e383]
+    - generic [ref=e387]:
+      - generic [ref=e388]:
+        - button "Visão Geral" [ref=e389] [cursor=pointer]
+        - button "Extrato Financeiro" [ref=e390] [cursor=pointer]
+      - generic [ref=e392]:
+        - generic [ref=e395]:
+          - generic [ref=e396]:
+            - paragraph [ref=e397]: 18/02/2026 às 18:37
+            - generic [ref=e398]: Parcela
+          - generic [ref=e399]:
+            - generic [ref=e400]:
+              - generic [ref=e401]: "TOTAL PAGO:"
+              - generic [ref=e402]: R$ 315,47
+            - generic [ref=e403]:
+              - generic [ref=e404]:
+                - generic [ref=e405]: Amortização
+                - generic [ref=e406]: R$ 215,47
+              - generic [ref=e407]:
+                - generic [ref=e408]: Lucro (Juros)
+                - generic [ref=e409]: R$ 100,00
+            - paragraph [ref=e410]: "Baixa Manual. Ref: 18/02/2026, 18:37:00 [JUROS QUITADOS]"
+        - generic [ref=e413]:
+          - generic [ref=e414]:
+            - paragraph [ref=e415]: 18/02/2026 às 18:37
+            - generic [ref=e416]: Abertura
+          - generic [ref=e417]:
+            - generic [ref=e418]:
+              - generic [ref=e419]: "VALOR CONCEDIDO:"
+              - generic [ref=e420]: R$ 1.000,00
+            - generic [ref=e421]:
+              - generic [ref=e422]:
+                - generic [ref=e423]: Amortização
+                - generic [ref=e424]: R$ 0,00
+              - generic [ref=e425]:
+                - generic [ref=e426]: Lucro (Juros)
+                - generic [ref=e427]: R$ 0,00
+            - paragraph [ref=e428]: Empréstimo Concedido
+      - button "Registrar Novo Pagamento" [ref=e430] [cursor=pointer]:
+        - img [ref=e431]
+        - text: Registrar Novo Pagamento
+```

@@ -364,7 +364,16 @@ const Billing = () => {
         updatedLoan.status = 'Em Dia';
         if (valCapital > 0 || settleInterest || cycleCompletedNow) {
              const currentDue = new Date(updatedLoan.nextDue);
-             currentDue.setMonth(currentDue.getMonth() + 1);
+
+             // --- CORREÇÃO: Respeita a frequência do contrato no avanço de data ---
+             if (updatedLoan.frequency === 'SEMANAL') {
+                 currentDue.setDate(currentDue.getDate() + 7);
+             } else if (updatedLoan.frequency === 'DIARIO') {
+                 currentDue.setDate(currentDue.getDate() + 1);
+             } else {
+                 currentDue.setMonth(currentDue.getMonth() + 1);
+             }
+
              updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
              
              const isSimple = updatedLoan.interestType === 'SIMPLE';
