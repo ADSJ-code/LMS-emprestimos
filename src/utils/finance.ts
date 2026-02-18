@@ -15,8 +15,10 @@ export const calculateOverdueValue = (
   moraPercent?: number 
 ): number => {
   if (status !== 'Atrasado' && status !== 'Acordo') return amount;
+
   const due = new Date(dueDateStr);
   const today = new Date();
+  
   due.setHours(0, 0, 0, 0);
   today.setHours(0, 0, 0, 0);
 
@@ -24,8 +26,10 @@ export const calculateOverdueValue = (
 
   const diffTime = Math.abs(today.getTime() - due.getTime());
   const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
   const safeFine = (finePercent || 0);
   const fineValue = amount * (safeFine / 100);
+
   const safeMora = (moraPercent || 0);
   const dailyInterestRate = (safeMora / 100) / 30; 
   const interestValue = amount * (dailyInterestRate * days);
@@ -33,15 +37,8 @@ export const calculateOverdueValue = (
   return amount + fineValue + interestValue;
 };
 
-/**
- * LÓGICA CORRIGIDA:
- * O Saldo Devedor é: Valor Original Contratado - Total de Capital já Amortizado.
- * O 'loan.amount' NÃO deve ser alterado durante a vida do contrato.
- */
 export const calculateCapitalBalance = (loan: Loan): number => {
-    const totalAmortized = loan.totalPaidCapital || 0;
-    const balance = loan.amount - totalAmortized;
-    return balance > 0.10 ? balance : 0;
+    return loan.amount > 0.10 ? loan.amount : 0;
 };
 
 export const calculateRealBalance = (loan: Loan): number => {
@@ -49,7 +46,8 @@ export const calculateRealBalance = (loan: Loan): number => {
 };
 
 /**
- * LÓGICA DA PARCELA (PRICE MENSAL CHEIO)
+ * LÓGICA DA PARCELA (ADAPTADA PARA FREQUÊNCIA)
+ * Ajusta a taxa de juros conforme a periodicidade (Mensal, Semanal, Diário).
  */
 export const calculateInstallmentBreakdown = (
     loan: Loan
@@ -61,39 +59,49 @@ export const calculateInstallmentBreakdown = (
         return { interest: 0, capital: 0, total: 0 };
     }
 
-    // 2. Valor da Parcela Fixa
+    // 2. Define a Taxa do Período (Ajuste de Frequência)
+    let periodicRate = loan.interestRate / 100; // Padrão Mensal
+
+    if (loan.frequency === 'SEMANAL') {
+        periodicRate = periodicRate / 4; // Aproximação comercial (4 semanas)
+    } else if (loan.frequency === 'DIARIO') {
+        periodicRate = periodicRate / 30; // Aproximação comercial (30 dias)
+    }
+
+    // 3. Valor da Parcela Fixa (Se não tiver salvo, calcula Price com a taxa ajustada)
     let fixedInstallment = loan.installmentValue;
     
     if (!fixedInstallment || fixedInstallment === 0) {
-        const i = loan.interestRate / 100;
         const n = loan.installments; 
-        if (i === 0) fixedInstallment = loan.amount / (n || 1);
-        else fixedInstallment = loan.amount * ( (i * Math.pow(1 + i, n)) / (Math.pow(1 + i, n) - 1) );
+        if (periodicRate === 0) fixedInstallment = loan.amount / (n || 1);
+        else fixedInstallment = loan.amount * ( (periodicRate * Math.pow(1 + periodicRate, n)) / (Math.pow(1 + periodicRate, n) - 1) );
     }
 
-    // 3. CÁLCULO DE JUROS (PRICE)
-    let monthlyInterest = currentCapitalBalance * (loan.interestRate / 100);
+    // 4. CÁLCULO DE JUROS DO PERÍODO
+    // Juros sobre o saldo devedor usando a taxa ajustada
+    let periodicInterest = currentCapitalBalance * periodicRate;
 
-    // 4. CÁLCULO DE CAPITAL
-    let capitalPart = fixedInstallment - monthlyInterest;
+    // 5. CÁLCULO DE CAPITAL
+    let capitalPart = fixedInstallment - periodicInterest;
 
-    // Ajustes de borda
+    // --- CORREÇÕES DE BORDA ---
     if (capitalPart < 0) {
         capitalPart = 0;
-        monthlyInterest = fixedInstallment; 
+        periodicInterest = fixedInstallment; 
     }
+
     if (currentCapitalBalance < capitalPart) {
         capitalPart = currentCapitalBalance;
-        monthlyInterest = fixedInstallment - capitalPart;
+        periodicInterest = fixedInstallment - capitalPart;
     }
 
-    monthlyInterest = Math.round(monthlyInterest * 100) / 100;
+    periodicInterest = Math.round(periodicInterest * 100) / 100;
     capitalPart = Math.round(capitalPart * 100) / 100;
     
-    const totalToPay = monthlyInterest + capitalPart;
+    const totalToPay = periodicInterest + capitalPart;
 
     return {
-        interest: monthlyInterest,
+        interest: periodicInterest,
         capital: capitalPart,
         total: totalToPay
     };
