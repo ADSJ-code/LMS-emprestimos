@@ -195,7 +195,14 @@ const Billing = () => {
 
   const getBreakdown = (loan: Loan | null) => {
       if (!loan) return { interest: 0, capital: 0 };
-      const interest = loan.amount * (loan.interestRate / 100);
+
+      // Ajusta a taxa para o período correto (Mensal, Semanal, Diário)
+      let periodicRate = loan.interestRate;
+      if (loan.frequency === 'SEMANAL') periodicRate = loan.interestRate / 4;
+      else if (loan.frequency === 'DIARIO') periodicRate = loan.interestRate / 30;
+
+      const interest = loan.amount * (periodicRate / 100);
+
       if (loan.interestType === 'SIMPLE') {
           return { interest, capital: 0 }; 
       }
@@ -238,14 +245,18 @@ const Billing = () => {
     if (amount > 0 && months > 0 && !isNaN(rate) && formData.startDate) {
       setIsSimulating(true);
       const timeoutId = setTimeout(() => {
-        const i = rate / 100;
+        // Ajusta a taxa de juros baseada na periodicidade
+        let adjustedRate = rate;
+        if (formData.frequency === 'SEMANAL') adjustedRate = rate / 4;
+        else if (formData.frequency === 'DIARIO') adjustedRate = rate / 30;
+
+        const i = adjustedRate / 100;
         let pmt = 0;
         let totalInt = 0;
 
         if (formData.interestType === 'SIMPLE') {
-            // No juros simples (pagamento mínimo), a parcela é só o juro mensal
+            // No juros simples (pagamento mínimo), a parcela é só o juro proporcional
             pmt = amount * i; 
-            // Se for semanal ou diário, ajustamos (implementação futura no cálculo, por enquanto assume taxa mensal)
             totalInt = pmt * months;
         } else {
             // Price

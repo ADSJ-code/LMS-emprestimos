@@ -1,0 +1,291 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - generic [ref=e5]:
+        - heading "TESTE EMPREENDIMENTO" [level=1] [ref=e6]
+        - paragraph [ref=e7]: Sistema de Gestão
+      - navigation [ref=e8]:
+        - list [ref=e9]:
+          - listitem [ref=e10]:
+            - link "Dashboard" [ref=e11] [cursor=pointer]:
+              - /url: /dashboard
+              - img [ref=e12]
+              - text: Dashboard
+          - listitem [ref=e17]:
+            - link "Lista de Clientes" [ref=e18] [cursor=pointer]:
+              - /url: /clients
+              - img [ref=e19]
+              - text: Lista de Clientes
+          - listitem [ref=e24]:
+            - link "Cobrança" [ref=e25] [cursor=pointer]:
+              - /url: /billing
+              - img [ref=e26]
+              - text: Cobrança
+          - listitem [ref=e29]:
+            - link "Atrasados" [ref=e30] [cursor=pointer]:
+              - /url: /overdue
+              - img [ref=e31]
+              - text: Atrasados
+          - listitem [ref=e33]:
+            - link "Lista Negra" [ref=e34] [cursor=pointer]:
+              - /url: /blacklist
+              - img [ref=e35]
+              - text: Lista Negra
+          - listitem [ref=e37]:
+            - link "Lista de Afiliados" [ref=e38] [cursor=pointer]:
+              - /url: /affiliates
+              - img [ref=e39]
+              - text: Lista de Afiliados
+          - listitem [ref=e45]:
+            - link "Histórico" [ref=e46] [cursor=pointer]:
+              - /url: /history
+              - img [ref=e47]
+              - text: Histórico
+          - listitem [ref=e51]:
+            - link "Configurações" [ref=e52] [cursor=pointer]:
+              - /url: /settings
+              - img [ref=e53]
+              - text: Configurações
+      - button "AD Administrador Mestre Sair do Sistema" [ref=e57] [cursor=pointer]:
+        - generic [ref=e58]: AD
+        - generic [ref=e59]:
+          - paragraph [ref=e60]: Administrador Mestre
+          - generic [ref=e61]:
+            - img [ref=e62]
+            - generic [ref=e65]: Sair do Sistema
+    - main [ref=e66]:
+      - generic [ref=e67]:
+        - generic [ref=e68]:
+          - generic [ref=e69]:
+            - heading "Cobrança e Empréstimos" [level=2] [ref=e70]
+            - paragraph [ref=e71]: Gestão financeira completa.
+          - generic [ref=e72]:
+            - button "Cobrança" [ref=e73] [cursor=pointer]:
+              - img [ref=e74]
+              - text: Cobrança
+            - button [ref=e79] [cursor=pointer]:
+              - img [ref=e80]
+            - button "Novo Contrato" [ref=e85] [cursor=pointer]:
+              - img [ref=e86]
+              - text: Novo Contrato
+        - generic [ref=e87]:
+          - generic [ref=e88]:
+            - generic [ref=e89]:
+              - img [ref=e90]
+              - textbox "Buscar cliente..." [ref=e93]
+            - generic [ref=e94]:
+              - button "Filtros" [ref=e95] [cursor=pointer]:
+                - img [ref=e96]
+                - text: Filtros
+              - combobox [ref=e98]:
+                - option "Todos" [selected]
+                - option "Em Dia"
+                - option "Atrasado"
+                - option "Em Acordo"
+                - option "Pago"
+              - button "Excel" [ref=e99] [cursor=pointer]:
+                - img [ref=e100]
+                - text: Excel
+          - table [ref=e104]:
+            - rowgroup [ref=e105]:
+              - row "Cliente Parcelas Vencimento Saldo Capital Juros Pagos Parcela Fixa Status Ações" [ref=e106]:
+                - columnheader [ref=e107]:
+                  - checkbox [ref=e108] [cursor=pointer]
+                - columnheader "Cliente" [ref=e109]
+                - columnheader "Parcelas" [ref=e110]
+                - columnheader "Vencimento" [ref=e111]
+                - columnheader "Saldo Capital" [ref=e112]
+                - columnheader "Juros Pagos" [ref=e113]
+                - columnheader "Parcela Fixa" [ref=e114]
+                - columnheader "Status" [ref=e115]
+                - columnheader "Ações" [ref=e116]
+            - rowgroup [ref=e117]:
+              - row "Cristiano Ferreira 01/2026 0x 15/12/2026 R$ 0,00 R$ 1.385,23 R$ 238,52 Pago" [ref=e118]:
+                - cell [ref=e119]:
+                  - checkbox [ref=e120] [cursor=pointer]
+                - cell "Cristiano Ferreira 01/2026" [ref=e121]:
+                  - generic [ref=e122]: Cristiano Ferreira
+                  - generic [ref=e123]: 01/2026
+                - cell "0x" [ref=e124]:
+                  - generic [ref=e125]: 0x
+                - cell "15/12/2026" [ref=e126]
+                - cell "R$ 0,00" [ref=e127]
+                - cell "R$ 1.385,23" [ref=e128]
+                - cell "R$ 238,52" [ref=e129]
+                - cell "Pago" [ref=e130]
+                - cell [ref=e131]:
+                  - button [ref=e133] [cursor=pointer]:
+                    - img [ref=e134]
+              - row "Cristiano Ferreira 02/2026 0x 15/08/2026 R$ 0,00 R$ 804,25 R$ 300,71 Pago" [ref=e138]:
+                - cell [ref=e139]:
+                  - checkbox [ref=e140] [cursor=pointer]
+                - cell "Cristiano Ferreira 02/2026" [ref=e141]:
+                  - generic [ref=e142]: Cristiano Ferreira
+                  - generic [ref=e143]: 02/2026
+                - cell "0x" [ref=e144]:
+                  - generic [ref=e145]: 0x
+                - cell "15/08/2026" [ref=e146]
+                - cell "R$ 0,00" [ref=e147]
+                - cell "R$ 804,25" [ref=e148]
+                - cell "R$ 300,71" [ref=e149]
+                - cell "Pago" [ref=e150]
+                - cell [ref=e151]:
+                  - button [ref=e153] [cursor=pointer]:
+                    - img [ref=e154]
+              - row "Carlos Roberto 1771541359661 03/2026 12x 01/02/2025 R$ 5.000,00 R$ 0,00 R$ 564,13 Atrasado" [ref=e158]:
+                - cell [ref=e159]:
+                  - checkbox [ref=e160] [cursor=pointer]
+                - cell "Carlos Roberto 1771541359661 03/2026" [ref=e161]:
+                  - generic [ref=e162]: Carlos Roberto 1771541359661
+                  - generic [ref=e163]: 03/2026
+                - cell "12x" [ref=e164]:
+                  - generic [ref=e165]: 12x
+                - cell "01/02/2025" [ref=e166]
+                - cell "R$ 5.000,00" [ref=e167]
+                - cell "R$ 0,00" [ref=e168]
+                - cell "R$ 564,13" [ref=e169]
+                - cell "Atrasado" [ref=e170]
+                - cell [ref=e171]:
+                  - button [ref=e173] [cursor=pointer]:
+                    - img [ref=e174]
+              - row "Maria Aparecida 1771541359661 04/2026 4x 25/12/2025 R$ 1.000,00 R$ 0,00 R$ 253,13 Acordo" [ref=e178]:
+                - cell [ref=e179]:
+                  - checkbox [ref=e180] [cursor=pointer]
+                - cell "Maria Aparecida 1771541359661 04/2026" [ref=e181]:
+                  - generic [ref=e182]: Maria Aparecida 1771541359661
+                  - generic [ref=e183]: 04/2026
+                - cell "4x" [ref=e184]:
+                  - generic [ref=e185]: 4x
+                - cell "25/12/2025" [ref=e186]
+                - cell "R$ 1.000,00" [ref=e187]
+                - cell "R$ 0,00" [ref=e188]
+                - cell "R$ 253,13" [ref=e189]
+                - cell "Acordo" [ref=e190]
+                - cell [ref=e191]:
+                  - button [ref=e193] [cursor=pointer]:
+                    - img [ref=e194]
+              - row "Jose Silva 1771541359661 05/2026 5x 02/03/2025 R$ 500,00 R$ 0,00 R$ 100,10 Atrasado" [ref=e198]:
+                - cell [ref=e199]:
+                  - checkbox [ref=e200] [cursor=pointer]
+                - cell "Jose Silva 1771541359661 05/2026" [ref=e201]:
+                  - generic [ref=e202]: Jose Silva 1771541359661
+                  - generic [ref=e203]: 05/2026
+                - cell "5x" [ref=e204]:
+                  - generic [ref=e205]: 5x
+                - cell "02/03/2025" [ref=e206]
+                - cell "R$ 500,00" [ref=e207]
+                - cell "R$ 0,00" [ref=e208]
+                - cell "R$ 100,10" [ref=e209]
+                - cell "Atrasado" [ref=e210]
+                - cell [ref=e211]:
+                  - button [ref=e213] [cursor=pointer]:
+                    - img [ref=e214]
+              - row "Joao Silva Audit 1771542246272 06/2026 1x 25/12/2025 R$ 1.000,00 R$ 0,00 R$ 1.100,00 Acordo" [ref=e218]:
+                - cell [ref=e219]:
+                  - checkbox [ref=e220] [cursor=pointer]
+                - cell "Joao Silva Audit 1771542246272 06/2026" [ref=e221]:
+                  - generic [ref=e222]: Joao Silva Audit 1771542246272
+                  - generic [ref=e223]: 06/2026
+                - cell "1x" [ref=e224]:
+                  - generic [ref=e225]: 1x
+                - cell "25/12/2025" [ref=e226]
+                - cell "R$ 1.000,00" [ref=e227]
+                - cell "R$ 0,00" [ref=e228]
+                - cell "R$ 1.100,00" [ref=e229]
+                - cell "Acordo" [ref=e230]
+                - cell [ref=e231]:
+                  - button [ref=e233] [cursor=pointer]:
+                    - img [ref=e234]
+  - generic [ref=e239]:
+    - generic [ref=e240]:
+      - heading "Novo Empréstimo" [level=3] [ref=e241]
+      - button [ref=e242] [cursor=pointer]:
+        - img [ref=e243]
+    - generic [ref=e247]:
+      - generic [ref=e248]:
+        - generic [ref=e249]:
+          - generic [ref=e250]: Cliente Selecionado
+          - combobox [ref=e251]:
+            - option "Selecione o titular..."
+            - option "Cristiano Ferreira"
+            - option "Sormane Rodrigues Guimarães"
+            - option "Carlos Roberto 1771541359661"
+            - option "Maria Aparecida 1771541359661"
+            - option "Jose Silva 1771541359661"
+            - option "Carlos Teste 1771541580857"
+            - option "Luiz Carlos 1771541916892"
+            - option "Joao Silva Audit 1771542246272"
+            - option "Carlos Alberto 1771542420016"
+            - option "Maria Aparecida 1771542420016"
+            - option "Renato Silva 1771542420016" [selected]
+            - option "Ana Lucia 1771542420016"
+        - generic [ref=e252]:
+          - generic [ref=e253]:
+            - generic [ref=e254]: Banco do Cliente
+            - 'textbox "Ex: Nubank, Itaú..." [ref=e255]'
+          - generic [ref=e256]:
+            - generic [ref=e257]: Forma de Pagamento
+            - textbox "CPF, Email, Ag/Conta..." [ref=e258]
+          - generic [ref=e259]:
+            - generic [ref=e260]: Multa Atraso (%)
+            - textbox "0.0" [ref=e261]
+          - generic [ref=e262]:
+            - generic [ref=e263]: Juros Mora Diária (%)
+            - textbox "0.0" [ref=e264]
+        - generic [ref=e265]:
+          - generic [ref=e266]:
+            - generic [ref=e267]: Valor (R$)
+            - spinbutton [ref=e268]: "600"
+          - generic [ref=e269]:
+            - generic [ref=e270]: Taxa Mensal (%)
+            - spinbutton [ref=e271]: "3"
+          - generic [ref=e272]:
+            - generic [ref=e273]: Data da Operação
+            - textbox [active] [ref=e274]: 2025-03-01
+          - generic [ref=e275]:
+            - generic [ref=e276]: Qtd. Parcelas
+            - spinbutton [ref=e277]: "30"
+        - generic [ref=e278]:
+          - generic [ref=e279]:
+            - generic [ref=e280]: Periodicidade
+            - generic [ref=e281]:
+              - img [ref=e282]
+              - combobox [ref=e287]:
+                - option "Mensal"
+                - option "Semanal"
+                - option "Diário" [selected]
+          - generic [ref=e288]:
+            - generic [ref=e289]: Primeiro Vencimento
+            - textbox "Deixe vazio para automático" [ref=e290]:
+              - /placeholder: Opcional
+        - generic [ref=e291]:
+          - checkbox "Pagamento Mínimo (Só Juros) O cliente paga apenas os juros mensais. O capital não abate." [ref=e292]
+          - generic [ref=e293] [cursor=pointer]:
+            - text: Pagamento Mínimo (Só Juros)
+            - generic [ref=e294]: O cliente paga apenas os juros mensais. O capital não abate.
+        - generic [ref=e295]:
+          - checkbox "Adicionar Fiador (Opcional)" [ref=e296]
+          - generic [ref=e297] [cursor=pointer]: Adicionar Fiador (Opcional)
+      - generic [ref=e298]:
+        - generic [ref=e299]:
+          - img [ref=e300]
+          - heading "Simulação Financeira (Price)" [level=4] [ref=e302]
+        - generic [ref=e303]:
+          - generic [ref=e304]:
+            - generic [ref=e305]: "Montante Financiado:"
+            - generic [ref=e306]: R$ 600,00
+          - generic [ref=e307]:
+            - generic [ref=e308]: "Parcela Diária (30x):"
+            - generic [ref=e309]: R$ 20,31
+          - generic [ref=e310]:
+            - generic [ref=e311]: "Custo Total de Juros:"
+            - generic [ref=e312]: + R$ 9,34
+      - generic [ref=e313]:
+        - button "Cancelar" [ref=e314] [cursor=pointer]
+        - button "Iniciar Triagem" [ref=e315] [cursor=pointer]:
+          - text: Iniciar Triagem
+          - img [ref=e316]
+```
