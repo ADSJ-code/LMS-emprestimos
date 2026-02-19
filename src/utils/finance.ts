@@ -37,8 +37,10 @@ export const calculateOverdueValue = (
   return amount + fineValue + interestValue;
 };
 
+// --- CORREÇÃO AQUI: Agora subtrai o que já foi amortizado ---
 export const calculateCapitalBalance = (loan: Loan): number => {
-    return loan.amount > 0.10 ? loan.amount : 0;
+    const balance = loan.amount - (loan.totalPaidCapital || 0);
+    return balance > 0.10 ? balance : 0;
 };
 
 export const calculateRealBalance = (loan: Loan): number => {
@@ -52,7 +54,7 @@ export const calculateRealBalance = (loan: Loan): number => {
 export const calculateInstallmentBreakdown = (
     loan: Loan
 ): { interest: number, capital: number, total: number } => {
-    // 1. Saldo Devedor Atual
+    // 1. Saldo Devedor Atual (Agora vai diminuir a cada parcela paga!)
     const currentCapitalBalance = calculateCapitalBalance(loan);
 
     if (currentCapitalBalance <= 0.10) {
@@ -78,7 +80,7 @@ export const calculateInstallmentBreakdown = (
     }
 
     // 4. CÁLCULO DE JUROS DO PERÍODO
-    // Juros sobre o saldo devedor usando a taxa ajustada
+    // Juros sobre o saldo devedor (que agora é menor) usando a taxa ajustada
     let periodicInterest = currentCapitalBalance * periodicRate;
 
     // 5. CÁLCULO DE CAPITAL

@@ -35,7 +35,7 @@ export interface Loan {
   totalPaidCapital?: number;
   history?: PaymentRecord[];
 
-  // --- NOVOS CAMPOS PARA O ERP (Adicionados) ---
+  // --- NOVOS CAMPOS PARA O ERP ---
   frequency?: 'DIARIO' | 'SEMANAL' | 'MENSAL';
   projectedProfit?: number;
   
@@ -103,6 +103,15 @@ export interface BlacklistEntry {
   riskLevel?: string;
 }
 
+// Interface de Usuário (Para o Settings)
+export interface SystemUser {
+    id?: string;
+    username: string;
+    email: string;
+    name?: string;
+    role?: 'ADMIN' | 'USER' | 'MASTER' | string;
+}
+
 // --- Configuração da API ---
 
 const API_BASE_URL = '/api';
@@ -161,7 +170,7 @@ export const authService = {
     }
     return response.data;
   },
-  listUsers: async () => {
+  listUsers: async (): Promise<SystemUser[]> => {
     const response = await api.get('/users');
     return response.data;
   },
@@ -186,7 +195,7 @@ export const authService = {
 export const loanService = {
   getAll: async (): Promise<Loan[]> => {
     const response = await api.get('/loans');
-    return response.data;
+    return response.data || [];
   },
   create: async (loan: Loan): Promise<Loan> => {
     const response = await api.post('/loans', loan);
@@ -204,7 +213,7 @@ export const loanService = {
 export const clientService = {
   getAll: async (): Promise<Client[]> => {
     const response = await api.get('/clients');
-    return response.data;
+    return response.data || [];
   },
   create: async (client: Client): Promise<Client> => {
     const response = await api.post('/clients', client);
@@ -222,7 +231,7 @@ export const clientService = {
 export const affiliateService = {
   getAll: async (): Promise<Affiliate[]> => {
     const response = await api.get('/affiliates');
-    return response.data;
+    return response.data || [];
   },
   create: async (affiliate: Affiliate): Promise<Affiliate> => {
     const response = await api.post('/affiliates', affiliate);
@@ -240,7 +249,7 @@ export const affiliateService = {
 export const blacklistService = {
   getAll: async (): Promise<BlacklistEntry[]> => {
     const response = await api.get('/blacklist');
-    return response.data;
+    return response.data || [];
   },
   create: async (entry: BlacklistEntry): Promise<BlacklistEntry> => {
     const response = await api.post('/blacklist', entry);
@@ -258,17 +267,28 @@ export const blacklistService = {
 export const historyService = {
   getLogs: async (): Promise<LogEntry[]> => {
     const response = await api.get('/logs');
-    return response.data;
+    return response.data || [];
   }
 };
 
 export const settingsService = {
   get: async () => {
-    const response = await api.get('/settings');
-    return response.data;
+    try {
+        const response = await api.get('/settings');
+        return response.data;
+    } catch (e) {
+        console.warn("Usando configurações padrão (API offline ou vazia)");
+        return {
+            company: { name: 'EMPRESA PADRÃO', cnpj: '', phone: '', email: '' },
+            system: { warningDays: 3 }
+        };
+    }
   },
   save: async (settings: any) => {
+    // Normalização de Payload para o Backend Go
     let payload = settings;
+    
+    // Se estiver no formato antigo (flat), converte para aninhado
     if (!settings.company && settings.name) {
          payload = {
              company: {
@@ -282,7 +302,7 @@ export const settingsService = {
              system: {
                  autoBackup: settings.autoBackup || false,
                  requireLogin: true,
-                 warningDays: settings.warningDays || 3 // Garante que o campo existe
+                 warningDays: settings.warningDays || 3
              }
          };
     }
@@ -290,7 +310,8 @@ export const settingsService = {
     return response.data;
   },
   restoreBackup: async (backupData: any) => {
-    const response = await api.post('/admin/restore', backupData);
+    // Timeout estendido para restauração
+    const response = await api.post('/admin/restore', backupData, { timeout: 60000 });
     return response.data;
   }
 };
