@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Save, Building, Shield, CheckCircle, RefreshCw, Download, 
-  Users, Plus, Trash2, Key, X, AlertTriangle, Upload, Loader2, Bell, Lock, Terminal 
+  Users, Plus, Trash2, Key, X, AlertTriangle, Upload, Loader2, Bell, Lock 
 } from 'lucide-react';
 import Layout from '../components/Layout';
-// CORREÇÃO AQUI: Adicionei clientService e loanService na importação
+// Importando os serviços necessários para deletar os dados
 import { settingsService, clientService, loanService, authService } from '../services/api';
 
 // --- COMPONENTE MODAL GENÉRICO ---
@@ -37,7 +37,6 @@ const Settings = () => {
   // --- AUTH & USER DATA ---
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isAdmin, setIsAdmin] = useState(false); 
-  const [debugInfo, setDebugInfo] = useState<string>(''); // Para diagnóstico
 
   // --- USER MANAGEMENT STATES ---
   const [users, setUsers] = useState<any[]>([]);
@@ -70,18 +69,15 @@ const Settings = () => {
 
   // --- INITIAL LOAD ---
   useEffect(() => {
-    // 1. Tenta ler a sessão correta (lms_active_session)
     let userObj = null;
     const sessionStr = localStorage.getItem('lms_active_session');
     
     if (sessionStr) {
         try {
             const sessionData = JSON.parse(sessionStr);
-            // Às vezes o user está dentro de sessionData.user ou sessionData direto
             userObj = sessionData.user || sessionData;
         } catch (e) { console.error("Erro ao ler lms_active_session", e); }
     } else {
-        // Fallback para chave antiga 'user' caso exista
         const userStr = localStorage.getItem('user');
         if (userStr) {
             try { userObj = JSON.parse(userStr); } catch (e) {}
@@ -95,21 +91,6 @@ const Settings = () => {
         const userEmail = (userObj.email || userObj.username || "").toLowerCase();
         const userName = (userObj.name || "").toUpperCase();
 
-        // Diagnóstico visual
-        setDebugInfo(JSON.stringify({ 
-            role: userRole, 
-            email: userEmail, 
-            name: userName, 
-            isAdminCalc: (
-                userRole.includes('ADMIN') || 
-                userRole.includes('MASTER') || 
-                userEmail.includes('admin') || 
-                userName.includes('ADMIN') || 
-                userName.includes('MESTRE')
-            )
-        }, null, 2));
-
-        // LÓGICA DE PERMISSÃO
         if (
             userRole.includes('ADMIN') || 
             userRole.includes('MASTER') || 
@@ -119,8 +100,6 @@ const Settings = () => {
         ) {
             setIsAdmin(true);
         }
-    } else {
-        setDebugInfo("Nenhum usuário encontrado na sessão.");
     }
 
     const fetchData = async () => {
@@ -185,7 +164,6 @@ const Settings = () => {
       setIsUserLoading(true); 
       try {
           await authService.addUser(newUser);
-          // Recarrega a lista após adicionar
           try {
             const updatedList = await authService.listUsers();
             setUsers(updatedList || []);
@@ -224,9 +202,7 @@ const Settings = () => {
   // --- HANDLERS: SISTEMA (BACKUP & RESET) ---
   const handleDownloadBackup = async () => {
       try {
-          // Permite download direto
           if(!confirm("Gerar backup completo do sistema?")) return;
-          
           const [clients, loans] = await Promise.all([clientService.getAll(), loanService.getAll()]);
           const backupData = { date: new Date().toISOString(), clients, loans, settings, users };
           const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupData, null, 2));
@@ -289,16 +265,35 @@ const Settings = () => {
       reader.readAsText(file);
   };
 
+  // --- LÓGICA DE LIMPEZA REAL (Apaga um por um) ---
   const performFactoryReset = async () => {
     try {
         setIsLoading(true);
-        // Simulação Front-only
-        await Promise.all([clientService.create({} as any), loanService.create({} as any)]); 
         
-        alert('♻️ Reset de fábrica concluído. O sistema foi zerado.');
+        const [clients, loans] = await Promise.all([
+            clientService.getAll(),
+            loanService.getAll()
+        ]);
+
+        for (const loan of loans) {
+            try {
+                await loanService.delete(loan.id);
+            } catch(e) { console.error(`Erro ao deletar loan ${loan.id}`, e); }
+        }
+
+        for (const client of clients) {
+            try {
+                await clientService.delete(String(client.id));
+            } catch(e) { console.error(`Erro ao deletar client ${client.id}`, e); }
+        }
+        
+        alert('♻️ Reset de fábrica concluído. Todos os dados foram apagados.');
         localStorage.clear();
         window.location.href = '/login';
-    } catch (e) { alert('Erro ao resetar sistema.'); }
+    } catch (e) { 
+        console.error("Erro crítico no reset:", e);
+        alert('Erro ao processar limpeza completa. Verifique o console.'); 
+    }
     finally { setIsLoading(false); setDangerModalOpen(false); }
   };
 
@@ -307,13 +302,6 @@ const Settings = () => {
       <header className="mb-8">
         <h2 className="text-2xl font-bold text-slate-800">Configurações</h2>
         <p className="text-slate-500">Gestão global do sistema, backups e controle de acessos.</p>
-        
-        {/* --- CAIXA DE DEBUG (REMOVER APÓS TESTE) --- */}
-        <div className="bg-yellow-100 border border-yellow-300 p-3 mt-4 rounded-lg text-xs font-mono text-yellow-900 break-all">
-            <strong>🔧 DIAGNÓSTICO DE PERMISSÃO:</strong><br/>
-            É Admin? {isAdmin ? '✅ SIM' : '❌ NÃO'}<br/>
-            Dados: {debugInfo}
-        </div>
       </header>
 
       <div className="flex flex-col lg:flex-row gap-8">
@@ -326,7 +314,7 @@ const Settings = () => {
           
           <div className="mt-8 bg-blue-50 p-4 rounded-xl border border-blue-100">
             <div className="flex items-center gap-2 mb-2"><div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div><span className="text-xs font-bold text-blue-700 uppercase">Status do Sistema</span></div>
-            <p className="text-xs text-blue-800 font-medium">Versão 3.0.5 (Debug)</p>
+            <p className="text-xs text-blue-800 font-medium">Versão 3.1.0 (Live)</p>
             <p className="text-[10px] text-blue-600 mt-1">Conexão Criptografada</p>
           </div>
         </aside>
