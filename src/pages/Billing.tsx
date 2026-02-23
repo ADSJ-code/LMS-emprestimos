@@ -144,6 +144,7 @@ const Billing = () => {
 
   useEffect(() => { fetchLoans(); }, []);
 
+  // --- CORREÇÃO AQUI: Remove o "auto-fill" das taxas de juros e multas ---
   useEffect(() => {
       if (formData.client && availableClients.length > 0) {
           const lastLoan = loans
@@ -153,10 +154,11 @@ const Billing = () => {
               setFormData(prev => ({
                   ...prev,
                   clientBank: lastLoan.clientBank || '',
-                  paymentMethod: lastLoan.paymentMethod || '',
-                  fineRate: prev.fineRate === '0.0' ? String(lastLoan.fineRate) : prev.fineRate,
-                  moraInterestRate: prev.moraInterestRate === '0.0' ? String(lastLoan.moraInterestRate) : prev.moraInterestRate,
-                  interestRate: String(prev.interestRate)
+                  paymentMethod: lastLoan.paymentMethod || ''
+                  // As linhas abaixo foram REMOVIDAS para não puxar as taxas antigas:
+                  // fineRate: prev.fineRate === '0.0' ? String(lastLoan.fineRate) : prev.fineRate,
+                  // moraInterestRate: prev.moraInterestRate === '0.0' ? String(lastLoan.moraInterestRate) : prev.moraInterestRate,
+                  // interestRate: String(prev.interestRate)
               }));
           }
       }
@@ -188,10 +190,6 @@ const Billing = () => {
        return dStr === todayStr && l.status !== 'Pago';
     });
     setTodaysLoans(dueToday);
-
-    if (dueToday.length > 0 && loans.length > 0 && !isDailyAlertOpen) {
-       // setIsDailyAlertOpen(true);
-    }
 
     const targetStr = collectionDate;
     const list = loans.filter(l => l.nextDue.split('T')[0] === targetStr && l.status !== 'Pago');
