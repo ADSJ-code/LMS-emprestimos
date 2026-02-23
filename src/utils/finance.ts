@@ -35,6 +35,9 @@ export const calculateOverdueValue = (
   const fineValue = amount * (safeFine / 100);
 
   const safeMora = (moraPercent || 0);
+
+console.log("Teste Mora -> moraPercent recebido:", moraPercent, "| safeMora final:", safeMora);
+
   // Mora integral sobre o valor da parcela, multiplicada pelos dias reais
   const dailyInterestRate = (safeMora / 100); 
   const interestValue = amount * (dailyInterestRate * days);
