@@ -31,7 +31,7 @@ export const calculateOverdueValue = (
   const fineValue = amount * (safeFine / 100);
 
   const safeMora = (moraPercent || 0);
-  const dailyInterestRate = (safeMora / 100) / 30; 
+  const dailyInterestRate = (safeMora / 100); 
   const interestValue = amount * (dailyInterestRate * days);
 
   return amount + fineValue + interestValue;
