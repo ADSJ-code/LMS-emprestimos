@@ -16,7 +16,11 @@ export const calculateOverdueValue = (
 ): number => {
   if (status !== 'Atrasado' && status !== 'Acordo') return amount;
 
-  const due = new Date(dueDateStr);
+  // CORREÇÃO DO FUSO HORÁRIO: Força a data a ser lida no fuso local exato
+  const cleanDate = dueDateStr.split('T')[0];
+  const [year, month, day] = cleanDate.split('-').map(Number);
+  const due = new Date(year, month - 1, day);
+  
   const today = new Date();
   
   due.setHours(0, 0, 0, 0);
@@ -31,13 +35,13 @@ export const calculateOverdueValue = (
   const fineValue = amount * (safeFine / 100);
 
   const safeMora = (moraPercent || 0);
+  // Mora integral sobre o valor da parcela, multiplicada pelos dias reais
   const dailyInterestRate = (safeMora / 100); 
   const interestValue = amount * (dailyInterestRate * days);
 
   return amount + fineValue + interestValue;
 };
 
-// --- CORREÇÃO AQUI: Agora subtrai o que já foi amortizado ---
 export const calculateCapitalBalance = (loan: Loan): number => {
     const balance = loan.amount - (loan.totalPaidCapital || 0);
     return balance > 0.10 ? balance : 0;
@@ -47,30 +51,23 @@ export const calculateRealBalance = (loan: Loan): number => {
     return calculateCapitalBalance(loan);
 };
 
-/**
- * LÓGICA DA PARCELA (ADAPTADA PARA FREQUÊNCIA)
- * Ajusta a taxa de juros conforme a periodicidade (Mensal, Semanal, Diário).
- */
 export const calculateInstallmentBreakdown = (
     loan: Loan
 ): { interest: number, capital: number, total: number } => {
-    // 1. Saldo Devedor Atual (Agora vai diminuir a cada parcela paga!)
     const currentCapitalBalance = calculateCapitalBalance(loan);
 
     if (currentCapitalBalance <= 0.10) {
         return { interest: 0, capital: 0, total: 0 };
     }
 
-    // 2. Define a Taxa do Período (Ajuste de Frequência)
-    let periodicRate = loan.interestRate / 100; // Padrão Mensal
+    let periodicRate = loan.interestRate / 100; 
 
     if (loan.frequency === 'SEMANAL') {
-        periodicRate = periodicRate / 4; // Aproximação comercial (4 semanas)
+        periodicRate = periodicRate / 4; 
     } else if (loan.frequency === 'DIARIO') {
-        periodicRate = periodicRate / 30; // Aproximação comercial (30 dias)
+        periodicRate = periodicRate / 30; 
     }
 
-    // 3. Valor da Parcela Fixa (Se não tiver salvo, calcula Price com a taxa ajustada)
     let fixedInstallment = loan.installmentValue;
     
     if (!fixedInstallment || fixedInstallment === 0) {
@@ -79,14 +76,9 @@ export const calculateInstallmentBreakdown = (
         else fixedInstallment = loan.amount * ( (periodicRate * Math.pow(1 + periodicRate, n)) / (Math.pow(1 + periodicRate, n) - 1) );
     }
 
-    // 4. CÁLCULO DE JUROS DO PERÍODO
-    // Juros sobre o saldo devedor (que agora é menor) usando a taxa ajustada
     let periodicInterest = currentCapitalBalance * periodicRate;
-
-    // 5. CÁLCULO DE CAPITAL
     let capitalPart = fixedInstallment - periodicInterest;
 
-    // --- CORREÇÕES DE BORDA ---
     if (capitalPart < 0) {
         capitalPart = 0;
         periodicInterest = fixedInstallment; 
