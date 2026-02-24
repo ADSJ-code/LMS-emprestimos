@@ -37,7 +37,8 @@ export const calculateOverdueValue = (
   const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
   // A MÁGICA AQUI: Define se vai calcular juros sobre os 1000 (totalAmount) ou sobre os 200 (amount)
-  const baseForCalculation = (totalAmount && totalAmount > 0) ? totalAmount : amount;
+  //const baseForCalculation = (totalAmount && totalAmount > 0) ? totalAmount : amount;
+  const baseForCalculation = (totalAmount && totalAmount > 0) ? totalAmount : 5000;
 
   const safeFine = (finePercent || 0);
   // Multa calculada em cima da baseForCalculation (R$ 1000)
@@ -48,8 +49,6 @@ export const calculateOverdueValue = (
   // Seus logs adaptados para mostrar a nova base de cálculo! Abra o F12 e veja a mágica:
   console.log("Teste Mora 1-> moraPercent recebido:", totalAmount, "| safeMora final:", safeMora);
   console.log("Teste Mora 2-> Valor da Parcela:", screenData?.payCapital, "| Valor Base p/ Juros (Capital):", screenData?.payInterest);
-  //console.log("Teste Mora 3-> moraPercent recebido:", Billing.payInterest, "| safeMora final:", safeMora);
-  //console.log("Teste Mora 4-> Valor da Parcela:", Billing.payTotal, "| Valor Base p/ Juros (Capital):", baseForCalculation);console.log("Teste Mora 1-> moraPercent recebido:", Billing.payDate, "| safeMora final:", safeMora);
 
   // Mora integral sobre a BASE (Capital Total), multiplicada pelos dias reais
   const dailyInterestRate = (safeMora / 100); 
