@@ -1,4 +1,5 @@
 import { Loan } from '../services/api';
+import Billing from '../pages/Billing';
 
 export const formatMoney = (value: number | undefined | null | string): string => {
   if (value === undefined || value === null || value === '') return "0,00";
@@ -13,7 +14,10 @@ export const calculateOverdueValue = (
   status: string,
   finePercent?: number, 
   moraPercent?: number,
-  totalAmount?: number // NOVO: Valor do capital total que o Billing está enviando (ex: R$ 1000)
+  totalAmount?: number, // NOVO: Valor do capital total que o Billing está enviando (ex: R$ 1000)
+
+
+  screenData?: { payCapital: string, payInterest: string } // NOVO
 ): number => {
   if (status !== 'Atrasado' && status !== 'Acordo') return amount;
 
@@ -42,8 +46,10 @@ export const calculateOverdueValue = (
   const safeMora = (moraPercent || 0);
 
   // Seus logs adaptados para mostrar a nova base de cálculo! Abra o F12 e veja a mágica:
-  console.log("Teste Mora 1-> moraPercent recebido:", moraPercent, "| safeMora final:", safeMora);
-  console.log("Teste Mora 2-> Valor da Parcela:", amount, "| Valor Base p/ Juros (Capital):", baseForCalculation);
+  console.log("Teste Mora 1-> moraPercent recebido:", totalAmount, "| safeMora final:", safeMora);
+  console.log("Teste Mora 2-> Valor da Parcela:", screenData?.payCapital, "| Valor Base p/ Juros (Capital):", screenData?.payInterest);
+  //console.log("Teste Mora 3-> moraPercent recebido:", Billing.payInterest, "| safeMora final:", safeMora);
+  //console.log("Teste Mora 4-> Valor da Parcela:", Billing.payTotal, "| Valor Base p/ Juros (Capital):", baseForCalculation);console.log("Teste Mora 1-> moraPercent recebido:", Billing.payDate, "| safeMora final:", safeMora);
 
   // Mora integral sobre a BASE (Capital Total), multiplicada pelos dias reais
   const dailyInterestRate = (safeMora / 100); 

@@ -321,6 +321,20 @@ const Billing = () => {
   const confirmPayment = async () => {
     if(!selectedLoan) return;
     
+    // ARRUMANDO O MORA
+    const overdueDetails = calculateOverdueValue(
+      selectedLoan.installmentValue,
+      selectedLoan.nextDue,
+      selectedLoan.status,
+      selectedLoan.fineRate,
+      selectedLoan.moraInterestRate,
+      selectedLoan.amount, // <--- Enviando o valor TOTAL do contrato
+      { payCapital, payInterest } // <--- Enviando o que o usuário digitou
+    );
+
+    // ^ ARRUMANDO O MORA ^
+
+
     const valCapital = parseFloat(payCapital) || 0;
     const valInterest = parseFloat(payInterest) || 0;
     const valTotal = valCapital + valInterest;
