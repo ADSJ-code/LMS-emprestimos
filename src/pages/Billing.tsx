@@ -144,7 +144,6 @@ const Billing = () => {
 
   useEffect(() => { fetchLoans(); }, []);
 
-  // --- CORREÇÃO AQUI: Remove o "auto-fill" das taxas de juros e multas ---
   useEffect(() => {
       if (formData.client && availableClients.length > 0) {
           const lastLoan = loans
@@ -155,10 +154,6 @@ const Billing = () => {
                   ...prev,
                   clientBank: lastLoan.clientBank || '',
                   paymentMethod: lastLoan.paymentMethod || ''
-                  // As linhas abaixo foram REMOVIDAS para não puxar as taxas antigas:
-                  // fineRate: prev.fineRate === '0.0' ? String(lastLoan.fineRate) : prev.fineRate,
-                  // moraInterestRate: prev.moraInterestRate === '0.0' ? String(lastLoan.moraInterestRate) : prev.moraInterestRate,
-                  // interestRate: String(prev.interestRate)
               }));
           }
       }
@@ -199,7 +194,8 @@ const Billing = () => {
       if (l.status === 'Pago') return acc;
       const realStatus = getLoanRealStatus(l);
       if (realStatus === 'Atrasado') {
-          const val = calculateOverdueValue(l.installmentValue, l.nextDue, 'Atrasado', l.fineRate ?? 0, l.moraInterestRate ?? 0);
+          // CORREÇÃO: Enviando o l.amount para calcular mora em cima do Valor Total
+          const val = calculateOverdueValue(l.installmentValue, l.nextDue, 'Atrasado', l.fineRate ?? 0, l.moraInterestRate ?? 0, l.amount);
           return acc + val;
       }
       return acc;
@@ -830,12 +826,14 @@ const Billing = () => {
                     <div>
                         <p className="text-xs font-bold text-red-800 uppercase tracking-wider">Atenção: Parcela em Atraso</p>
                         <p className="text-lg font-black text-red-900">
+                            {/* CORREÇÃO: Enviando o selectedLoan.amount */}
                             Valor Total Devido: R$ {formatMoney(calculateOverdueValue(
                                 selectedLoan.installmentValue, 
                                 selectedLoan.nextDue, 
                                 'Atrasado', 
                                 selectedLoan.fineRate, 
-                                selectedLoan.moraInterestRate
+                                selectedLoan.moraInterestRate,
+                                selectedLoan.amount
                             ))}
                         </p>
                         <p className="text-[10px] text-red-600 font-medium italic">*Inclui Multa de {selectedLoan.fineRate}% e Mora Diária.</p>

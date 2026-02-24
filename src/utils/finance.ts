@@ -8,11 +8,12 @@ export const formatMoney = (value: number | undefined | null | string): string =
 };
 
 export const calculateOverdueValue = (
-  amount: number, 
+  amount: number, // Valor da parcela fixa (ex: R$ 200)
   dueDateStr: string, 
   status: string,
   finePercent?: number, 
-  moraPercent?: number 
+  moraPercent?: number,
+  totalAmount?: number // NOVO: Valor do capital total que o Billing está enviando (ex: R$ 1000)
 ): number => {
   if (status !== 'Atrasado' && status !== 'Acordo') return amount;
 
@@ -31,23 +32,26 @@ export const calculateOverdueValue = (
   const diffTime = Math.abs(today.getTime() - due.getTime());
   const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
+  // A MÁGICA AQUI: Define se vai calcular juros sobre os 1000 (totalAmount) ou sobre os 200 (amount)
+  const baseForCalculation = (totalAmount && totalAmount > 0) ? totalAmount : amount;
+
   const safeFine = (finePercent || 0);
-  const fineValue = amount * (safeFine / 100);
+  // Multa calculada em cima da baseForCalculation (R$ 1000)
+  const fineValue = baseForCalculation * (safeFine / 100);
 
   const safeMora = (moraPercent || 0);
 
-console.log("Teste Mora 1-> moraPercent recebido:", finePercent, "| safeMora final:", safeMora);
+  // Seus logs adaptados para mostrar a nova base de cálculo! Abra o F12 e veja a mágica:
+  console.log("Teste Mora 1-> moraPercent recebido:", moraPercent, "| safeMora final:", safeMora);
+  console.log("Teste Mora 2-> Valor da Parcela:", amount, "| Valor Base p/ Juros (Capital):", baseForCalculation);
 
-console.log("Teste Mora 2-> moraPercent recebido:", amount, "| safeMora final:", fineValue);
-
-
-
-  // Mora integral sobre o valor da parcela, multiplicada pelos dias reais
+  // Mora integral sobre a BASE (Capital Total), multiplicada pelos dias reais
   const dailyInterestRate = (safeMora / 100); 
-  const interestValue = amount * (dailyInterestRate * days);
+  const interestValue = baseForCalculation * (dailyInterestRate * days);
 
-  console.log("Teste Mora 3-> moraPercent recebido:", status, "| safeMora final:", interestValue);
+  console.log("Teste Mora 3-> status:", status, "| Juros Mora em R$:", interestValue, "| Multa em R$:", fineValue);
 
+  // Retorna a parcela fixa (200) + Multa do Capital (ex: 0) + Mora do Capital (ex: 100)
   return amount + fineValue + interestValue;
 };
 
