@@ -14,18 +14,16 @@ COPY go.sum ./
 RUN go mod download
 
 # Copy local code to the container image.
-COPY backend ./
+COPY backend ./backend
 
 # Build the binary.
 # -mod=readonly ensures immutable go.mod and go.sum in container builds.
-RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -v -o webapp ./cmd/main.go
-
 # Use the official Alpine image for a lean production container.
 # https://hub.docker.com/_/alpine
 # https://docs.docker.com/develop/develop-images/multistage-build/#use-multi-stage-builds
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags='-w -s -extldflags "-static"' \
-    -mod=readonly -v -o webapp ./cmd/main.go
+    -mod=readonly -v -o webapp ./backend/cmd/main.go
 
 FROM alpine:latest
 
