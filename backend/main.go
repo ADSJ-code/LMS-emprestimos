@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Rara05/ProjetoEmprestimo-back/backend/controllers"
+	"github.com/Rara05/ProjetoEmprestimo-back/backend/database"
 	"github.com/Rara05/ProjetoEmprestimo-back/backend/services"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/rs/cors"
@@ -125,6 +126,9 @@ func main() {
 	msgService := services.NewWhatsappService()
 	msgController := controllers.NewWhatsappController(msgService)
 
+	usuarioService := services.NewUsuarioService()
+	usuarioController := controllers.NewUsuarioController(usuarioService)
+
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
 		mongoURI = "mongodb://root:c83ZoQR7onqzVZl-CwB_-Pw2FH4ZXHpiv2ebYH2nAC87gAOW@be2f531d-55bf-427a-ba07-502009ee1f10.southamerica-east1.firestore.goog:443/creditnow?loadBalanced=true&tls=true&authMechanism=SCRAM-SHA-256&retryWrites=false"
@@ -142,6 +146,10 @@ func main() {
 	err = mongoClient.Ping(ctx, nil)
 	if err != nil {
 		log.Fatal("Could not ping MongoDB:", err)
+	}
+
+	if err := database.InitDatabase(mongoURI); err != nil {
+		log.Fatal("Failed to init database package:", err)
 	}
 
 	db := mongoClient.Database("lms")
@@ -169,6 +177,9 @@ func main() {
 	mux.HandleFunc("/api/logs", logsHandler)
 	mux.HandleFunc("/api/settings", settingsHandler)
 	mux.HandleFunc("/api/dashboard/summary", dashboardSummaryHandler)
+
+	mux.HandleFunc("/api/usuarios", usuarioController.UsuariosHandler)
+	mux.HandleFunc("/api/usuarios/", usuarioController.UsuarioByIDHandler)
 
 	mux.HandleFunc("POST /message", msgController.EnviarMensagem)
 
