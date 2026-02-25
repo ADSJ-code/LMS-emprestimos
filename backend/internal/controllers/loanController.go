@@ -18,6 +18,15 @@ func NewLoanController(service services.LoanService, logger *slog.Logger) *LoanC
 	return &LoanController{service: service, logger: logger}
 }
 
+// GetLoans lista todos os emprestimos
+// @Summary Listar emprestimos
+// @Description Retorna todos os emprestimos cadastrados
+// @Tags Loans
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {array} models.Loan
+// @Failure 500 {object} models.ErrorResponse
+// @Router /loans [get]
 func (ctrl *LoanController) GetLoans(c *gin.Context) {
 	loans, err := ctrl.service.GetAll(c.Request.Context())
 	if err != nil {
@@ -28,13 +37,24 @@ func (ctrl *LoanController) GetLoans(c *gin.Context) {
 	c.JSON(http.StatusOK, loans)
 }
 
+// CreateLoan cria um novo emprestimo
+// @Summary Criar emprestimo
+// @Description Cadastra um novo emprestimo
+// @Tags Loans
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body models.Loan true "Dados do emprestimo"
+// @Success 201 {object} models.Loan
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /loans [post]
 func (ctrl *LoanController) CreateLoan(c *gin.Context) {
 	var loan models.Loan
 	if err := c.ShouldBindJSON(&loan); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "formato de dados inválido"})
 		return
 	}
-
 	createdLoan, err := ctrl.service.Create(c.Request.Context(), loan)
 	if err != nil {
 		ctrl.logger.Error("erro ao criar empréstimo", "error", err)
@@ -44,15 +64,26 @@ func (ctrl *LoanController) CreateLoan(c *gin.Context) {
 	c.JSON(http.StatusCreated, createdLoan)
 }
 
+// UpdateLoan atualiza um emprestimo
+// @Summary Atualizar emprestimo
+// @Description Atualiza os dados de um emprestimo pelo ID
+// @Tags Loans
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "ID do emprestimo"
+// @Param body body models.Loan true "Dados atualizados"
+// @Success 200 {object} models.Loan
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /loans/{id} [put]
 func (ctrl *LoanController) UpdateLoan(c *gin.Context) {
 	id := c.Param("id")
 	var loan models.Loan
-
 	if err := c.ShouldBindJSON(&loan); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "dados inválidos"})
 		return
 	}
-
 	updatedLoan, err := ctrl.service.Update(c.Request.Context(), id, loan)
 	if err != nil {
 		ctrl.logger.Error("erro ao atualizar", "id", id, "error", err)
@@ -62,6 +93,15 @@ func (ctrl *LoanController) UpdateLoan(c *gin.Context) {
 	c.JSON(http.StatusOK, updatedLoan)
 }
 
+// DeleteLoan remove um emprestimo
+// @Summary Deletar emprestimo
+// @Description Remove um emprestimo pelo ID
+// @Tags Loans
+// @Security BearerAuth
+// @Param id path string true "ID do emprestimo"
+// @Success 204 "No Content"
+// @Failure 500 {object} models.ErrorResponse
+// @Router /loans/{id} [delete]
 func (ctrl *LoanController) DeleteLoan(c *gin.Context) {
 	id := c.Param("id")
 	if err := ctrl.service.Delete(c.Request.Context(), id); err != nil {

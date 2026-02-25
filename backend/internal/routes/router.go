@@ -2,10 +2,13 @@ package routes
 
 import (
 	"log/slog"
+	"net/http"
 
 	"github.com/Rara05/ProjetoEmprestimo-back/backend/internal/controllers"
 	"github.com/Rara05/ProjetoEmprestimo-back/backend/internal/services"
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 func SetupRoutes(router *gin.Engine, logger *slog.Logger) {
@@ -83,5 +86,10 @@ func SetupRoutes(router *gin.Engine, logger *slog.Logger) {
 
 		// Mensagens WhatsApp
 		protected.POST("/message", msgController.EnviarMensagem)
-	}
+
+	} // Rotas da documentação
+	api.GET("/doc", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/api/doc/index.html")
+	})
+	api.GET("/doc/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 }

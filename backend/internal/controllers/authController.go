@@ -17,6 +17,17 @@ func NewAuthController(s services.AuthService, logger *slog.Logger) *AuthControl
 	return &AuthController{service: s, logger: logger}
 }
 
+// Login autentica o usuario e retorna um token JWT
+// @Summary Login
+// @Description Autentica o usuario com username e password e retorna um token JWT
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body models.LoginRequest true "Credenciais"
+// @Success 200 {object} models.LoginResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Router /auth/login [post]
 func (ctrl *AuthController) Login(c *gin.Context) {
 	var creds struct {
 		Username string `json:"username"`
