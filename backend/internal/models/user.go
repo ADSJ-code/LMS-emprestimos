@@ -2,10 +2,10 @@ package models
 
 const UsersCollection = "users"
 
-type Usuario struct {
+type User struct {
 	ID       any    `bson:"_id,omitempty" json:"id"`
 	Nome     string `json:"nome"`
-	Email    string `json:"email"`
-	Senha    string `json:"senha"`
+	Username string `json:"username" bson:"username"`
+	Password string `json:"password" bson:"password"`
 	Telefone string `json:"telefone"`
 }

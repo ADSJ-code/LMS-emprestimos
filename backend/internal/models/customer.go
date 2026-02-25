@@ -2,13 +2,11 @@ package models
 
 const CustomerCollection = "customers"
 
-type Cliente struct {
+type Client struct {
 	ID                    any    `bson:"_id,omitempty" json:"id"`
-	Nome                  string `json:"nome"`
 	Indicacao             string `json:"indicado"`
 	CPF                   string `json:"cpf"`
 	DataNascimento        string `json:"data_nascimento"`
-	Telefone              string `json:"telefone"`
 	Email                 string `json:"email"`
 	Endereco              string `json:"endereco"`
 	ModeloTrabalho        string `json:"modelo_trabalho"`
@@ -29,4 +27,8 @@ type Cliente struct {
 	NomeSujo              bool   `json:"nome_sujo"`
 	ValorEsperado         int64  `json:"valor_esperado"`
 	ValorEmprestimo       int64  `json:"valor_emprestimo"`
+	Name                  string `json:"name" bson:"name"`
+	Phone                 string `json:"phone" bson:"phone"`
+	Status                string `json:"status" bson:"status"`
+	City                  string `json:"city" bson:"city"`
 }

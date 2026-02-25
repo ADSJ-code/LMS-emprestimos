@@ -13,10 +13,10 @@ import (
 )
 
 type UsuarioService interface {
-	GetUsuarios() ([]models.Usuario, error)
-	GetUsuarioByID(id uint) (models.Usuario, error)
-	CreateUsuario(usuario models.Usuario) error
-	UpdateUsuario(usuario models.Usuario) error
+	GetUsuarios() ([]models.User, error)
+	GetUsuarioByID(id uint) (models.User, error)
+	CreateUsuario(usuario models.User) error
+	UpdateUsuario(usuario models.User) error
 	DeleteUsuario(id uint) error
 }
 
@@ -30,7 +30,7 @@ func getCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 5*time.Second)
 }
 
-func (s *usuarioService) GetUsuarios() ([]models.Usuario, error) {
+func (s *usuarioService) GetUsuarios() ([]models.User, error) {
 	if database.UseMongo() {
 		ctx, cancel := getCtx()
 		defer cancel()
@@ -41,20 +41,20 @@ func (s *usuarioService) GetUsuarios() ([]models.Usuario, error) {
 		}
 		defer cursor.Close(ctx)
 
-		var usuarios []models.Usuario
+		var usuarios []models.User
 		if err = cursor.All(ctx, &usuarios); err != nil {
 			return nil, err
 		}
 		return usuarios, nil
 	}
 
-	var usuarios []models.Usuario
+	var usuarios []models.User
 	err := database.DB().Find(&usuarios).Error
 	return usuarios, err
 }
 
-func (s *usuarioService) GetUsuarioByID(id uint) (models.Usuario, error) {
-	var usuario models.Usuario
+func (s *usuarioService) GetUsuarioByID(id uint) (models.User, error) {
+	var usuario models.User
 
 	if database.UseMongo() {
 		ctx, cancel := getCtx()
@@ -71,7 +71,7 @@ func (s *usuarioService) GetUsuarioByID(id uint) (models.Usuario, error) {
 	return usuario, err
 }
 
-func (s *usuarioService) CreateUsuario(usuario models.Usuario) error {
+func (s *usuarioService) CreateUsuario(usuario models.User) error {
 	if database.UseMongo() {
 		ctx, cancel := getCtx()
 		defer cancel()
@@ -82,7 +82,7 @@ func (s *usuarioService) CreateUsuario(usuario models.Usuario) error {
 	return database.DB().Create(&usuario).Error
 }
 
-func (s *usuarioService) UpdateUsuario(usuario models.Usuario) error {
+func (s *usuarioService) UpdateUsuario(usuario models.User) error {
 	if database.UseMongo() {
 		ctx, cancel := getCtx()
 		defer cancel()
@@ -103,7 +103,7 @@ func (s *usuarioService) DeleteUsuario(id uint) error {
 		return err
 	}
 
-	return database.DB().Delete(&models.Usuario{}, id).Error
+	return database.DB().Delete(&models.User{}, id).Error
 }
 
 func SaveTest() error {

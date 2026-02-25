@@ -17,7 +17,7 @@ type Server struct {
 }
 
 func NewServer(logger *slog.Logger) *Server {
-	gin.SetMode(gin.ReleaseMode)
+	//gin.SetMode(gin.ReleaseMode)
 	return &Server{
 		logger: logger,
 		router: gin.New(),

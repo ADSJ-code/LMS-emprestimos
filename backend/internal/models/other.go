@@ -11,11 +11,6 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-type User struct {
-	Username string `json:"username" bson:"username"`
-	Password string `json:"password" bson:"password"`
-}
-
 type PaymentRecord struct {
 	Date   string  `json:"date" bson:"date"`
 	Amount float64 `json:"amount" bson:"amount"`
@@ -40,16 +35,6 @@ type Loan struct {
 	TotalPaidInterest   float64         `json:"totalPaidInterest,omitempty" bson:"totalPaidInterest,omitempty"`
 	TotalPaidCapital    float64         `json:"totalPaidCapital,omitempty" bson:"totalPaidCapital,omitempty"`
 	History             []PaymentRecord `json:"history" bson:"history"`
-}
-
-type Client struct {
-	ID     int64  `json:"id" bson:"id"`
-	Name   string `json:"name" bson:"name"`
-	CPF    string `json:"cpf" bson:"cpf"`
-	Email  string `json:"email" bson:"email"`
-	Phone  string `json:"phone" bson:"phone"`
-	Status string `json:"status" bson:"status"`
-	City   string `json:"city" bson:"city"`
 }
 
 type Affiliate struct {

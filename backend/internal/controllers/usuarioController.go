@@ -50,26 +50,26 @@ func (uc *UsuarioController) GetUsuarioByID(c *gin.Context) {
 }
 
 func (uc *UsuarioController) CreateUsuario(c *gin.Context) {
-	var in models.Usuario
+	var in models.User
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Input inválido"})
 		return
 	}
 
-	if strings.TrimSpace(in.Email) == "" || strings.TrimSpace(in.Senha) == "" {
+	if strings.TrimSpace(in.Username) == "" || strings.TrimSpace(in.Password) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "email e senha são obrigatórios"})
 		return
 	}
 
-	usuario := models.Usuario{
+	usuario := models.User{
 		Nome:     strings.TrimSpace(in.Nome),
-		Email:    strings.TrimSpace(in.Email),
-		Senha:    in.Senha,
+		Username: strings.TrimSpace(in.Username),
+		Password: in.Password,
 		Telefone: strings.TrimSpace(in.Telefone),
 	}
 
 	if err := uc.service.CreateUsuario(usuario); err != nil {
-		uc.logger.Error("Erro ao criar usuário", "email", usuario.Email, "error", err)
+		uc.logger.Error("Erro ao criar usuário", "email", usuario.Username, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Não foi possível criar o usuário"})
 		return
 	}
@@ -85,7 +85,7 @@ func (uc *UsuarioController) UpdateUsuario(c *gin.Context) {
 		return
 	}
 
-	var in models.Usuario
+	var in models.User
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Input inválido"})
 		return

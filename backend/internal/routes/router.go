@@ -4,7 +4,6 @@ import (
 	"log/slog"
 
 	"github.com/Rara05/ProjetoEmprestimo-back/backend/internal/controllers"
-	"github.com/Rara05/ProjetoEmprestimo-back/backend/internal/middleware"
 	"github.com/Rara05/ProjetoEmprestimo-back/backend/internal/services"
 	"github.com/gin-gonic/gin"
 )
@@ -42,7 +41,7 @@ func SetupRoutes(router *gin.Engine, logger *slog.Logger) {
 
 	// --- Rotas protegidas ---
 	protected := router.Group("/api")
-	protected.Use(middleware.AuthRequired())
+	//protected.Use(middleware.AuthRequired())
 	{
 		// Usuários
 		protected.GET("/users", usuarioController.GetUsuarios)
