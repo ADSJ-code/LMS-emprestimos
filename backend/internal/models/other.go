@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type Claims struct {
@@ -13,9 +12,8 @@ type Claims struct {
 }
 
 type User struct {
-	ID       primitive.ObjectID `bson:"_id,omitempty" gorm:"primaryKey"`
-	Username string             `json:"username" bson:"username"`
-	Password string             `json:"password" bson:"password"`
+	Username string `json:"username" bson:"username"`
+	Password string `json:"password" bson:"password"`
 }
 
 type PaymentRecord struct {
@@ -26,24 +24,22 @@ type PaymentRecord struct {
 }
 
 type Loan struct {
-	ID                  string   `json:"id" bson:"id"`
-	Client              string   `json:"client" bson:"client"`
-	Amount              float64  `json:"amount" bson:"amount"`
-	Installments        int      `json:"installments" bson:"installments"`
-	InterestRate        float64  `json:"interestRate" bson:"interestRate"`
-	StartDate           string   `json:"startDate" bson:"startDate"`
-	NextDue             string   `json:"nextDue" bson:"nextDue"`
-	Status              string   `json:"status" bson:"status"`
-	InstallmentValue    float64  `json:"installmentValue" bson:"installmentValue"`
-	FineRate            float64  `json:"fineRate,omitempty" bson:"fineRate,omitempty"`
-	MoraInterestRate    float64  `json:"moraInterestRate,omitempty" bson:"moraInterestRate,omitempty"`
-	Justification       string   `json:"justification,omitempty" bson:"justification,omitempty"`
-	ChecklistAtApproval []string `json:"checklistAtApproval,omitempty" bson:"checklistAtApproval,omitempty"`
-	TotalPaidInterest   float64  `json:"totalPaidInterest,omitempty" bson:"totalPaidInterest,omitempty"`
-	TotalPaidCapital    float64  `json:"totalPaidCapital,omitempty" bson:"totalPaidCapital,omitempty"`
-
-	// Removido 'omitempty' para forçar a gravação e leitura deste campo
-	History []PaymentRecord `json:"history" bson:"history"`
+	ID                  string          `json:"id" bson:"id"`
+	Client              string          `json:"client" bson:"client"`
+	Amount              float64         `json:"amount" bson:"amount"`
+	Installments        int             `json:"installments" bson:"installments"`
+	InterestRate        float64         `json:"interestRate" bson:"interestRate"`
+	StartDate           string          `json:"startDate" bson:"startDate"`
+	NextDue             string          `json:"nextDue" bson:"nextDue"`
+	Status              string          `json:"status" bson:"status"`
+	InstallmentValue    float64         `json:"installmentValue" bson:"installmentValue"`
+	FineRate            float64         `json:"fineRate,omitempty" bson:"fineRate,omitempty"`
+	MoraInterestRate    float64         `json:"moraInterestRate,omitempty" bson:"moraInterestRate,omitempty"`
+	Justification       string          `json:"justification,omitempty" bson:"justification,omitempty"`
+	ChecklistAtApproval []string        `json:"checklistAtApproval,omitempty" bson:"checklistAtApproval,omitempty"`
+	TotalPaidInterest   float64         `json:"totalPaidInterest,omitempty" bson:"totalPaidInterest,omitempty"`
+	TotalPaidCapital    float64         `json:"totalPaidCapital,omitempty" bson:"totalPaidCapital,omitempty"`
+	History             []PaymentRecord `json:"history" bson:"history"`
 }
 
 type Client struct {

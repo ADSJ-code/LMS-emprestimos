@@ -26,7 +26,6 @@ func NewWhatsappService() WhatsappService {
 	}
 }
 
-// Estruturas para mapear o seu JSON
 type Options struct {
 	Delay    int    `json:"delay"`
 	Presence string `json:"presence"`
@@ -51,7 +50,6 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 
 	url := s.ApiURL + endPoint + "/" + userConectado
 
-	// Corpo da requisição
 	payload := MessagePayload{
 		Number: phone,
 		Options: Options{
@@ -63,52 +61,42 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 		},
 	}
 
-	// Converter para JSON
 	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("falha ao criar payload: %v", err)
 	}
 
-	// Envia para a API externa
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		return fmt.Errorf("falha ao criar requisição: %v", err)
 	}
 
-	// Adiciona os Headers do seu curl
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("apikey", "96CF28F9329F-44A3-80DB-5190D7B27185")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36")
 
-	// Configura o client com timeout
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	// Lê a resposta
 	body, _ := io.ReadAll(resp.Body)
 	fmt.Printf("Status: %s\nResposta: %s\n", resp.Status, string(body))
 
-	return err
+	return nil
 }
 
 func DefinirMensagem(delayLevel int) string {
-	message := ""
-
 	switch delayLevel {
 	case 1:
-		message = "Olá! Sua parcela venceu há 1 dia. Evite juros, pague hoje! 💸"
+		return "Olá! Sua parcela venceu há 1 dia. Evite juros, pague hoje!"
 	case 2:
-		message = "Atenção: Atraso identificado. Regularize seu débito para evitar bloqueios. ⚠️"
+		return "Atenção: Atraso identificado. Regularize seu débito para evitar bloqueios."
 	case 3:
-		message = "URGENTE: Entre em contato para negociar agora! 🚫"
+		return "URGENTE: Entre em contato para negociar agora!"
 	default:
-		message = "Olá! Identificamos uma pendência. Entre em contato conosco."
+		return "Olá! Identificamos uma pendência. Entre em contato conosco."
 	}
-
-	return message
 }
