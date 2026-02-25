@@ -9,8 +9,8 @@ import (
 	"github.com/Rara05/ProjetoEmprestimo-back/backend/database"
 	"github.com/Rara05/ProjetoEmprestimo-back/backend/internal/models"
 	"github.com/golang-jwt/jwt/v5"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 var jwtSecret []byte

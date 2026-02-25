@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/Rara05/ProjetoEmprestimo-back/backend/database"
-	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type DashboardService interface {

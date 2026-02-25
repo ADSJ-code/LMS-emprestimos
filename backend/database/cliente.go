@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/x/mongo/driver/connstring" // Útil para extrair o DB Name
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring" // Útil para extrair o DB Name
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -48,7 +48,7 @@ func connectMongo(dsn string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(dsn))
+	client, err := mongo.Connect(options.Client().ApplyURI(dsn))
 	if err != nil {
 		return err
 	}
