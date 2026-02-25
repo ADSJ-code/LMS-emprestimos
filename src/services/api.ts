@@ -212,19 +212,19 @@ export const loanService = {
 
 export const clientService = {
   getAll: async (): Promise<Client[]> => {
-    const response = await api.get('/clients');
+    const response = await api.get('/customers');
     return response.data || [];
   },
   create: async (client: Client): Promise<Client> => {
-    const response = await api.post('/clients', client);
+    const response = await api.post('/customers', client);
     return response.data;
   },
   update: async (id: number | string, client: Client): Promise<Client> => {
-    const response = await api.put(`/clients/${id}`, client);
+    const response = await api.put(`/customers/${id}`, client);
     return response.data;
   },
   delete: async (id: string): Promise<void> => {
-    await api.delete(`/clients/${id}`);
+    await api.delete(`/customers/${id}`);
   }
 };
 

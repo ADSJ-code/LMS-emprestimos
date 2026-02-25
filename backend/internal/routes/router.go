@@ -37,19 +37,19 @@ func SetupRoutes(router *gin.Engine, logger *slog.Logger) {
 	// --- Rotas públicas ---
 	api := router.Group("/api")
 	{
-		api.POST("/login", authController.Login)
+		api.POST("/auth/login", authController.Login)
 	}
 
 	// --- Rotas protegidas ---
 	protected := router.Group("/api")
 	protected.Use(middleware.AuthRequired())
 	{
-		// Usuário
-		protected.GET("/usuario", usuarioController.GetUsuarios)
-		protected.GET("/usuario/:id", usuarioController.GetUsuarioByID)
-		protected.POST("/usuario", usuarioController.CreateUsuario)
-		protected.PUT("/usuario/:id", usuarioController.UpdateUsuario)
-		protected.DELETE("/usuario/:id", usuarioController.DeleteUsuario)
+		// Usuários
+		protected.GET("/users", usuarioController.GetUsuarios)
+		protected.GET("/users/:id", usuarioController.GetUsuarioByID)
+		protected.POST("/users", usuarioController.CreateUsuario)
+		protected.PUT("/users/:id", usuarioController.UpdateUsuario)
+		protected.DELETE("/users/:id", usuarioController.DeleteUsuario)
 
 		// Empréstimos (Loans)
 		protected.GET("/loans", loanController.GetLoans)
@@ -57,11 +57,11 @@ func SetupRoutes(router *gin.Engine, logger *slog.Logger) {
 		protected.PUT("/loans/:id", loanController.UpdateLoan)
 		protected.DELETE("/loans/:id", loanController.DeleteLoan)
 
-		// Clientes
-		protected.GET("/clients", clientController.GetClients)
-		protected.POST("/clients", clientController.CreateClient)
-		protected.PUT("/clients/:id", clientController.UpdateClient)
-		protected.DELETE("/clients/:id", clientController.DeleteClient)
+		// Clientes (Customers)
+		protected.GET("/customers", clientController.GetClients)
+		protected.POST("/customers", clientController.CreateClient)
+		protected.PUT("/customers/:id", clientController.UpdateClient)
+		protected.DELETE("/customers/:id", clientController.DeleteClient)
 
 		// Afiliados
 		protected.GET("/affiliates", affiliateController.GetAffiliates)
