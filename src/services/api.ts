@@ -43,6 +43,11 @@ export interface Loan {
   agreementDate?: string; 
   agreementValue?: number;
 
+  // --- NOVOS CAMPOS: MÓDULO DE AFILIADOS ---
+  affiliateName?: string;
+  affiliateFee?: number; // Valor descontado/pago de comissão
+  affiliateNotes?: string; // Observação livre para o desconto
+
   // Campos já existentes (camelCase)
   interestType?: 'PRICE' | 'SIMPLE'; 
   guarantorName?: string;

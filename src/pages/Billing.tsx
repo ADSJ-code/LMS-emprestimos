@@ -4,7 +4,7 @@ import {
   MoreVertical, Loader2, RefreshCw, ShieldAlert, ShieldCheck, 
   Calculator, FileText, Check, ChevronRight, DollarSign, 
   Printer, Eye, TrendingUp, TrendingDown, History, Download, Calendar, AlertTriangle, Info, PartyPopper, UserCheck,
-  Percent, Landmark, CreditCard, Repeat, BellRing, X, FileSignature, Filter
+  Percent, Landmark, CreditCard, Repeat, BellRing, X, FileSignature, Filter, MessageCircle, Users
 } from 'lucide-react';
 
 import ExcelJS from 'exceljs';
@@ -14,7 +14,7 @@ import { generateContractPDF, generatePromissoryPDF } from '../utils/generatePDF
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
 import { calculateOverdueValue, formatMoney, calculateRealBalance, calculateInstallmentBreakdown, calculateCapitalBalance } from '../utils/finance';
-import { loanService, clientService, Loan, Client, PaymentRecord } from '../services/api';
+import { loanService, clientService, affiliateService, Loan, Client, PaymentRecord, Affiliate } from '../services/api';
 
 interface ChecklistItem {
   id: string;
@@ -47,9 +47,6 @@ const Billing = () => {
   const [filterStart, setFilterStart] = useState('');
   const [filterEnd, setFilterEnd] = useState('');
   const [showFilters, setShowFilters] = useState(false);
-  const [excelStart, setExcelStart] = useState('');
-  const [excelEnd, setExcelEnd] = useState('');
-  const [showExcelFilters, setShowExcelFilters] = useState(false);
 
   const [isSimulating, setIsSimulating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -67,6 +64,7 @@ const Billing = () => {
   const [agreementValue, setAgreementValue] = useState('');
 
   const [availableClients, setAvailableClients] = useState<Client[]>([]);
+  const [availableAffiliates, setAvailableAffiliates] = useState<Affiliate[]>([]);
   const [summary, setSummary] = useState({ today: 0, overdue: 0, received: 0 });
   const [loans, setLoans] = useState<Loan[]>([]);
   const [collectionLoans, setCollectionLoans] = useState<Loan[]>([]);
@@ -76,7 +74,8 @@ const Billing = () => {
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
       firstPaymentDate: '', frequency: 'MENSAL', fineRate: '0.0', moraInterestRate: '0.0', 
       clientBank: '', paymentMethod: '', interestType: 'PRICE', 
-      hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: ''
+      hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
+      hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: ''
   });
   
   const [simulation, setSimulation] = useState({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
@@ -132,17 +131,26 @@ const Billing = () => {
   const fetchLoans = async () => {
     setIsLoadingList(true);
     try { 
-      const [clientsData, loansData] = await Promise.all([
+      const [clientsData, loansData, affiliatesData] = await Promise.all([
           clientService.getAll(),
-          loanService.getAll()
+          loanService.getAll(),
+          affiliateService.getAll().catch(() => []) 
       ]);
       setAvailableClients(clientsData || []); 
       setLoans(loansData || []);
+      setAvailableAffiliates(affiliatesData || []);
     } catch (err) { console.error("Erro ao carregar dados:", err); } 
     finally { setIsLoadingList(false); }
   };
 
-  useEffect(() => { fetchLoans(); }, []);
+  useEffect(() => { 
+      fetchLoans(); 
+      const searchClient = sessionStorage.getItem('searchClient');
+      if (searchClient) {
+          setSearchTerm(searchClient);
+          sessionStorage.removeItem('searchClient');
+      }
+  }, []);
 
   useEffect(() => {
       if (formData.client && availableClients.length > 0) {
@@ -176,6 +184,23 @@ const Billing = () => {
     return 'Em Dia';
   };
 
+  const handleOpenWhatsApp = (clientName: string, loanAmount: number, dueDate: string, e?: React.MouseEvent) => {
+      if (e) e.stopPropagation();
+      setOpenMenuId(null);
+      const client = availableClients.find(c => c.name === clientName);
+      if (!client || !client.phone) {
+          alert("Telefone do cliente não encontrado no cadastro.");
+          return;
+      }
+      
+      const cleanPhone = client.phone.replace(/\D/g, '');
+      const formattedDate = formatDisplayDate(dueDate);
+      const message = `Olá, ${clientName}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loanAmount)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
+      
+      const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
+      window.open(url, '_blank');
+  };
+
   useEffect(() => {
     const today = new Date();
     const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
@@ -194,7 +219,6 @@ const Billing = () => {
       if (l.status === 'Pago') return acc;
       const realStatus = getLoanRealStatus(l);
       if (realStatus === 'Atrasado') {
-          // CORREÇÃO: Enviando o l.amount para calcular mora em cima do Valor Total
           const val = calculateOverdueValue(l.installmentValue, l.nextDue, 'Atrasado', l.fineRate ?? 0, l.moraInterestRate ?? 0, l.amount);
           return acc + val;
       }
@@ -320,20 +344,6 @@ const Billing = () => {
 
   const confirmPayment = async () => {
     if(!selectedLoan) return;
-    
-    // ARRUMANDO O MORA
-    const overdueDetails = calculateOverdueValue(
-      selectedLoan.installmentValue,
-      selectedLoan.nextDue,
-      selectedLoan.status,
-      selectedLoan.fineRate,
-      selectedLoan.moraInterestRate,
-      selectedLoan.amount, // <--- Enviando o valor TOTAL do contrato
-      { payCapital, payInterest } // <--- Enviando o que o usuário digitou
-    );
-
-    // ^ ARRUMANDO O MORA ^
-
 
     const valCapital = parseFloat(payCapital) || 0;
     const valInterest = parseFloat(payInterest) || 0;
@@ -464,38 +474,67 @@ const Billing = () => {
       } catch (e) { alert("Erro ao salvar acordo."); }
   };
 
+  // PONTO 3 DO CLÓVIS: Excel gerado a partir do Histórico (Extrato de Pagamentos)
   const handleExportExcel = async () => {
     if (filteredLoans.length === 0) { alert("Nenhum contrato encontrado com os filtros atuais."); return; }
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Relatório');
     
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Extrato de Recebimentos');
+    
+    // Novas colunas focadas no RECEBIMENTO
     worksheet.columns = [
-        { header: 'ID', key: 'id', width: 10 },
-        { header: 'Cliente', key: 'client', width: 30 },
-        { header: 'Vencimento', key: 'due', width: 12 },
-        { header: 'Status', key: 'status', width: 15 },
-        { header: 'Valor Parcela', key: 'pmt', width: 15 },
-        { header: 'Saldo Capital', key: 'balance', width: 15 },
-        { header: 'Total Juros Pagos', key: 'totalInt', width: 18 },
-        { header: 'Pago (Capital)', key: 'paidCap', width: 15 },
-        { header: 'Pago (Juros)', key: 'paidInt', width: 15 }
+        { header: 'Data da Baixa', key: 'paymentDate', width: 18 },
+        { header: 'ID Contrato', key: 'id', width: 12 },
+        { header: 'Cliente', key: 'client', width: 35 },
+        { header: 'Tipo de Registro', key: 'type', width: 18 },
+        { header: 'Valor Recebido Total', key: 'amount', width: 22 },
+        { header: 'Capital (Amortizado)', key: 'capital', width: 20 },
+        { header: 'Juros (Lucro)', key: 'interest', width: 20 },
+        { header: 'Observação', key: 'note', width: 40 }
     ];
 
+    // Estilo para o Cabeçalho
+    worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+
+    let hasRecords = false;
+
+    // Iteração dupla: para cada contrato, verifica o histórico
     filteredLoans.forEach(loan => {
-        worksheet.addRow({
-            id: loan.id, client: loan.client,
-            due: formatDisplayDate(loan.nextDue),
-            status: getLoanRealStatus(loan),
-            pmt: loan.installmentValue,
-            balance: Math.max(0, loan.amount - (loan.totalPaidCapital || 0)),
-            totalInt: loan.totalPaidInterest || 0,
-            paidCap: loan.totalPaidCapital,
-            paidInt: loan.totalPaidInterest
-        });
+        if (loan.history && loan.history.length > 0) {
+            loan.history.forEach(record => {
+                // Filtra para mostrar apenas o que foi recebimento de dinheiro (ignora registro de 'Acordo' que é só alteração de data)
+                if (record.amount > 0 || record.type === 'Abertura') {
+                    hasRecords = true;
+                    worksheet.addRow({
+                        paymentDate: new Date(record.date).toLocaleDateString('pt-BR') + ' ' + new Date(record.date).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'}),
+                        id: loan.id, 
+                        client: loan.client,
+                        type: record.type,
+                        amount: record.amount,
+                        capital: record.capitalPaid || 0,
+                        interest: record.interestPaid || 0,
+                        note: record.note || '-'
+                    });
+                }
+            });
+        }
+    });
+
+    if (!hasRecords) {
+        alert("Os contratos filtrados não possuem nenhum histórico de pagamento para gerar o extrato.");
+        return;
+    }
+
+    // Formata as colunas de moeda como Moeda no Excel
+    const colunasMoeda = ['E', 'F', 'G'];
+    colunasMoeda.forEach(col => {
+        worksheet.getColumn(col).numFmt = '"R$" #,##0.00';
     });
 
     const buffer = await workbook.xlsx.writeBuffer();
-    saveAs(new Blob([buffer]), `Relatorio_Filtrado_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.xlsx`);
+    saveAs(new Blob([buffer]), `Extrato_Recebimentos_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.xlsx`);
   };
 
   const toggleSelectAll = () => { if (selectedIds.length === filteredLoans.length) setSelectedIds([]); else setSelectedIds(filteredLoans.map(l => l.id)); };
@@ -508,7 +547,8 @@ const Billing = () => {
       setFormData({ 
         client: '', amount: '', interestRate: '', installments: '', startDate: '', firstPaymentDate: '', frequency: 'MENSAL', 
         fineRate: '0.0', moraInterestRate: '0.0', clientBank: '', paymentMethod: '', 
-        interestType: 'PRICE', hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '' 
+        interestType: 'PRICE', hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
+        hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: ''
       });
       setJustification('');
   }
@@ -547,7 +587,8 @@ const Billing = () => {
             checklistAtApproval: checkedItems, totalPaidCapital: 0, totalPaidInterest: 0,
             history: [{ date: new Date().toISOString(), amount: parseFloat(formData.amount), type: 'Abertura', note: 'Empréstimo Concedido' }],
             interestType: formData.interestType as 'PRICE' | 'SIMPLE', frequency: formData.frequency as 'MENSAL' | 'SEMANAL' | 'DIARIO', projectedProfit: projectedProfit,
-            guarantorName: formData.hasGuarantor ? formData.guarantorName : '', guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '', guarantorAddress: formData.hasGuarantor ? formData.guarantorAddress : ''
+            guarantorName: formData.hasGuarantor ? formData.guarantorName : '', guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '', guarantorAddress: formData.hasGuarantor ? formData.guarantorAddress : '',
+            affiliateName: formData.hasAffiliate ? formData.affiliateName : '', affiliateFee: formData.hasAffiliate ? parseFloat(formData.affiliateFee) : 0, affiliateNotes: formData.hasAffiliate ? formData.affiliateNotes : ''
         };
         await loanService.create(newLoan);
         fetchLoans();
@@ -665,7 +706,7 @@ const Billing = () => {
           <div className="flex gap-2 w-full xl:w-auto flex-wrap justify-end">
               <button onClick={() => setShowFilters(!showFilters)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold border transition-colors ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600'}`}><Filter size={16}/> Filtros</button>
               <select value={statusFilter} onChange={(e: any) => setStatusFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-medium outline-none"><option value="Todos">Todos</option><option value="Em Dia">Em Dia</option><option value="Atrasado">Atrasado</option><option value="Acordo">Em Acordo</option><option value="Pago">Pago</option></select>
-              <button onClick={handleExportExcel} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-green-700 transition-colors shadow-lg shadow-green-900/10"><Download size={18} /> Excel</button>
+              <button onClick={handleExportExcel} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-green-700 transition-colors shadow-lg shadow-green-900/10"><Download size={18} /> Excel (Extrato)</button>
           </div>
         </div>
         
@@ -717,7 +758,11 @@ const Billing = () => {
                                     {displayStatus}
                                 </span>
                             </td>
-                            <td className="p-4 text-right relative"><div className="relative inline-block text-left"><button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === loan.id ? null : loan.id); }} className={`p-2 rounded-lg transition-all ${openMenuId === loan.id ? 'bg-slate-200 text-slate-900' : 'text-slate-400 hover:text-slate-900 hover:bg-slate-100'}`}><MoreVertical size={18} /></button>
+                            <td className="p-4 text-right relative">
+                                {/* BOTÃO DE WHATSAPP RÁPIDO NA TABELA */}
+                                <button onClick={(e) => handleOpenWhatsApp(loan.client, loan.installmentValue, loan.nextDue, e)} className="p-2 mr-1 rounded-lg text-green-500 hover:bg-green-50 transition-colors inline-block"><MessageCircle size={18}/></button>
+                                
+                                <div className="relative inline-block text-left"><button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === loan.id ? null : loan.id); }} className={`p-2 rounded-lg transition-all ${openMenuId === loan.id ? 'bg-slate-200 text-slate-900' : 'text-slate-400 hover:text-slate-900 hover:bg-slate-100'}`}><MoreVertical size={18} /></button>
                                 {openMenuId === loan.id && (<div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right"><div className="py-1">
                                     <button onClick={() => { setSelectedLoan(loan); setDetailTab('info'); setIsDetailsOpen(true); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><Eye size={16} className="text-blue-500" /> Ver Detalhes</button>
                                     
@@ -764,19 +809,18 @@ const Billing = () => {
                                 </div>
                             </div>
                         </div>
+                        {/* BOTAO WHATSAPP DENTRO DO DETALHE */}
+                        <button onClick={() => handleOpenWhatsApp(selectedLoan.client, selectedLoan.installmentValue, selectedLoan.nextDue)} className="mt-6 flex items-center gap-2 bg-[#25D366] text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-[#128C7E] transition-colors"><MessageCircle size={18}/> Chamar no WhatsApp</button>
                     </div>
 
                     <div className="mt-4 pt-4 border-t border-slate-100">
                         <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><Info size={14}/> Ficha Técnica</h4>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 block">Modalidade</span><span className="text-xs font-bold text-slate-800 bg-white px-2 py-1 rounded border border-slate-200 inline-block">{selectedLoan.interestType === 'SIMPLE' ? 'Pag. Mínimo (Só Juros)' : 'Price (Amortização)'}</span></div>
-                            
-                            {/* PERIODICIDADE DINÂMICA NA FICHA TÉCNICA */}
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
                                 <span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Repeat size={10}/> Periodicidade</span>
                                 <span className="text-sm font-bold text-slate-800">{selectedLoan.frequency === 'DIARIO' ? 'Diário' : selectedLoan.frequency === 'SEMANAL' ? 'Semanal' : 'Mensal'}</span>
                             </div>
-
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Percent size={10}/> Taxa de Juros</span><span className="text-sm font-bold text-slate-800">{selectedLoan.interestRate}% a.m</span></div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><AlertTriangle size={10}/> Multa (Atraso)</span><span className="text-sm font-bold text-red-600">{selectedLoan.fineRate}%</span></div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Clock size={10}/> Mora Diária</span><span className="text-sm font-bold text-red-600">{selectedLoan.moraInterestRate}% a.m</span></div>
@@ -791,6 +835,21 @@ const Billing = () => {
                             <div>
                                 <span className="text-xs font-bold text-blue-400 uppercase block">Fiador Vinculado</span>
                                 <span className="text-sm font-bold text-blue-900">{selectedLoan.guarantorName}</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* CARD AFILIADO */}
+                    {selectedLoan.affiliateName && (
+                        <div className="mt-2 bg-indigo-50 border border-indigo-100 rounded-xl p-4 flex items-center gap-3">
+                            <div className="bg-indigo-100 p-2 rounded-full text-indigo-600"><Users size={18}/></div>
+                            <div className="w-full">
+                                <span className="text-xs font-bold text-indigo-400 uppercase block">Indicação / Afiliado</span>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm font-bold text-indigo-900">{selectedLoan.affiliateName}</span>
+                                    <span className="text-sm font-black text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded">R$ {formatMoney(selectedLoan.affiliateFee)}</span>
+                                </div>
+                                {selectedLoan.affiliateNotes && <p className="text-[10px] text-indigo-500 italic mt-1">{selectedLoan.affiliateNotes}</p>}
                             </div>
                         </div>
                     )}
@@ -840,7 +899,6 @@ const Billing = () => {
                     <div>
                         <p className="text-xs font-bold text-red-800 uppercase tracking-wider">Atenção: Parcela em Atraso</p>
                         <p className="text-lg font-black text-red-900">
-                            {/* CORREÇÃO: Enviando o selectedLoan.amount */}
                             Valor Total Devido: R$ {formatMoney(calculateOverdueValue(
                                 selectedLoan.installmentValue, 
                                 selectedLoan.nextDue, 
@@ -855,13 +913,27 @@ const Billing = () => {
                 </div>
             )}
 
+            {/* CARD DO ACORDO (AGORA COM AVISO DE ATRASO NO PRÓPRIO ACORDO) */}
             {selectedLoan.status === 'Acordo' && (selectedLoan.agreementValue || 0) > 0 && (
-                <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 flex items-center gap-3">
-                    <div className="bg-orange-100 p-2 rounded-full text-orange-600"><FileSignature size={20}/></div>
-                    <div>
-                        <p className="text-xs font-bold text-orange-800 uppercase">Acordo Ativo</p>
-                        <p className="text-sm text-orange-900">Incluindo valor extra de <b>R$ {formatMoney(selectedLoan.agreementValue)}</b> nesta parcela.</p>
+                <div className={`${getLoanRealStatus(selectedLoan) === 'Atrasado' ? 'bg-red-50 border-red-200' : 'bg-orange-50 border-orange-200'} border rounded-xl p-3 flex flex-col gap-2`}>
+                    <div className="flex items-center gap-3">
+                        <div className={`${getLoanRealStatus(selectedLoan) === 'Atrasado' ? 'bg-red-100 text-red-600' : 'bg-orange-100 text-orange-600'} p-2 rounded-full`}><FileSignature size={20}/></div>
+                        <div>
+                            <p className={`text-xs font-bold ${getLoanRealStatus(selectedLoan) === 'Atrasado' ? 'text-red-800' : 'text-orange-800'} uppercase`}>
+                                Acordo Ativo {getLoanRealStatus(selectedLoan) === 'Atrasado' && '(EM ATRASO)'}
+                            </p>
+                            <p className={`text-sm ${getLoanRealStatus(selectedLoan) === 'Atrasado' ? 'text-red-900' : 'text-orange-900'}`}>Incluindo valor extra de <b>R$ {formatMoney(selectedLoan.agreementValue)}</b> nesta parcela.</p>
+                        </div>
                     </div>
+                    {/* Se o acordo venceu, ele calcula a multa do acordo também */}
+                    {getLoanRealStatus(selectedLoan) === 'Atrasado' && (
+                        <div className="border-t border-red-200 pt-2 mt-1">
+                             <p className="text-xs text-red-800 font-bold flex items-center justify-between">
+                                 <span>Valor Atualizado com Multa:</span>
+                                 <span className="text-sm font-black">R$ {formatMoney(calculateOverdueValue(selectedLoan.installmentValue + (selectedLoan.agreementValue || 0), selectedLoan.nextDue, 'Atrasado', selectedLoan.fineRate, selectedLoan.moraInterestRate, selectedLoan.amount))}</span>
+                             </p>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -925,8 +997,34 @@ const Billing = () => {
                 <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="0,00"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="5.0"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Data da Operação</label><input required type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" /></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.installments} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="12"/></div></div>
                 <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Periodicidade</label><div className="relative"><Repeat size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/><select value={formData.frequency} onChange={e => setFormData({...formData, frequency: e.target.value})} className="w-full pl-10 p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5"><option value="MENSAL">Mensal</option><option value="SEMANAL">Semanal</option><option value="DIARIO">Diário</option></select></div></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Primeiro Vencimento</label><input type="date" value={formData.firstPaymentDate} onChange={e => setFormData({...formData, firstPaymentDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 text-sm" placeholder="Opcional" title="Deixe vazio para automático"/></div></div>
                 <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl"><input type="checkbox" id="interestType" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" /><label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros) <span className="text-xs font-normal text-blue-600 block">O cliente paga apenas os juros mensais. O capital não abate.</span></label></div>
+                
+                {/* CHECKBOX FIADOR */}
                 <div className="flex items-center gap-2 mt-4"><input type="checkbox" id="hasGuarantor" checked={formData.hasGuarantor} onChange={(e) => setFormData({...formData, hasGuarantor: e.target.checked})} className="w-4 h-4 rounded text-slate-900 focus:ring-slate-500"/><label htmlFor="hasGuarantor" className="text-sm font-bold text-slate-700 cursor-pointer">Adicionar Fiador (Opcional)</label></div>
                 {formData.hasGuarantor && (<div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 animate-in slide-in-from-top-2"><div className="flex items-center gap-2 mb-2"><UserCheck size={18} className="text-slate-500"/><span className="text-xs font-bold uppercase text-slate-500">Dados do Fiador</span></div><input type="text" placeholder="Nome Completo do Fiador" value={formData.guarantorName} onChange={(e) => setFormData({...formData, guarantorName: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/><div className="grid grid-cols-2 gap-3"><input type="text" placeholder="CPF do Fiador" value={formData.guarantorCPF} onChange={(e) => setFormData({...formData, guarantorCPF: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/><input type="text" placeholder="Endereço Completo" value={formData.guarantorAddress} onChange={(e) => setFormData({...formData, guarantorAddress: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/></div></div>)}
+
+                {/* NOVO: CHECKBOX AFILIADO */}
+                <div className="flex items-center gap-2 mt-2"><input type="checkbox" id="hasAffiliate" checked={formData.hasAffiliate} onChange={(e) => setFormData({...formData, hasAffiliate: e.target.checked})} className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"/><label htmlFor="hasAffiliate" className="text-sm font-bold text-slate-700 cursor-pointer">Houve indicação / Afiliado?</label></div>
+                {formData.hasAffiliate && (
+                    <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 space-y-3 animate-in slide-in-from-top-2">
+                        <div className="flex items-center gap-2 mb-2"><Users size={18} className="text-indigo-500"/><span className="text-xs font-bold uppercase text-indigo-500">Dados da Comissão</span></div>
+                        <select value={formData.affiliateName} onChange={(e) => setFormData({...formData, affiliateName: e.target.value})} className="w-full p-2 border border-indigo-200 rounded-lg bg-white outline-none">
+                            <option value="">Selecione um parceiro cadastrado ou digite...</option>
+                            {availableAffiliates.map(af => <option key={af.id} value={af.name}>{af.name}</option>)}
+                        </select>
+                        <input type="text" placeholder="Ou digite o nome do indicador..." value={formData.affiliateName} onChange={(e) => setFormData({...formData, affiliateName: e.target.value})} className="w-full p-2 border border-indigo-200 rounded-lg bg-white outline-none"/>
+                        
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-[10px] uppercase font-bold text-indigo-400 mb-1">Valor a Pagar/Descontar (R$)</label>
+                                <input type="number" step="0.01" placeholder="Ex: 50.00" value={formData.affiliateFee} onChange={(e) => setFormData({...formData, affiliateFee: e.target.value})} className="w-full p-2 border border-indigo-200 rounded-lg bg-white outline-none"/>
+                            </div>
+                            <div>
+                                <label className="block text-[10px] uppercase font-bold text-indigo-400 mb-1">Observações</label>
+                                <input type="text" placeholder="Ex: Descontado no Pix inicial" value={formData.affiliateNotes} onChange={(e) => setFormData({...formData, affiliateNotes: e.target.value})} className="w-full p-2 border border-indigo-200 rounded-lg bg-white outline-none"/>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
             
             {/* SIMULAÇÃO COM TEXTO DINÂMICO DE PERIODICIDADE */}
@@ -943,6 +1041,14 @@ const Billing = () => {
                             <span className="text-xl font-black text-green-600 bg-green-50 px-3 py-1 rounded-lg border border-green-100">R$ {formatMoney(simulation.installment)}</span>
                         </div>
                         <div className="flex justify-between items-center text-sm"><span className="text-slate-500 font-medium">Custo Total de Juros:</span><span className="text-red-600 font-bold">+ R$ {formatMoney(simulation.totalInterest)}</span></div>
+                        
+                        {/* Se tiver comissão informada, mostra na simulação */}
+                        {formData.hasAffiliate && parseFloat(formData.affiliateFee || '0') > 0 && (
+                            <div className="flex justify-between items-center text-sm pt-2 border-t border-slate-200">
+                                <span className="text-indigo-500 font-medium">Lucro Líquido Estimado:</span>
+                                <span className="text-indigo-700 font-bold">R$ {formatMoney(simulation.totalInterest - parseFloat(formData.affiliateFee))}</span>
+                            </div>
+                        )}
                     </div>
                 ) : (<p className="text-center text-slate-400 text-xs py-4 font-medium italic">Aguardando dados...</p>)}
             </div>
