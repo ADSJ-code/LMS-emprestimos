@@ -21,17 +21,19 @@ interface Debtor {
 }
 
 // Whasapp API Integration
-const sendWhatsappApi = async (phone: string, message: string) => {
-  const response = await fetch("http://localhost:3000/message", {
+const sendWhatsappApi = async (name: string, phone: string, contract: string, lateDays: number, updatedAmount: number) => {
+  const response = await fetch("http://localhost:8080/api/message", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      user_conectado: "", 
-      phone: phone.replace(/\D/g, ""), // Remove parênteses e traços
-      message: message,
+      userconectado: "teste",
+      phone: phone, 
       delay: 1200, // Opcional
+      name: name,
+      lateDays: lateDays,
+      updatedAmount: updatedAmount,
     }),
   });
 
@@ -95,7 +97,7 @@ const Overdue = () => {
             days: diffDays,
             amount: contract.installmentValue || 0,
             updatedAmount: totalDevido,
-            phone: '(11) 99999-9999', // Placeholder
+            phone: contract.phone || '(11)99027-7630', // Placeholder
             status: status,
             nextDue: contract.nextDue,
             fineRate: contract.fineRate,
@@ -118,14 +120,33 @@ const Overdue = () => {
   });
 
   const handleWhatsApp = async (debtor: Debtor) => {
-    const message = `Olá ${debtor.name}, somos da Credit Now.\n\nConsta em nosso sistema uma pendência referente ao contrato ${debtor.contract}.\n\n*Vencimento:* ${debtor.nextDue.split('-').reverse().join('/')}\n*Dias em atraso:* ${debtor.days}\n*Valor Atualizado:* ${formatMoney(debtor.updatedAmount)}\n\nPodemos negociar uma condição especial para regularização hoje?`;
+    
     try {
-      // Opcional: Abrir o link como backup ou apenas enviar pelo servidor
+      await sendWhatsappApi(
+        debtor.name,
+        debtor.phone,
+        debtor.contract,
+        debtor.days,
+        debtor.updatedAmount
+      );
 
-      await sendWhatsappApi(debtor.phone, message);
+      console.log(
+        "Enviando para nome: ",
+        debtor.name,
+        "\n contato: ",
+        debtor.contract,
+        "\n dias de atraso: ",
+        debtor.days,
+        "\n updatedAmount: ",
+        debtor.updatedAmount,
+        "\n phone: ",
+        debtor.phone,
+      );
 
       alert(`✅ Mensagem enviada com sucesso para ${debtor.name}!`);
     } catch (error) {
+      const message = `Olá ${debtor.name}, somos da Credit Now.\n\nConsta em nosso sistema uma pendência referente ao contrato ${debtor.contract}.\n\n*Vencimento:* ${debtor.nextDue.split("-").reverse().join("/")}\n*Dias em atraso:* ${debtor.days}\n*Valor Atualizado:* ${formatMoney(debtor.updatedAmount)}\n\nPodemos negociar uma condição especial para regularização hoje?`;
+
       console.error(error);
       alert(
         "❌ Erro ao enviar mensagem pelo servidor. Tentando via link direto...",
