@@ -36,7 +36,8 @@ const Billing = () => {
   const [collectionDate, setCollectionDate] = useState(new Date().toISOString().split('T')[0]);
 
   const [activeStage, setActiveStage] = useState<1 | 2>(1);
-  const [detailTab, setDetailTab] = useState<'info' | 'history'>('info');
+  // NOVO ESTADO: Adicionada a aba 'schedule' (Cronograma)
+  const [detailTab, setDetailTab] = useState<'info' | 'schedule' | 'history'>('info');
 
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -200,6 +201,114 @@ const Billing = () => {
       const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
       window.open(url, '_blank');
   };
+
+  // --- NOVA FUNÇÃO: GERADOR DE CRONOGRAMA ---
+  const renderSchedule = (loan: Loan) => {
+      const historyPayments = (loan.history || []).filter(h => h.type === 'Parcela' || h.type === 'Amortização' || h.type === 'Juros');
+      const isSimple = loan.interestType === 'SIMPLE';
+      const totalOriginal = isSimple ? '∞' : loan.installments + historyPayments.length;
+
+      const schedule = [];
+
+      // 1. Histórico Passado (Pago)
+      historyPayments.forEach((p, idx) => {
+          schedule.push({
+              id: `paid-${idx}`,
+              num: idx + 1,
+              label: `Parcela ${idx + 1}${!isSimple ? ` de ${totalOriginal}` : ''}`,
+              date: p.date, 
+              dateLabel: 'Pago em',
+              amount: p.amount,
+              status: 'Pago'
+          });
+      });
+
+      // 2. Projeção Futura (Pendente / Atrasado)
+      if (loan.status !== 'Pago') {
+          // Garante a leitura correta da data
+          const [y, m, d] = loan.nextDue.split('T')[0].split('-').map(Number);
+          
+          for (let i = 0; i < loan.installments; i++) {
+              const stepDate = new Date(y, m - 1, d);
+              if (loan.frequency === 'SEMANAL') stepDate.setDate(stepDate.getDate() + (7 * i));
+              else if (loan.frequency === 'DIARIO') stepDate.setDate(stepDate.getDate() + (1 * i));
+              else stepDate.setMonth(stepDate.getMonth() + (1 * i));
+
+              const isFirst = i === 0;
+              let status = 'Pendente';
+              let amountToDisplay = loan.installmentValue;
+
+              // A primeira parcela projetada é a parcela ATUAL
+              if (isFirst) {
+                  const realStatus = getLoanRealStatus(loan);
+                  if (realStatus === 'Atrasado') {
+                      status = 'Atrasado';
+                      const baseAmount = loan.status === 'Acordo' ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
+                      amountToDisplay = calculateOverdueValue(baseAmount, loan.nextDue, 'Atrasado', loan.fineRate, loan.moraInterestRate, loan.amount);
+                  } else if (loan.status === 'Acordo') {
+                      status = 'Acordo';
+                      amountToDisplay = loan.installmentValue + (loan.agreementValue || 0);
+                  }
+              }
+
+              schedule.push({
+                  id: `pend-${i}`,
+                  num: historyPayments.length + i + 1,
+                  label: `Parcela ${historyPayments.length + i + 1}${!isSimple ? ` de ${totalOriginal}` : ''}`,
+                  date: stepDate.toISOString(),
+                  dateLabel: 'Vencimento',
+                  amount: amountToDisplay,
+                  status: status
+              });
+
+              // Limita a exibição se for contrato de Juros Simples (infinito) para não travar a tela
+              if (isSimple && i > 11) break; 
+          }
+      }
+
+      return (
+          <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+              {schedule.map(item => (
+                  <div key={item.id} className={`p-4 rounded-xl border flex items-center justify-between ${
+                      item.status === 'Pago' ? 'bg-slate-50 border-slate-200 opacity-70' :
+                      item.status === 'Atrasado' ? 'bg-red-50 border-red-200 shadow-sm' :
+                      item.status === 'Acordo' ? 'bg-orange-50 border-orange-200 shadow-sm' :
+                      'bg-white border-blue-100 shadow-sm'
+                  }`}>
+                      <div className="flex items-center gap-4">
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
+                              item.status === 'Pago' ? 'bg-slate-200 text-slate-500' :
+                              item.status === 'Atrasado' ? 'bg-red-100 text-red-600' :
+                              item.status === 'Acordo' ? 'bg-orange-100 text-orange-600' :
+                              'bg-blue-100 text-blue-600'
+                          }`}>
+                              {item.num}
+                          </div>
+                          <div>
+                              <p className={`font-bold text-sm ${item.status === 'Pago' ? 'text-slate-500' : 'text-slate-800'}`}>{item.label}</p>
+                              <p className="text-[10px] text-slate-400 font-mono">{item.dateLabel}: {formatDisplayDate(item.date)}</p>
+                          </div>
+                      </div>
+                      <div className="text-right">
+                          <p className={`font-black text-sm ${
+                              item.status === 'Atrasado' ? 'text-red-600' :
+                              item.status === 'Acordo' ? 'text-orange-600' :
+                              item.status === 'Pago' ? 'text-slate-500' :
+                              'text-slate-700'
+                          }`}>R$ {formatMoney(item.amount)}</p>
+                          <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${
+                              item.status === 'Pago' ? 'bg-slate-200 text-slate-500' :
+                              item.status === 'Atrasado' ? 'bg-red-100 text-red-600' :
+                              item.status === 'Acordo' ? 'bg-orange-100 text-orange-600' :
+                              'bg-blue-100 text-blue-600'
+                          }`}>{item.status}</span>
+                      </div>
+                  </div>
+              ))}
+          </div>
+      );
+  };
+  // ---------------------------------------------
 
   useEffect(() => {
     const today = new Date();
@@ -474,14 +583,12 @@ const Billing = () => {
       } catch (e) { alert("Erro ao salvar acordo."); }
   };
 
-  // PONTO 3 DO CLÓVIS: Excel gerado a partir do Histórico (Extrato de Pagamentos)
   const handleExportExcel = async () => {
     if (filteredLoans.length === 0) { alert("Nenhum contrato encontrado com os filtros atuais."); return; }
     
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Extrato de Recebimentos');
     
-    // Novas colunas focadas no RECEBIMENTO
     worksheet.columns = [
         { header: 'Data da Baixa', key: 'paymentDate', width: 18 },
         { header: 'ID Contrato', key: 'id', width: 12 },
@@ -493,18 +600,15 @@ const Billing = () => {
         { header: 'Observação', key: 'note', width: 40 }
     ];
 
-    // Estilo para o Cabeçalho
     worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
     worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
     worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
 
     let hasRecords = false;
 
-    // Iteração dupla: para cada contrato, verifica o histórico
     filteredLoans.forEach(loan => {
         if (loan.history && loan.history.length > 0) {
             loan.history.forEach(record => {
-                // Filtra para mostrar apenas o que foi recebimento de dinheiro (ignora registro de 'Acordo' que é só alteração de data)
                 if (record.amount > 0 || record.type === 'Abertura') {
                     hasRecords = true;
                     worksheet.addRow({
@@ -527,7 +631,6 @@ const Billing = () => {
         return;
     }
 
-    // Formata as colunas de moeda como Moeda no Excel
     const colunasMoeda = ['E', 'F', 'G'];
     colunasMoeda.forEach(col => {
         worksheet.getColumn(col).numFmt = '"R$" #,##0.00';
@@ -791,7 +894,13 @@ const Billing = () => {
       <Modal isOpen={isDetailsOpen} onClose={() => setIsDetailsOpen(false)} title="Detalhes do Contrato">
         {selectedLoan && (
           <div className="space-y-6">
-            <div className="flex border-b border-slate-200"><button onClick={() => setDetailTab('info')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${detailTab === 'info' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Visão Geral</button><button onClick={() => setDetailTab('history')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${detailTab === 'history' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Extrato Financeiro</button></div>
+            <div className="flex border-b border-slate-200">
+                <button onClick={() => setDetailTab('info')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${detailTab === 'info' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Visão Geral</button>
+                {/* NOVA ABA DE CRONOGRAMA */}
+                <button onClick={() => setDetailTab('schedule')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${detailTab === 'schedule' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Cronograma</button>
+                <button onClick={() => setDetailTab('history')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${detailTab === 'history' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Extrato Financeiro</button>
+            </div>
+            
             {detailTab === 'info' ? (
                 <>
                     <div className="bg-slate-900 p-6 rounded-2xl shadow-xl text-white relative overflow-hidden">
@@ -823,7 +932,7 @@ const Billing = () => {
                             </div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Percent size={10}/> Taxa de Juros</span><span className="text-sm font-bold text-slate-800">{selectedLoan.interestRate}% a.m</span></div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><AlertTriangle size={10}/> Multa (Atraso)</span><span className="text-sm font-bold text-red-600">{selectedLoan.fineRate}%</span></div>
-                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Clock size={10}/> Mora Diária</span><span className="text-sm font-bold text-red-600">{selectedLoan.moraInterestRate}% a.m</span></div>
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Clock size={10}/> Mora Diária</span><span className="text-sm font-bold text-red-600">{selectedLoan.moraInterestRate}% ao dia</span></div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Landmark size={10}/> Banco</span><span className="text-sm font-bold text-slate-800 truncate" title={selectedLoan.clientBank}>{selectedLoan.clientBank || '-'}</span></div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><CreditCard size={10}/> Pagamento</span><span className="text-sm font-bold text-slate-800 truncate" title={selectedLoan.paymentMethod}>{selectedLoan.paymentMethod || '-'}</span></div>
                         </div>
@@ -854,6 +963,9 @@ const Billing = () => {
                         </div>
                     )}
                 </>
+            ) : detailTab === 'schedule' ? (
+                /* --- RENDERIZA O CRONOGRAMA DE PARCELAS --- */
+                renderSchedule(selectedLoan)
             ) : (
                 <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
                     {(!selectedLoan.history || selectedLoan.history.length === 0) ? (<div className="text-center py-10 text-slate-400 flex flex-col items-center"><History size={32} className="mb-2 opacity-50"/><p className="text-sm">Nenhum registro de pagamento encontrado.</p></div>) : (
@@ -879,6 +991,7 @@ const Billing = () => {
                     )}
                 </div>
             )}
+            
             <div className="flex flex-col gap-2 pt-4 border-t border-slate-100">
                 {selectedLoan.status !== 'Pago' && (
                     <button onClick={() => { handleOpenPayment(selectedLoan); setIsDetailsOpen(false); }} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-slate-800 transition-all shadow-lg"><DollarSign size={18} /> Registrar Novo Pagamento</button>

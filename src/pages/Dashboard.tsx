@@ -7,16 +7,19 @@ import {
   UserCheck, Bell, X, Clock, CalendarDays, ChevronDown, CheckCircle
 } from 'lucide-react';
 import Layout from '../components/Layout';
-import { calculateOverdueValue, formatMoney, calculateCapitalBalance } from '../utils/finance';
+import { calculateOverdueValue, formatMoney, calculateCapitalBalance, calculateInstallmentBreakdown } from '../utils/finance';
 import { loanService, clientService, settingsService, Loan, Client } from '../services/api';
 
 const Dashboard = () => {
   const navigate = useNavigate();
   
-  // --- ESTADOS DE FILTRO ---
+  // --- ESTADOS DE FILTRO E VISÃO ---
   const [period, setPeriod] = useState<'hoje' | 'semana' | 'mes' | 'proximo_mes' | 'personalizado' | 'todos'>('todos');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
+  
+  // Alterna entre ver a Dívida Total ou o Fluxo do Mês
+  const [viewMode, setViewMode] = useState<'saldo' | 'fluxo'>('saldo');
 
   const [loading, setLoading] = useState(false);
   const [selectedRange, setSelectedRange] = useState<'low' | 'mid' | 'high' | 'capital' | 'profit' | 'overdue' | 'active' | null>(null);
@@ -46,6 +49,7 @@ const Dashboard = () => {
 
   const [recentActivities, setRecentActivities] = useState<any[]>([]);
 
+  // Limpa a data de T00:00:00Z para evitar bugs de fuso horário
   const parseLocalDate = (dateStr: string) => {
     if (!dateStr) return new Date();
     const cleanStr = dateStr.split('T')[0];
@@ -53,15 +57,15 @@ const Dashboard = () => {
     return new Date(year, month - 1, day);
   };
 
-  // NOVA FUNÇÃO: Calcula apenas o Lucro que AINDA FALTA receber
   const calculateRemainingProfit = (loan: Loan) => {
-      let totalExpectedInterest = loan.projectedProfit || 0;
+      const amount = Number(loan.amount) || 0;
+      const installments = Number(loan.installments) || 0;
+      const installmentValue = Number(loan.installmentValue) || 0;
+      const paidInterest = Number(loan.totalPaidInterest) || 0;
       
-      if (!totalExpectedInterest) {
-          const amount = Number(loan.amount) || 0;
-          const installments = Number(loan.installments) || 0;
-          const installmentValue = Number(loan.installmentValue) || 0;
-          
+      let totalExpectedInterest = Number(loan.projectedProfit) || 0;
+      
+      if (totalExpectedInterest <= 0) {
           if (loan.interestType === 'SIMPLE') {
               totalExpectedInterest = installmentValue * (installments || 1);
           } else {
@@ -69,7 +73,6 @@ const Dashboard = () => {
           }
       }
       
-      const paidInterest = Number(loan.totalPaidInterest) || 0;
       return Math.max(0, totalExpectedInterest - paidInterest);
   };
 
@@ -82,15 +85,25 @@ const Dashboard = () => {
           settingsService.get()
       ]);
       
-      setAllLoans(loans); 
-      setAllClients(clients);
+      // Sanitiza dados caso a API devolva algo estranho
+      const safeLoans = (loans || []).map(l => ({
+          ...l,
+          amount: Number(l.amount) || 0,
+          installmentValue: Number(l.installmentValue) || 0,
+          installments: Number(l.installments) || 0,
+          totalPaidCapital: Number(l.totalPaidCapital) || 0,
+          totalPaidInterest: Number(l.totalPaidInterest) || 0,
+          projectedProfit: Number(l.projectedProfit) || 0
+      }));
+
+      setAllLoans(safeLoans); 
+      setAllClients(clients || []);
       
       const today = new Date();
       today.setHours(0,0,0,0);
-
       const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
       
-      const dueToday = loans.filter(l => {
+      const dueToday = safeLoans.filter(l => {
           if (l.status === 'Pago') return false;
           return l.nextDue.split('T')[0] === todayStr;
       });
@@ -103,23 +116,22 @@ const Dashboard = () => {
           sessionStorage.setItem('welcomeModalSeen', 'true');
       }
 
-      const activeDebtors = new Set(loans.filter(l => l.status !== 'Pago').map(l => l.client));
+      const activeDebtors = new Set(safeLoans.filter(l => l.status !== 'Pago').map(l => l.client));
 
-      // 1. FILTRAGEM PRINCIPAL
-      const filteredLoans = loans.filter((loan: any) => {
+      const filteredLoans = safeLoans.filter((loan: any) => {
+        if (period === 'todos') return true;
+        
+        const loanDateStr = loan.nextDue.split('T')[0];
+        const [lYear, lMonth, lDay] = loanDateStr.split('-').map(Number);
+        const loanDue = new Date(lYear, lMonth - 1, lDay);
+
         if (period === 'personalizado') {
             if (!customStart || !customEnd) return true; 
             const start = parseLocalDate(customStart);
             const end = parseLocalDate(customEnd);
             end.setHours(23, 59, 59, 999); 
-            const loanDue = parseLocalDate(loan.nextDue);
-            loanDue.setHours(0,0,0,0);
             return loanDue >= start && loanDue <= end;
         }
-        if (period === 'todos') return true;
-        
-        const loanDue = parseLocalDate(loan.nextDue);
-        loanDue.setHours(0,0,0,0);
 
         if (period === 'hoje') return loanDue.getTime() === today.getTime(); 
         if (period === 'semana') {
@@ -128,14 +140,16 @@ const Dashboard = () => {
           return loanDue >= today && loanDue <= weekEnd;
         }
         if (period === 'mes') {
-          const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-          const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-          return loanDue >= monthStart && loanDue <= monthEnd;
+          return loanDue.getMonth() === today.getMonth() && loanDue.getFullYear() === today.getFullYear();
         }
         if (period === 'proximo_mes') {
-            const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-            const nextMonthEnd = new Date(today.getFullYear(), today.getMonth() + 2, 0);
-            return loanDue >= nextMonthStart && loanDue <= nextMonthEnd;
+            let nextMonth = today.getMonth() + 1;
+            let targetYear = today.getFullYear();
+            if (nextMonth > 11) {
+                nextMonth = 0;
+                targetYear++;
+            }
+            return loanDue.getMonth() === nextMonth && loanDue.getFullYear() === targetYear;
         }
         return true;
       });
@@ -147,33 +161,43 @@ const Dashboard = () => {
       let atrasoTotal = 0;
       let rLowVal = 0, rLowCount = 0, rMidVal = 0, rMidCount = 0, rHighVal = 0, rHighCount = 0;
 
+      const isFluxo = viewMode === 'fluxo' && period !== 'todos';
+
       filteredLoans.forEach((loan: any) => {
         const status = loan.status ? loan.status.toLowerCase() : '';
-        const installmentValue = Number(loan.installmentValue) || 0;
         
-        // PONTO 1 e 2 DO CLÓVIS: Lemos o Saldo Devedor real e o Lucro Restante real
+        // Verifica Saldo e Lucro Restante
         const capBalance = calculateCapitalBalance(loan);
         const remProfit = calculateRemainingProfit(loan);
+        const breakdown = calculateInstallmentBreakdown(loan);
 
-        // Se o contrato ainda tem saldo devedor, ele entra nas métricas principais
         if (status !== 'pago' && capBalance > 0) {
-            capitalTotal += capBalance;
-            lucroTotal += remProfit;
+            if (isFluxo) {
+                // Modo Fluxo: Pega só a parcela do mês
+                capitalTotal += breakdown.capital;
+                lucroTotal += breakdown.interest;
+                
+                if (loan.interestRate < 10) { rLowCount++; rLowVal += breakdown.capital; } 
+                else if (loan.interestRate <= 15) { rMidCount++; rMidVal += breakdown.capital; } 
+                else { rHighCount++; rHighVal += breakdown.capital; }
+            } else {
+                // Modo Saldo: Pega a dívida inteira (que tem vencimento no período)
+                capitalTotal += capBalance;
+                lucroTotal += remProfit;
+                
+                if (loan.interestRate < 10) { rLowCount++; rLowVal += capBalance; } 
+                else if (loan.interestRate <= 15) { rMidCount++; rMidVal += capBalance; } 
+                else { rHighCount++; rHighVal += capBalance; }
+            }
         }
 
-        const dueDate = parseLocalDate(loan.nextDue);
-        dueDate.setHours(0,0,0,0);
+        const loanDateStr = loan.nextDue.split('T')[0];
+        const [lYear, lMonth, lDay] = loanDateStr.split('-').map(Number);
+        const dueDate = new Date(lYear, lMonth - 1, lDay);
 
         if ((status === 'atrasado' || (dueDate < today && status !== 'acordo')) && status !== 'pago') {
-             const valorComMulta = calculateOverdueValue(installmentValue, loan.nextDue, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+             const valorComMulta = calculateOverdueValue(loan.installmentValue, loan.nextDue, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
              atrasoTotal += valorComMulta;
-        }
-
-        // PONTO 1: Gráfico de Taxas agora soma o SALDO DEVEDOR (capBalance) e não mais o montante inicial
-        if (status !== 'pago' && capBalance > 0) {
-            if (loan.interestRate < 10) { rLowCount++; rLowVal += capBalance; } 
-            else if (loan.interestRate <= 15) { rMidCount++; rMidVal += capBalance; } 
-            else { rHighCount++; rHighVal += capBalance; }
         }
       });
 
@@ -182,14 +206,16 @@ const Dashboard = () => {
         lucroProjetado: lucroTotal,
         atrasoGeral: atrasoTotal,
         contratosAtivos: filteredLoans.filter((l: any) => l.status !== 'Pago').length,
-        totalClientesCadastrados: clients.length,
+        totalClientesCadastrados: clients ? clients.length : 0,
         clientesComDivida: activeDebtors.size,
         taxas: { lowVal: rLowVal, lowCount: rLowCount, midVal: rMidVal, midCount: rMidCount, highVal: rHighVal, highCount: rHighCount }
       });
 
       const activities = [...filteredLoans].reverse().slice(0, 5).map((loan: any) => {
-        const dueDate = parseLocalDate(loan.nextDue);
-        dueDate.setHours(0,0,0,0);
+        const loanDateStr = loan.nextDue.split('T')[0];
+        const [lYear, lMonth, lDay] = loanDateStr.split('-').map(Number);
+        const dueDate = new Date(lYear, lMonth - 1, lDay);
+        
         const isOverdue = dueDate < today && loan.status !== 'Pago';
         return {
           id: loan.id,
@@ -206,7 +232,7 @@ const Dashboard = () => {
 
   useEffect(() => { 
       if (period !== 'personalizado') fetchAndCalculate();
-  }, [period]);
+  }, [period, viewMode]);
 
   const handleCustomFilter = () => {
       setPeriod('personalizado');
@@ -229,8 +255,9 @@ const Dashboard = () => {
 
       return filteredLoansContext.filter(l => {
           if (selectedRange === 'overdue') {
-              const dueDate = parseLocalDate(l.nextDue);
-              dueDate.setHours(0,0,0,0);
+              const loanDateStr = l.nextDue.split('T')[0];
+              const [lYear, lMonth, lDay] = loanDateStr.split('-').map(Number);
+              const dueDate = new Date(lYear, lMonth - 1, lDay);
               return l.status !== 'Pago' && dueDate < today;
           }
           if (selectedRange === 'active') return l.status !== 'Pago';
@@ -245,13 +272,15 @@ const Dashboard = () => {
 
   const rangeTitles = {
       low: 'Capital em Taxa Baixa (< 10%)', mid: 'Capital em Taxa Média (10% - 15%)', high: 'Capital em Taxa Alta (> 15%)',
-      capital: 'Previsão de Fluxo / Capital', profit: 'Detalhamento de Lucro', overdue: 'Contratos em Atraso (Crítico)', active: 'Carteira de Clientes Ativos'
+      capital: 'Detalhamento de Capital', profit: 'Detalhamento de Lucro', overdue: 'Contratos em Atraso (Crítico)', active: 'Carteira de Clientes Ativos'
   };
 
   const goToBillingWithSearch = (clientName: string) => {
        sessionStorage.setItem('searchClient', clientName);
        navigate('/billing');
   }
+
+  const isFluxoAtivo = viewMode === 'fluxo' && period !== 'todos';
 
   return (
     <Layout>
@@ -303,7 +332,7 @@ const Dashboard = () => {
           <div className="animate-in slide-in-from-right-10 duration-300">
               <header className="mb-6 flex items-center gap-4">
                   <button onClick={() => setSelectedRange(null)} className="p-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors shadow-sm"><ArrowLeft size={20}/></button>
-                  <div><h2 className="text-2xl font-bold text-slate-800">{rangeTitles[selectedRange]}</h2><p className="text-slate-500">{selectedRange === 'overdue' ? 'Lista de inadimplência.' : 'Detalhamento dos valores no período filtrado.'}</p></div>
+                  <div><h2 className="text-2xl font-bold text-slate-800">{rangeTitles[selectedRange]}</h2><p className="text-slate-500">Detalhamento dos valores baseado no filtro atual.</p></div>
               </header>
               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
                   <table className="w-full text-left">
@@ -312,9 +341,8 @@ const Dashboard = () => {
                               <th className="p-4">Cliente</th>
                               <th className="p-4 text-center">Vencimento</th>
                               <th className="p-4 text-center">Taxa (%)</th>
-                              {/* Alteramos o cabeçalho para deixar claro do que se trata */}
-                              <th className="p-4 text-right">Saldo Capital</th>
-                              <th className="p-4 text-right text-green-600">Lucro Restante</th>
+                              <th className="p-4 text-right">{isFluxoAtivo ? 'Entrada (Capital da Parcela)' : 'Saldo Devedor (Total)'}</th>
+                              <th className="p-4 text-right text-green-600">{isFluxoAtivo ? 'Entrada (Juros da Parcela)' : 'Lucro Restante (Total)'}</th>
                               {selectedRange === 'overdue' && <th className="p-4 text-right text-red-600">Total com Multa</th>}
                               <th className="p-4 text-center">Status</th>
                           </tr>
@@ -323,6 +351,7 @@ const Dashboard = () => {
                           {detailedLoans.map(loan => {
                               const capBalance = calculateCapitalBalance(loan);
                               const remProfit = calculateRemainingProfit(loan);
+                              const breakdown = calculateInstallmentBreakdown(loan);
                               const overdueVal = calculateOverdueValue(loan.installmentValue, loan.nextDue, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
                               
                               return (
@@ -334,9 +363,8 @@ const Dashboard = () => {
                                       <td className="p-4 text-center text-sm font-medium">{new Date(loan.nextDue).toLocaleDateString('pt-BR')}</td>
                                       <td className="p-4 text-center font-bold text-slate-600">{loan.interestRate}%</td>
                                       
-                                      {/* Mostra o Saldo devedor e o Lucro Restante em vez do inicial */}
-                                      <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(capBalance)}</td>
-                                      <td className="p-4 text-right font-bold text-green-600">R$ {formatMoney(remProfit)}</td>
+                                      <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(isFluxoAtivo ? breakdown.capital : capBalance)}</td>
+                                      <td className="p-4 text-right font-bold text-green-600">R$ {formatMoney(isFluxoAtivo ? breakdown.interest : remProfit)}</td>
                                       
                                       {selectedRange === 'overdue' && <td className="p-4 text-right font-black text-red-600">R$ {formatMoney(overdueVal)}</td>}
                                       <td className="p-4 text-center">
@@ -354,8 +382,29 @@ const Dashboard = () => {
       ) : (
           <>
             <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-8 gap-4">
-                <div><h2 className="text-2xl font-bold text-slate-800">Dashboard</h2><p className="text-slate-500">Visão geral e projeções.</p></div>
+                <div>
+                    <h2 className="text-2xl font-bold text-slate-800">Dashboard</h2>
+                    <p className="text-slate-500">Visão geral e projeções.</p>
+                </div>
+                
                 <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center w-full xl:w-auto">
+                    {period !== 'todos' && (
+                        <div className="flex bg-slate-100 p-1 rounded-xl shadow-inner border border-slate-200">
+                            <button
+                                onClick={() => setViewMode('saldo')}
+                                className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 ${viewMode === 'saldo' ? 'bg-white text-slate-800 shadow-sm border border-slate-200' : 'text-slate-400 hover:text-slate-700'}`}
+                            >
+                                <Briefcase size={14}/> Saldo Global
+                            </button>
+                            <button
+                                onClick={() => setViewMode('fluxo')}
+                                className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 ${viewMode === 'fluxo' ? 'bg-white text-slate-800 shadow-sm border border-slate-200' : 'text-slate-400 hover:text-slate-700'}`}
+                            >
+                                <TrendingUp size={14}/> Fluxo do Mês
+                            </button>
+                        </div>
+                    )}
+
                     <button onClick={fetchAndCalculate} className="p-2.5 bg-white border border-gray-200 rounded-xl text-slate-500 hover:text-slate-900 transition-colors shadow-sm"><RefreshCw size={18} className={loading ? "animate-spin" : ""} /></button>
                     <div className="relative">
                         <select value={period === 'personalizado' ? 'personalizado' : period} onChange={(e) => setPeriod(e.target.value as any)} className="appearance-none bg-white pl-4 pr-10 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-slate-900/10 cursor-pointer">
@@ -375,14 +424,16 @@ const Dashboard = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 <div onClick={() => setSelectedRange('capital')} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-300 transition-all cursor-pointer group">
                     <div className="flex justify-between items-start mb-4"><div className="p-3 bg-blue-50 text-blue-600 rounded-lg"><Briefcase size={24} /></div></div>
-                    {/* Tooltip para o Clóvis entender que é Saldo Devedor */}
-                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1" title="Soma do Saldo Devedor de Capital (Descontadas as amortizações)">Capital na Rua (Saldo)</h3>
+                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
+                        {isFluxoAtivo ? 'Entrada Prevista (Capital)' : 'Capital na Rua (Saldo)'}
+                    </h3>
                     <p className="text-2xl font-black text-slate-800">{formatMoney(metrics.capitalNaRua)}</p>
                 </div>
                 <div onClick={() => setSelectedRange('profit')} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-green-300 transition-all cursor-pointer group">
                     <div className="flex justify-between items-start mb-4"><div className="p-3 bg-green-50 text-green-600 rounded-lg"><TrendingUp size={24} /></div></div>
-                    {/* Tooltip para o Lucro */}
-                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1" title="Juros que ainda faltam receber">Lucro a Receber</h3>
+                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
+                        {isFluxoAtivo ? 'Lucro Previsto na Parcela' : 'Lucro Restante a Receber'}
+                    </h3>
                     <p className="text-2xl font-black text-green-600">+{formatMoney(metrics.lucroProjetado)}</p>
                 </div>
                 <div onClick={() => setSelectedRange('overdue')} className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-red-500 hover:shadow-md hover:bg-red-50/10 transition-all cursor-pointer group">
@@ -396,7 +447,7 @@ const Dashboard = () => {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                        <div className="flex items-center gap-2 mb-4"><PieChart className="text-slate-400" size={20}/><h3 className="font-bold text-lg text-slate-800">Distribuição de Capital por Taxa</h3></div>
+                        <div className="flex items-center gap-2 mb-4"><PieChart className="text-slate-400" size={20}/><h3 className="font-bold text-lg text-slate-800">Distribuição por Taxa ({isFluxoAtivo ? 'Entrada do Mês' : 'Saldo Total'})</h3></div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div onClick={() => setSelectedRange('low')} className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center cursor-pointer hover:bg-slate-100 transition-colors group"><p className="text-xs font-bold text-slate-500 uppercase mb-1 group-hover:text-blue-600 transition-colors">1% a 9% (Baixa)</p><p className="text-2xl font-black text-slate-700">R$ {formatMoney(metrics.taxas.lowVal)}</p></div>
                             <div onClick={() => setSelectedRange('mid')} className="p-4 bg-blue-50 rounded-lg border border-blue-100 text-center cursor-pointer hover:bg-blue-100 transition-colors group"><p className="text-xs font-bold text-blue-500 uppercase mb-1 group-hover:text-blue-700 transition-colors">10% a 15% (Média)</p><p className="text-2xl font-black text-blue-700">R$ {formatMoney(metrics.taxas.midVal)}</p></div>
