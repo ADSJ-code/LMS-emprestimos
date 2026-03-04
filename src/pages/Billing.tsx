@@ -17,11 +17,7 @@ import { calculateOverdueValue, formatMoney, calculateRealBalance, calculateInst
 import { loanService, clientService, affiliateService, Loan, Client, PaymentRecord, Affiliate } from '../services/api';
 
 interface ChecklistItem {
-  id: string;
-  label: string;
-  weight: number;
-  checked: boolean;
-  stage: 1 | 2;
+  id: string; label: string; weight: number; checked: boolean; stage: 1 | 2;
 }
 
 type LoanFlowStep = 'closed' | 'form' | 'checklist';
@@ -36,7 +32,6 @@ const Billing = () => {
   const [collectionDate, setCollectionDate] = useState(new Date().toISOString().split('T')[0]);
 
   const [activeStage, setActiveStage] = useState<1 | 2>(1);
-  // NOVO ESTADO: Adicionada a aba 'schedule' (Cronograma)
   const [detailTab, setDetailTab] = useState<'info' | 'schedule' | 'history'>('info');
 
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
@@ -96,6 +91,20 @@ const Billing = () => {
           return { interest: breakdown.interest + extra, capital: breakdown.capital, total: breakdown.total + extra };
       }
       return breakdown;
+  };
+
+  // NOVO: Cálculo de LTV (Life Time Value) do Cliente
+  const getClientLTV = (clientName: string) => {
+      const clientLoans = loans.filter(l => l.client === clientName);
+      let totalEmprestado = 0;
+      let totalLucroRecebido = 0;
+      
+      clientLoans.forEach(l => {
+          totalEmprestado += Number(l.amount) || 0;
+          totalLucroRecebido += Number(l.totalPaidInterest) || 0;
+      });
+
+      return { totalEmprestado, totalLucroRecebido };
   };
 
   const initialChecklist: ChecklistItem[] = useMemo(() => [
@@ -202,7 +211,6 @@ const Billing = () => {
       window.open(url, '_blank');
   };
 
-  // --- NOVA FUNÇÃO: GERADOR DE CRONOGRAMA ---
   const renderSchedule = (loan: Loan) => {
       const historyPayments = (loan.history || []).filter(h => h.type === 'Parcela' || h.type === 'Amortização' || h.type === 'Juros');
       const isSimple = loan.interestType === 'SIMPLE';
@@ -210,22 +218,14 @@ const Billing = () => {
 
       const schedule = [];
 
-      // 1. Histórico Passado (Pago)
       historyPayments.forEach((p, idx) => {
           schedule.push({
-              id: `paid-${idx}`,
-              num: idx + 1,
-              label: `Parcela ${idx + 1}${!isSimple ? ` de ${totalOriginal}` : ''}`,
-              date: p.date, 
-              dateLabel: 'Pago em',
-              amount: p.amount,
-              status: 'Pago'
+              id: `paid-${idx}`, num: idx + 1, label: `Parcela ${idx + 1}${!isSimple ? ` de ${totalOriginal}` : ''}`,
+              date: p.date, dateLabel: 'Pago em', amount: p.amount, status: 'Pago'
           });
       });
 
-      // 2. Projeção Futura (Pendente / Atrasado)
       if (loan.status !== 'Pago') {
-          // Garante a leitura correta da data
           const [y, m, d] = loan.nextDue.split('T')[0].split('-').map(Number);
           
           for (let i = 0; i < loan.installments; i++) {
@@ -238,7 +238,6 @@ const Billing = () => {
               let status = 'Pendente';
               let amountToDisplay = loan.installmentValue;
 
-              // A primeira parcela projetada é a parcela ATUAL
               if (isFirst) {
                   const realStatus = getLoanRealStatus(loan);
                   if (realStatus === 'Atrasado') {
@@ -252,16 +251,9 @@ const Billing = () => {
               }
 
               schedule.push({
-                  id: `pend-${i}`,
-                  num: historyPayments.length + i + 1,
-                  label: `Parcela ${historyPayments.length + i + 1}${!isSimple ? ` de ${totalOriginal}` : ''}`,
-                  date: stepDate.toISOString(),
-                  dateLabel: 'Vencimento',
-                  amount: amountToDisplay,
-                  status: status
+                  id: `pend-${i}`, num: historyPayments.length + i + 1, label: `Parcela ${historyPayments.length + i + 1}${!isSimple ? ` de ${totalOriginal}` : ''}`,
+                  date: stepDate.toISOString(), dateLabel: 'Vencimento', amount: amountToDisplay, status: status
               });
-
-              // Limita a exibição se for contrato de Juros Simples (infinito) para não travar a tela
               if (isSimple && i > 11) break; 
           }
       }
@@ -272,35 +264,25 @@ const Billing = () => {
                   <div key={item.id} className={`p-4 rounded-xl border flex items-center justify-between ${
                       item.status === 'Pago' ? 'bg-slate-50 border-slate-200 opacity-70' :
                       item.status === 'Atrasado' ? 'bg-red-50 border-red-200 shadow-sm' :
-                      item.status === 'Acordo' ? 'bg-orange-50 border-orange-200 shadow-sm' :
-                      'bg-white border-blue-100 shadow-sm'
+                      item.status === 'Acordo' ? 'bg-orange-50 border-orange-200 shadow-sm' : 'bg-white border-blue-100 shadow-sm'
                   }`}>
                       <div className="flex items-center gap-4">
                           <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
-                              item.status === 'Pago' ? 'bg-slate-200 text-slate-500' :
-                              item.status === 'Atrasado' ? 'bg-red-100 text-red-600' :
-                              item.status === 'Acordo' ? 'bg-orange-100 text-orange-600' :
-                              'bg-blue-100 text-blue-600'
-                          }`}>
-                              {item.num}
-                          </div>
-                          <div>
-                              <p className={`font-bold text-sm ${item.status === 'Pago' ? 'text-slate-500' : 'text-slate-800'}`}>{item.label}</p>
+                              item.status === 'Pago' ? 'bg-slate-200 text-slate-500' : item.status === 'Atrasado' ? 'bg-red-100 text-red-600' :
+                              item.status === 'Acordo' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'
+                          }`}>{item.num}</div>
+                          <div><p className={`font-bold text-sm ${item.status === 'Pago' ? 'text-slate-500' : 'text-slate-800'}`}>{item.label}</p>
                               <p className="text-[10px] text-slate-400 font-mono">{item.dateLabel}: {formatDisplayDate(item.date)}</p>
                           </div>
                       </div>
                       <div className="text-right">
                           <p className={`font-black text-sm ${
-                              item.status === 'Atrasado' ? 'text-red-600' :
-                              item.status === 'Acordo' ? 'text-orange-600' :
-                              item.status === 'Pago' ? 'text-slate-500' :
-                              'text-slate-700'
+                              item.status === 'Atrasado' ? 'text-red-600' : item.status === 'Acordo' ? 'text-orange-600' :
+                              item.status === 'Pago' ? 'text-slate-500' : 'text-slate-700'
                           }`}>R$ {formatMoney(item.amount)}</p>
                           <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${
-                              item.status === 'Pago' ? 'bg-slate-200 text-slate-500' :
-                              item.status === 'Atrasado' ? 'bg-red-100 text-red-600' :
-                              item.status === 'Acordo' ? 'bg-orange-100 text-orange-600' :
-                              'bg-blue-100 text-blue-600'
+                              item.status === 'Pago' ? 'bg-slate-200 text-slate-500' : item.status === 'Atrasado' ? 'bg-red-100 text-red-600' :
+                              item.status === 'Acordo' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'
                           }`}>{item.status}</span>
                       </div>
                   </div>
@@ -308,7 +290,6 @@ const Billing = () => {
           </div>
       );
   };
-  // ---------------------------------------------
 
   useEffect(() => {
     const today = new Date();
@@ -349,11 +330,8 @@ const Billing = () => {
       const timeoutId = setTimeout(() => {
         let periodRate = rateMonthly / 100;
         
-        if (formData.frequency === 'SEMANAL') {
-            periodRate = periodRate / 4;
-        } else if (formData.frequency === 'DIARIO') {
-            periodRate = periodRate / 30;
-        }
+        if (formData.frequency === 'SEMANAL') periodRate = periodRate / 4;
+        else if (formData.frequency === 'DIARIO') periodRate = periodRate / 30;
 
         let pmt = 0;
         let totalInt = 0;
@@ -362,19 +340,14 @@ const Billing = () => {
             pmt = amount * periodRate; 
             totalInt = pmt * numInstallments;
         } else {
-            if (periodRate === 0) {
-                pmt = amount / numInstallments;
-            } else {
-                pmt = amount * ( (periodRate * Math.pow(1 + periodRate, numInstallments)) / (Math.pow(1 + periodRate, numInstallments) - 1) );
-            }
+            if (periodRate === 0) pmt = amount / numInstallments;
+            else pmt = amount * ( (periodRate * Math.pow(1 + periodRate, numInstallments)) / (Math.pow(1 + periodRate, numInstallments) - 1) );
             totalInt = (pmt * numInstallments) - amount;
         }
 
         setSimulation({ 
-            installment: pmt, 
-            totalInterest: totalInt, 
-            totalPayable: pmt * numInstallments + (formData.interestType === 'SIMPLE' ? amount : 0), 
-            isValid: true 
+            installment: pmt, totalInterest: totalInt, 
+            totalPayable: pmt * numInstallments + (formData.interestType === 'SIMPLE' ? amount : 0), isValid: true 
         });
         setIsSimulating(false);
       }, 400);
@@ -470,10 +443,8 @@ const Billing = () => {
         );
         if (confirmFix) {
             const excess = valCapital - currentDebt;
-            const adjustedCapital = currentDebt;
-            const adjustedInterest = valInterest + excess;
-            setPayCapital(adjustedCapital.toFixed(2));
-            setPayInterest(adjustedInterest.toFixed(2));
+            setPayCapital(currentDebt.toFixed(2));
+            setPayInterest((valInterest + excess).toFixed(2));
             return; 
         } else {
             return; 
@@ -488,7 +459,6 @@ const Billing = () => {
     const isPayingFullInstallment = valTotal >= (selectedLoan.installmentValue - 1.0);
 
     if (!isPayingFullInstallment && totalInterestInCycle < (totalTargetInterest - 0.10) && !settleInterest && valTotal > 0) {
-        const remaining = totalTargetInterest - totalInterestInCycle;
         const userConfirmed = window.confirm(`⚠️ ATENÇÃO: O valor pago (R$ ${formatMoney(valTotal)}) é menor que os Juros/Acordo (R$ ${formatMoney(totalTargetInterest)}).\nDeseja continuar sem quitar? O vencimento NÃO avançará.`);
         if (!userConfirmed) return;
     }
@@ -544,7 +514,8 @@ const Billing = () => {
         note: noteText, registeredAt: new Date().toISOString()
     };
 
-    updatedLoan.history = [...(updatedLoan.history || []), newRecord];
+    // BLINDAGEM DO LOG: Garante que os registros não se percam
+    updatedLoan.history = [...(selectedLoan.history || []), newRecord];
 
     try {
         await loanService.update(selectedLoan.id, updatedLoan);
@@ -572,7 +543,9 @@ const Billing = () => {
       updatedLoan.nextDue = agreementDate;
       updatedLoan.agreementValue = parseFloat(agreementValue);
       const note = `ACORDO: Vencimento alterado para ${formatDisplayDate(agreementDate)} com valor EXTRA de R$ ${formatMoney(parseFloat(agreementValue))}.`;
-      updatedLoan.history = [...(updatedLoan.history || []), { 
+      
+      // BLINDAGEM DO LOG ACORDO
+      updatedLoan.history = [...(selectedLoan.history || []), { 
           date: new Date().toISOString(), amount: 0, type: 'Acordo', note, capitalPaid: 0, interestPaid: 0 
       }];
       try {
@@ -632,9 +605,7 @@ const Billing = () => {
     }
 
     const colunasMoeda = ['E', 'F', 'G'];
-    colunasMoeda.forEach(col => {
-        worksheet.getColumn(col).numFmt = '"R$" #,##0.00';
-    });
+    colunasMoeda.forEach(col => { worksheet.getColumn(col).numFmt = '"R$" #,##0.00'; });
 
     const buffer = await workbook.xlsx.writeBuffer();
     saveAs(new Blob([buffer]), `Extrato_Recebimentos_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.xlsx`);
@@ -896,7 +867,6 @@ const Billing = () => {
           <div className="space-y-6">
             <div className="flex border-b border-slate-200">
                 <button onClick={() => setDetailTab('info')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${detailTab === 'info' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Visão Geral</button>
-                {/* NOVA ABA DE CRONOGRAMA */}
                 <button onClick={() => setDetailTab('schedule')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${detailTab === 'schedule' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Cronograma</button>
                 <button onClick={() => setDetailTab('history')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${detailTab === 'history' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Extrato Financeiro</button>
             </div>
@@ -907,25 +877,38 @@ const Billing = () => {
                         <div className="absolute top-0 right-0 p-4 opacity-10"><FileText size={64} /></div>
                         <h3 className="text-xl font-black mb-1">{selectedLoan.client}</h3>
                         <div className="flex gap-4 text-[10px] text-slate-400 font-mono uppercase tracking-widest mt-1"><span>ID: {selectedLoan.id}</span><span>•</span><span>Criado em: {formatDisplayDate(selectedLoan.startDate)}</span></div>
+                        
+                        {/* NOVO: PLACAR DE LTV DO CLIENTE */}
+                        <div className="mt-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700 flex gap-4">
+                            <div className="flex-1">
+                                <span className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Total Já Emprestado (LTV)</span>
+                                <span className="text-sm font-bold text-blue-400">R$ {formatMoney(getClientLTV(selectedLoan.client).totalEmprestado)}</span>
+                            </div>
+                            <div className="w-px bg-slate-700"></div>
+                            <div className="flex-1">
+                                <span className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Lucro Total Gerado</span>
+                                <span className="text-sm font-bold text-green-400">R$ {formatMoney(getClientLTV(selectedLoan.client).totalLucroRecebido)}</span>
+                            </div>
+                        </div>
+
                         <div className="mt-6 flex gap-8">
-                            <div><p className="text-[10px] uppercase text-slate-400 font-bold">Saldo Devedor (Conta Corrente)</p><p className="text-3xl font-bold text-white">R$ {formatMoney(calculateRealBalance(selectedLoan))}</p></div>
+                            <div><p className="text-[10px] uppercase text-slate-400 font-bold">Saldo Devedor (Deste Contrato)</p><p className="text-3xl font-bold text-white">R$ {formatMoney(calculateRealBalance(selectedLoan))}</p></div>
                             <div className="w-px bg-slate-700"></div>
                             <div>
                                 <p className="text-[10px] uppercase text-slate-400 font-bold">Parcela Fixa</p>
                                 <p className="text-2xl font-bold text-green-400">R$ {formatMoney(selectedLoan.installmentValue)}</p>
                                 <div className="text-[10px] text-slate-400 mt-1 flex gap-3">
-                                    <span>Juros do Mês: <b>R$ {formatMoney(selectedLoan.amount * (selectedLoan.interestRate/100))}</b></span>
+                                    <span>Juros do Mês: <b>R$ {formatMoney(getSyncedBreakdown(selectedLoan).interest)}</b></span>
                                 </div>
                             </div>
                         </div>
-                        {/* BOTAO WHATSAPP DENTRO DO DETALHE */}
                         <button onClick={() => handleOpenWhatsApp(selectedLoan.client, selectedLoan.installmentValue, selectedLoan.nextDue)} className="mt-6 flex items-center gap-2 bg-[#25D366] text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-[#128C7E] transition-colors"><MessageCircle size={18}/> Chamar no WhatsApp</button>
                     </div>
 
                     <div className="mt-4 pt-4 border-t border-slate-100">
                         <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><Info size={14}/> Ficha Técnica</h4>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 block">Modalidade</span><span className="text-xs font-bold text-slate-800 bg-white px-2 py-1 rounded border border-slate-200 inline-block">{selectedLoan.interestType === 'SIMPLE' ? 'Pag. Mínimo (Só Juros)' : 'Price (Amortização)'}</span></div>
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 block">Modalidade</span><span className="text-xs font-bold text-slate-800 bg-white px-2 py-1 rounded border border-slate-200 inline-block">{selectedLoan.interestType === 'SIMPLE' ? 'Pag. Mínimo (Só Juros)' : 'Price / Linear'}</span></div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
                                 <span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Repeat size={10}/> Periodicidade</span>
                                 <span className="text-sm font-bold text-slate-800">{selectedLoan.frequency === 'DIARIO' ? 'Diário' : selectedLoan.frequency === 'SEMANAL' ? 'Semanal' : 'Mensal'}</span>
@@ -948,7 +931,6 @@ const Billing = () => {
                         </div>
                     )}
 
-                    {/* CARD AFILIADO */}
                     {selectedLoan.affiliateName && (
                         <div className="mt-2 bg-indigo-50 border border-indigo-100 rounded-xl p-4 flex items-center gap-3">
                             <div className="bg-indigo-100 p-2 rounded-full text-indigo-600"><Users size={18}/></div>
@@ -964,7 +946,6 @@ const Billing = () => {
                     )}
                 </>
             ) : detailTab === 'schedule' ? (
-                /* --- RENDERIZA O CRONOGRAMA DE PARCELAS --- */
                 renderSchedule(selectedLoan)
             ) : (
                 <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
@@ -1005,7 +986,6 @@ const Billing = () => {
         {selectedLoan && (
             <div className="space-y-5">
             
-            {/* ALERTA DE ATRASO COM VALOR CALCULADO */}
             {getLoanRealStatus(selectedLoan) === 'Atrasado' && (
                 <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-4 animate-pulse">
                     <div className="bg-red-100 p-2 rounded-full text-red-600"><AlertTriangle size={24}/></div>
@@ -1026,7 +1006,6 @@ const Billing = () => {
                 </div>
             )}
 
-            {/* CARD DO ACORDO (AGORA COM AVISO DE ATRASO NO PRÓPRIO ACORDO) */}
             {selectedLoan.status === 'Acordo' && (selectedLoan.agreementValue || 0) > 0 && (
                 <div className={`${getLoanRealStatus(selectedLoan) === 'Atrasado' ? 'bg-red-50 border-red-200' : 'bg-orange-50 border-orange-200'} border rounded-xl p-3 flex flex-col gap-2`}>
                     <div className="flex items-center gap-3">
@@ -1038,7 +1017,6 @@ const Billing = () => {
                             <p className={`text-sm ${getLoanRealStatus(selectedLoan) === 'Atrasado' ? 'text-red-900' : 'text-orange-900'}`}>Incluindo valor extra de <b>R$ {formatMoney(selectedLoan.agreementValue)}</b> nesta parcela.</p>
                         </div>
                     </div>
-                    {/* Se o acordo venceu, ele calcula a multa do acordo também */}
                     {getLoanRealStatus(selectedLoan) === 'Atrasado' && (
                         <div className="border-t border-red-200 pt-2 mt-1">
                              <p className="text-xs text-red-800 font-bold flex items-center justify-between">
@@ -1080,7 +1058,6 @@ const Billing = () => {
         )}
       </Modal>
 
-      {/* --- MODAL ACORDO --- */}
       <Modal isOpen={isAgreementModalOpen} onClose={() => setIsAgreementModalOpen(false)} title="Registrar Acordo">
           <div className="space-y-5">
               <div className="bg-orange-50 border border-orange-200 p-4 rounded-xl">
@@ -1093,7 +1070,6 @@ const Billing = () => {
           </div>
       </Modal>
 
-      {/* --- MODAL UNIFICADO --- */}
       <Modal 
         isOpen={loanFlowStep !== 'closed'} 
         onClose={closeLoanFlow} 
@@ -1142,7 +1118,7 @@ const Billing = () => {
             
             {/* SIMULAÇÃO COM TEXTO DINÂMICO DE PERIODICIDADE */}
             <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-inner">
-                <div className="flex items-center gap-2 mb-4 border-b border-slate-200 pb-3"><Calculator size={20} className="text-slate-800" /><h4 className="text-[12px] font-bold text-slate-800 uppercase tracking-widest">Simulação Financeira ({formData.interestType === 'SIMPLE' ? 'Juros Simples' : 'Price'})</h4></div>
+                <div className="flex items-center gap-2 mb-4 border-b border-slate-200 pb-3"><Calculator size={20} className="text-slate-800" /><h4 className="text-[12px] font-bold text-slate-800 uppercase tracking-widest">Simulação Financeira ({formData.interestType === 'SIMPLE' ? 'Juros Simples' : 'Price / Linear'})</h4></div>
                 {isSimulating ? (<div className="flex justify-center py-4"><Loader2 className="animate-spin text-slate-400" /></div>) : simulation.isValid ? (
                     <div className="space-y-4">
                         <div className="flex justify-between items-center text-sm font-medium"><span className="text-slate-500">Montante Financiado:</span><span className="text-slate-900 font-bold">R$ {formatMoney(parseFloat(formData.amount))}</span></div>

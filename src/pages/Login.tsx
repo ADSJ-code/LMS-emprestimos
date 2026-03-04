@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LogIn, Lock, Mail, ArrowRight, CheckCircle, Loader2, AlertCircle, ArrowLeft, PhoneCall } from 'lucide-react';
-import { authService, settingsService } from '../services/api';
+import { authService } from '../services/api'; // Removemos o settingsService daqui!
 
 const Login = () => {
   const navigate = useNavigate();
   
-  // Estados
   const [view, setView] = useState<'login' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -15,29 +14,21 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // ESTADO PARA NOME DA EMPRESA (Dinâmico)
   const [companyName, setCompanyName] = useState('Credit Now');
   const [initials, setInitials] = useState('CN');
 
-  // 1. EFEITO: CARREGAR CONFIGURAÇÕES E "MANTER CONECTADO"
   useEffect(() => {
-    // Carrega nome da empresa
-    const loadSettings = async () => {
-        try {
-            const data = await settingsService.get();
-            const legacyData = data as any;
-            let name = 'Credit Now';
-            
-            if (data?.company?.name) name = data.company.name;
-            else if (legacyData?.general?.companyName) name = legacyData.general.companyName;
+    // BLINDAGEM: A tela de login agora APENAS lê o cache. 
+    // Ela não tenta buscar na API pois não há token válido ainda.
+    const cachedName = localStorage.getItem('lms_company_name_cache');
+    if (cachedName && cachedName !== 'EMPRESA PADRÃO' && cachedName.trim() !== '') {
+        setCompanyName(cachedName);
+        setInitials(cachedName.substring(0, 2).toUpperCase());
+    } else {
+        setCompanyName('Sistema de Gestão');
+        setInitials('SG');
+    }
 
-            setCompanyName(name);
-            setInitials(name.substring(0, 2).toUpperCase());
-        } catch (e) { console.error('Erro ao carregar marca', e); }
-    };
-    loadSettings();
-
-    // Carrega usuário lembrado
     const savedEmail = localStorage.getItem('lms_remember_user');
     if (savedEmail) {
       setEmail(savedEmail);
@@ -45,7 +36,6 @@ const Login = () => {
     }
   }, []);
 
-  // 2. LÓGICA DE LOGIN
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -61,7 +51,6 @@ const Login = () => {
       });
       localStorage.setItem('lms_active_session', sessionData);
 
-      // Lógica do "Manter Conectado"
       if (rememberMe) {
           localStorage.setItem('lms_remember_user', email);
       } else {
@@ -78,8 +67,6 @@ const Login = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4 font-sans relative overflow-hidden">
-      
-      {/* Background Decorativo */}
       <div className="absolute inset-0 z-0 opacity-40">
         <div className="absolute inset-0" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '32px 32px' }}></div>
       </div>
@@ -89,15 +76,13 @@ const Login = () => {
       </div>
 
       <div className="bg-white rounded-3xl shadow-2xl flex w-full max-w-5xl overflow-hidden min-h-[600px] animate-in fade-in zoom-in-95 duration-300 relative z-10">
-        
-        {/* LADO ESQUERDO (FORMULÁRIO) */}
         <div className="w-full md:w-1/2 flex flex-col justify-center p-8 md:p-12 relative transition-all">
           <div className="max-w-md mx-auto w-full space-y-6">
             
             <div className="text-left">
               <div className="inline-flex items-center gap-2 mb-6">
                 <div className="w-8 h-8 bg-slate-900 rounded-lg flex items-center justify-center text-yellow-400 font-bold">{initials}</div>
-                <span className="font-bold text-slate-900 text-lg tracking-tight">{companyName}</span>
+                <span className="font-bold text-slate-900 text-lg tracking-tight uppercase">{companyName}</span>
               </div>
               
               <h1 className="text-3xl font-bold text-slate-900 tracking-tight mb-2">
@@ -117,27 +102,26 @@ const Login = () => {
             )}
 
             {view === 'login' ? (
-              /* --- FORMULÁRIO DE LOGIN --- */
               <form onSubmit={handleLogin} className="space-y-5 animate-in slide-in-from-left-4 duration-300">
                 <div className="space-y-4">
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1 ml-1">E-mail Corporativo</label>
                     <div className="relative group">
-                      <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-primary transition-colors" size={20} />
+                      <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors" size={20} />
                       <input 
                         type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
-                        className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all font-medium text-slate-700"
-                        placeholder="usuario@creditnow.com"
+                        className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all font-medium text-slate-700"
+                        placeholder="usuario@empresa.com"
                       />
                     </div>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1 ml-1">Senha</label>
                     <div className="relative group">
-                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-primary transition-colors" size={20} />
+                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors" size={20} />
                       <input 
                         type="password" required value={password} onChange={(e) => setPassword(e.target.value)}
-                        className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary outline-none transition-all font-medium text-slate-700"
+                        className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 outline-none transition-all font-medium text-slate-700"
                         placeholder="••••••••"
                       />
                     </div>
@@ -150,14 +134,14 @@ const Login = () => {
                       type="checkbox" 
                       checked={rememberMe}
                       onChange={(e) => setRememberMe(e.target.checked)}
-                      className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary" 
+                      className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-600" 
                     />
                     <span className="ml-2 text-sm text-slate-600 font-medium">Lembrar meu e-mail</span>
                   </label>
                   <button 
                     type="button" 
                     onClick={() => { setView('forgot'); setError(''); }}
-                    className="text-sm font-bold text-primary hover:text-slate-800 transition-colors"
+                    className="text-sm font-bold text-blue-600 hover:text-slate-800 transition-colors"
                   >
                     Esqueceu a senha?
                   </button>
@@ -165,13 +149,12 @@ const Login = () => {
 
                 <button 
                   type="submit" disabled={isLoading}
-                  className="w-full group flex justify-center items-center gap-2 py-3.5 px-4 rounded-xl shadow-lg shadow-primary/30 text-base font-bold text-white bg-slate-900 hover:bg-slate-800 hover:shadow-xl hover:-translate-y-0.5 transition-all disabled:opacity-70"
+                  className="w-full group flex justify-center items-center gap-2 py-3.5 px-4 rounded-xl shadow-lg shadow-blue-600/30 text-base font-bold text-white bg-slate-900 hover:bg-slate-800 hover:shadow-xl hover:-translate-y-0.5 transition-all disabled:opacity-70"
                 >
                   {isLoading ? <><Loader2 className="animate-spin" /> Validando...</> : <>Entrar no Sistema <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" /></>}
                 </button>
               </form>
             ) : (
-              /* --- TELA DE "ESQUECI A SENHA" (INFORMATIVA) --- */
               <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
                 <div className="p-6 bg-blue-50 border border-blue-100 rounded-xl text-center">
                     <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-3">
@@ -195,7 +178,6 @@ const Login = () => {
           </div>
         </div>
 
-        {/* LADO DIREITO (BANNER) */}
         <div className="hidden md:flex w-1/2 bg-slate-900 relative overflow-hidden flex-col justify-between p-12 text-white">
           <div className="absolute top-0 right-0 w-64 h-64 bg-yellow-400 rounded-full blur-[100px] opacity-20 -mr-16 -mt-16 pointer-events-none"></div>
           <div className="absolute bottom-0 left-0 w-64 h-64 bg-blue-600 rounded-full blur-[100px] opacity-30 -ml-16 -mb-16 pointer-events-none"></div>
@@ -221,7 +203,7 @@ const Login = () => {
             </div>
           </div>
 
-          <p className="text-xs text-slate-600 font-mono relative z-10 mt-8">System v2.6.0</p>
+          <p className="text-xs text-slate-600 font-mono relative z-10 mt-8">System v3.1.0</p>
         </div>
 
       </div>

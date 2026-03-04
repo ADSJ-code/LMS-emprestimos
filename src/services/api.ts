@@ -23,7 +23,6 @@ export interface Loan {
   status: 'Em Dia' | 'Atrasado' | 'Pago' | 'Pendente' | 'Acordo';
   installmentValue: number;
   
-  // Taxas Flexíveis (Permite 0)
   fineRate?: number;
   moraInterestRate?: number;
   
@@ -35,20 +34,16 @@ export interface Loan {
   totalPaidCapital?: number;
   history?: PaymentRecord[];
 
-  // --- NOVOS CAMPOS PARA O ERP ---
   frequency?: 'DIARIO' | 'SEMANAL' | 'MENSAL';
   projectedProfit?: number;
   
-  // Campos para Acordo/Renegociação
   agreementDate?: string; 
   agreementValue?: number;
 
-  // --- NOVOS CAMPOS: MÓDULO DE AFILIADOS ---
   affiliateName?: string;
-  affiliateFee?: number; // Valor descontado/pago de comissão
-  affiliateNotes?: string; // Observação livre para o desconto
+  affiliateFee?: number; 
+  affiliateNotes?: string; 
 
-  // Campos já existentes (camelCase)
   interestType?: 'PRICE' | 'SIMPLE'; 
   guarantorName?: string;
   guarantorCPF?: string;
@@ -92,11 +87,11 @@ export interface Affiliate {
 }
 
 export interface LogEntry {
-  id: string;
+  id?: string; // Opcional ao criar
   action: string;
   user: string;
   details: string;
-  timestamp: string;
+  timestamp?: string;
 }
 
 export interface BlacklistEntry {
@@ -108,7 +103,6 @@ export interface BlacklistEntry {
   riskLevel?: string;
 }
 
-// Interface de Usuário (Para o Settings)
 export interface SystemUser {
     id?: string;
     username: string;
@@ -165,6 +159,39 @@ api.interceptors.response.use(
   }
 );
 
+// ============================================================================
+// O ESPIÃO DO HISTÓRICO: Registra ações automaticamente no banco de dados
+// ============================================================================
+const getLoggedUser = () => {
+    try {
+        const sessionStr = localStorage.getItem('lms_active_session');
+        if (sessionStr) {
+            const sessionData = JSON.parse(sessionStr);
+            const user = sessionData.user || sessionData;
+            return user.name || user.username || user.email || 'Usuário Desconhecido';
+        }
+        return 'Sistema';
+    } catch (e) {
+        return 'Sistema';
+    }
+};
+
+const registerSystemLog = async (action: string, details: string) => {
+    try {
+        const log: LogEntry = {
+            action,
+            details,
+            user: getLoggedUser(),
+            timestamp: new Date().toISOString()
+        };
+        // Envia silenciosamente para o backend sem travar a interface
+        await api.post('/logs', log).catch(() => {});
+    } catch (e) {
+        // Ignora erros para não quebrar as funções principais
+    }
+};
+
+
 // --- SERVIÇOS CONECTADOS AO BACKEND GO ---
 
 export const authService = {
@@ -173,6 +200,9 @@ export const authService = {
     if (response.data.token) {
         localStorage.setItem('token', response.data.token);
     }
+    // Log de Login (Feito aqui porque o interceptor ainda não tinha o usuário)
+    const userLog = response.data.user?.name || response.data.user?.username || username;
+    api.post('/logs', { action: 'Login no Sistema', details: 'Autenticação bem sucedida', user: userLog, timestamp: new Date().toISOString() }).catch(()=>{});
     return response.data;
   },
   listUsers: async (): Promise<SystemUser[]> => {
@@ -181,16 +211,20 @@ export const authService = {
   },
   addUser: async (userData: any) => {
     const response = await api.post('/users', userData);
+    await registerSystemLog('Novo Usuário', `Usuário ${userData.email} adicionado`);
     return response.data;
   },
   updateUser: async (email: string, newData: any) => {
     const response = await api.put(`/users/${email}`, newData);
+    await registerSystemLog('Edição de Usuário', `Senha/Dados do usuário ${email} alterados`);
     return response.data;
   },
   removeUser: async (email: string) => {
     await api.delete(`/users/${email}`);
+    await registerSystemLog('Exclusão de Usuário', `Usuário ${email} removido`);
   },
   logout: () => {
+    registerSystemLog('Logout do Sistema', 'Sessão encerrada');
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     localStorage.removeItem('lms_active_session');
@@ -204,14 +238,31 @@ export const loanService = {
   },
   create: async (loan: Loan): Promise<Loan> => {
     const response = await api.post('/loans', loan);
+    await registerSystemLog('Novo Empréstimo', `Contrato ${loan.id} criado para ${loan.client} (R$ ${loan.amount})`);
     return response.data;
   },
   update: async (id: string, loan: Loan): Promise<Loan> => {
     const response = await api.put(`/loans/${id}`, loan);
+    
+    // Tenta ser inteligente para registrar a baixa
+    if (loan.history && loan.history.length > 0) {
+        const lastRecord = loan.history[loan.history.length - 1];
+        // Se a data do registro for recente (último minuto), significa que acabou de ser feito
+        if (lastRecord.registeredAt && (new Date().getTime() - new Date(lastRecord.registeredAt).getTime()) < 60000) {
+            await registerSystemLog(`Registro de Baixa (${lastRecord.type})`, `R$ ${lastRecord.amount} no contrato ${loan.id} - ${loan.client}`);
+        } else {
+            // Caso seja apenas uma atualização de Acordo ou similar
+            await registerSystemLog('Alteração Contratual', `Contrato ${loan.id} modificado`);
+        }
+    } else {
+        await registerSystemLog('Alteração Contratual', `Contrato ${loan.id} modificado`);
+    }
+
     return response.data;
   },
   delete: async (id: string): Promise<void> => {
     await api.delete(`/loans/${id}`);
+    await registerSystemLog('Exclusão Crítica', `Contrato ${id} excluído do banco de dados`);
   }
 };
 
@@ -222,14 +273,17 @@ export const clientService = {
   },
   create: async (client: Client): Promise<Client> => {
     const response = await api.post('/clients', client);
+    await registerSystemLog('Novo Cliente', `Cliente ${client.name} cadastrado`);
     return response.data;
   },
   update: async (id: number | string, client: Client): Promise<Client> => {
     const response = await api.put(`/clients/${id}`, client);
+    await registerSystemLog('Atualização de Cliente', `Dados de ${client.name} atualizados`);
     return response.data;
   },
   delete: async (id: string): Promise<void> => {
     await api.delete(`/clients/${id}`);
+    await registerSystemLog('Exclusão de Cliente', `Cliente ID ${id} removido`);
   }
 };
 
@@ -240,14 +294,17 @@ export const affiliateService = {
   },
   create: async (affiliate: Affiliate): Promise<Affiliate> => {
     const response = await api.post('/affiliates', affiliate);
+    await registerSystemLog('Novo Afiliado', `${affiliate.name} cadastrado`);
     return response.data;
   },
   update: async (id: string, affiliate: Affiliate): Promise<Affiliate> => {
     const response = await api.put(`/affiliates/${id}`, affiliate);
+    await registerSystemLog('Edição de Afiliado', `Afiliado ${affiliate.name} atualizado`);
     return response.data;
   },
   delete: async (id: string): Promise<void> => {
     await api.delete(`/affiliates/${id}`);
+    await registerSystemLog('Exclusão', `Afiliado ID ${id} removido`);
   }
 };
 
@@ -258,14 +315,17 @@ export const blacklistService = {
   },
   create: async (entry: BlacklistEntry): Promise<BlacklistEntry> => {
     const response = await api.post('/blacklist', entry);
+    await registerSystemLog('Ação Restritiva', `${entry.name} adicionado à Lista Negra`);
     return response.data;
   },
   update: async (id: string, entry: BlacklistEntry): Promise<BlacklistEntry> => {
     const response = await api.put(`/blacklist/${id}`, entry);
+    await registerSystemLog('Ação Restritiva', `Registro de ${entry.name} atualizado na Lista Negra`);
     return response.data;
   },
   delete: async (id: string): Promise<void> => {
     await api.delete(`/blacklist/${id}`);
+    await registerSystemLog('Ação Liberada', `Registro ID ${id} removido da Lista Negra`);
   }
 };
 
@@ -312,11 +372,14 @@ export const settingsService = {
          };
     }
     const response = await api.post('/settings', payload);
+    await registerSystemLog('Configuração do Sistema', `Dados da empresa/sistema foram alterados`);
     return response.data;
   },
   restoreBackup: async (backupData: any) => {
     // Timeout estendido para restauração
     const response = await api.post('/admin/restore', backupData, { timeout: 60000 });
+    // O log será disparado, mas como o sistema será zerado logo em seguida, pode não durar, o que é esperado num reset
+    await registerSystemLog('Segurança Crítica', `Restauração completa de backup via arquivo JSON realizada`);
     return response.data;
   }
 };

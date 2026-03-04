@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Save, Building, Shield, CheckCircle, RefreshCw, Download, 
-  Users, Plus, Trash2, Key, X, AlertTriangle, Upload, Loader2, Bell, Lock 
+  Users, Plus, Trash2, Key, X, AlertTriangle, Upload, Loader2, Bell, Lock,
+  Calculator // Adicionado ícone Calculator
 } from 'lucide-react';
 import Layout from '../components/Layout';
-// Importando os serviços necessários para deletar os dados
 import { settingsService, clientService, loanService, authService } from '../services/api';
 
 // --- COMPONENTE MODAL GENÉRICO ---
@@ -66,6 +66,11 @@ const Settings = () => {
     }
   };
   const [settings, setSettings] = useState<any>(defaultSettings);
+  
+  // NOVO: ESTADO DA CHAVE MESTRA (Modo de Amortização)
+  const [amortizationMode, setAmortizationMode] = useState<'LINEAR' | 'PRICE'>(
+      (localStorage.getItem('amortizationMode') as 'LINEAR' | 'PRICE') || 'LINEAR'
+  );
 
   // --- INITIAL LOAD ---
   useEffect(() => {
@@ -137,9 +142,14 @@ const Settings = () => {
     setIsLoading(true);
     try {
       await settingsService.save(settings);
+      
       if (settings.company?.name) {
           localStorage.setItem('lms_company_name_cache', settings.company.name.toUpperCase());
       }
+
+      // NOVO: SALVA A CHAVE MESTRA NO NAVEGADOR
+      localStorage.setItem('amortizationMode', amortizationMode);
+
       setIsLoading(false);
       setShowSuccess(true);
       window.dispatchEvent(new Event('settingsUpdated')); 
@@ -410,6 +420,38 @@ const Settings = () => {
                     </div>
                 </div>
 
+                {/* NOVO: BLOCO DO MODO DE AMORTIZAÇÃO (A CHAVE MESTRA) */}
+                <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col gap-4 shadow-sm">
+                    <div className="flex items-center gap-3">
+                        <div className="bg-indigo-100 p-2 rounded-lg text-indigo-600"><Calculator size={20}/></div>
+                        <div>
+                            <h4 className="font-bold text-slate-800 text-sm uppercase">Modo de Amortização (Matemática)</h4>
+                            <p className="text-xs text-slate-500">Define como o sistema fatia o capital e o lucro em cada parcela paga.</p>
+                        </div>
+                    </div>
+                    <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 w-full md:w-max">
+                        <button 
+                            type="button"
+                            onClick={() => setAmortizationMode('LINEAR')}
+                            className={`flex-1 px-4 md:px-6 py-2 text-xs font-bold rounded-lg transition-all ${amortizationMode === 'LINEAR' ? 'bg-white text-indigo-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
+                        >
+                            Linear (Comercial)
+                        </button>
+                        <button 
+                            type="button"
+                            onClick={() => setAmortizationMode('PRICE')}
+                            className={`flex-1 px-4 md:px-6 py-2 text-xs font-bold rounded-lg transition-all ${amortizationMode === 'PRICE' ? 'bg-white text-indigo-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
+                        >
+                            Tabela Price (Bancário)
+                        </button>
+                    </div>
+                    <p className="text-[11px] text-slate-500 bg-slate-50 p-3 rounded-lg border border-slate-100 font-medium">
+                        {amortizationMode === 'LINEAR' 
+                            ? "👉 MODO LINEAR: O capital total e os juros projetados são divididos igualmente pela quantidade de meses. Ideal para comissões e previsão de caixa estável." 
+                            : "👉 MODO PRICE: O cálculo de juros é feito todo mês sobre o saldo devedor restante. A primeira parcela terá muito juro e pouco capital."}
+                    </p>
+                </div>
+
                 {isAdmin && (
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex justify-between items-center">
                         <div><h4 className="font-bold text-slate-800 flex gap-2 text-sm uppercase"><Download size={18} className="text-blue-600"/> Exportar Base de Dados</h4><p className="text-xs text-slate-500">Gera um arquivo JSON completo.</p></div>
@@ -444,7 +486,11 @@ const Settings = () => {
                     </div>
                 )}
                 
-                <div className="mt-4 flex justify-end"><button type="button" onClick={handleSave} disabled={isLoading} className="flex items-center gap-2 bg-slate-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg">{isLoading ? 'Processando...' : 'Salvar Configurações'}</button></div>
+                <div className="mt-4 flex justify-end">
+                    <button type="button" onClick={handleSave} disabled={isLoading} className="flex items-center gap-2 bg-slate-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg">
+                        {isLoading ? 'Processando...' : 'Salvar Configurações'}
+                    </button>
+                </div>
               </div>
             )}
           </div>
