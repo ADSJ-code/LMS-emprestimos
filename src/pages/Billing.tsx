@@ -93,7 +93,6 @@ const Billing = () => {
       return breakdown;
   };
 
-  // NOVO: Cálculo de LTV (Life Time Value) do Cliente
   const getClientLTV = (clientName: string) => {
       const clientLoans = loans.filter(l => l.client === clientName);
       let totalEmprestado = 0;
@@ -514,7 +513,6 @@ const Billing = () => {
         note: noteText, registeredAt: new Date().toISOString()
     };
 
-    // BLINDAGEM DO LOG: Garante que os registros não se percam
     updatedLoan.history = [...(selectedLoan.history || []), newRecord];
 
     try {
@@ -526,6 +524,70 @@ const Billing = () => {
         setIsDetailsOpen(true);
         alert("✅ Baixa registrada!");
     } catch (err) { alert("Erro ao registrar."); }
+  };
+
+  // ==========================================
+  // NOVA FUNÇÃO: ESTORNO INTELIGENTE
+  // ==========================================
+  const handleUndoLastPayment = async () => {
+    if (!selectedLoan || !selectedLoan.history || selectedLoan.history.length === 0) return;
+
+    const history = selectedLoan.history;
+    const lastEntry = history[history.length - 1]; // Pega o último lá no final do array
+
+    if (lastEntry.type === 'Abertura') {
+        alert("Não é possível desfazer a abertura do contrato. Caso precise, exclua o contrato pelo botão 'Excluir'.");
+        return;
+    }
+
+    const confirmUndo = window.confirm(
+        `⚠️ ESTORNO DE PAGAMENTO\n\n` +
+        `Deseja realmente desfazer a baixa de R$ ${formatMoney(lastEntry.amount)} registrada em ${new Date(lastEntry.date).toLocaleDateString('pt-BR')}?\n\n` +
+        `Isso irá devolver o saldo devedor e voltar a data de vencimento.`
+    );
+
+    if (!confirmUndo) return;
+
+    let updatedLoan = { ...selectedLoan };
+
+    // 1. Devolve o dinheiro pro Saldo
+    updatedLoan.totalPaidCapital = Math.max(0, (updatedLoan.totalPaidCapital || 0) - (lastEntry.capitalPaid || 0));
+    updatedLoan.totalPaidInterest = Math.max(0, (updatedLoan.totalPaidInterest || 0) - (lastEntry.interestPaid || 0));
+
+    // 2. Remove da linha do tempo
+    updatedLoan.history = history.slice(0, -1);
+
+    // 3. Rebobina a data e o ciclo
+    const advancedCycle = lastEntry.note?.includes('[QUITAÇÃO MENSAL]') || (lastEntry.capitalPaid && lastEntry.capitalPaid > 0) || lastEntry.type === 'Parcela';
+    
+    if (advancedCycle && lastEntry.type !== 'Acordo') {
+        const currentDue = new Date(updatedLoan.nextDue);
+        
+        if (updatedLoan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() - 7);
+        else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() - 1);
+        else currentDue.setMonth(currentDue.getMonth() - 1);
+        
+        updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
+
+        const isSimple = updatedLoan.interestType === 'SIMPLE';
+        if (!isSimple || (lastEntry.capitalPaid && lastEntry.capitalPaid > 0)) {
+            updatedLoan.installments += 1;
+        }
+    }
+
+    // 4. Ressuscita o contrato se ele estava Pago
+    if (updatedLoan.status === 'Pago') {
+        updatedLoan.status = 'Em Dia';
+    }
+
+    try {
+        await loanService.update(selectedLoan.id, updatedLoan);
+        setLoans(prev => prev.map(l => l.id === updatedLoan.id ? updatedLoan : l));
+        setSelectedLoan(updatedLoan);
+        alert("✅ Pagamento desfeito com sucesso! O contrato foi revertido.");
+    } catch (err) {
+        alert("Erro ao desfazer o pagamento.");
+    }
   };
 
   const handleOpenAgreement = (loan: Loan) => {
@@ -544,7 +606,6 @@ const Billing = () => {
       updatedLoan.agreementValue = parseFloat(agreementValue);
       const note = `ACORDO: Vencimento alterado para ${formatDisplayDate(agreementDate)} com valor EXTRA de R$ ${formatMoney(parseFloat(agreementValue))}.`;
       
-      // BLINDAGEM DO LOG ACORDO
       updatedLoan.history = [...(selectedLoan.history || []), { 
           date: new Date().toISOString(), amount: 0, type: 'Acordo', note, capitalPaid: 0, interestPaid: 0 
       }];
@@ -817,7 +878,6 @@ const Billing = () => {
                             <td className="p-4 text-center"><span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">{loan.installments}x</span></td>
                             <td className="p-4 text-center"><span className={`font-bold text-sm ${displayStatus === 'Atrasado' ? 'text-red-600' : 'text-slate-700'}`}>{formatDisplayDate(loan.nextDue)}</span></td>
                             
-                            {/* SALDO CAPITAL (TRAVADO EM ZERO NA VISUALIZAÇÃO) */}
                             <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(Math.max(0, loan.amount - (loan.totalPaidCapital || 0)))}</td>
                             
                             <td className="p-4 text-right font-bold text-green-600 bg-green-50/30 rounded">R$ {formatMoney(loan.totalPaidInterest || 0)}</td>
@@ -833,14 +893,12 @@ const Billing = () => {
                                 </span>
                             </td>
                             <td className="p-4 text-right relative">
-                                {/* BOTÃO DE WHATSAPP RÁPIDO NA TABELA */}
                                 <button onClick={(e) => handleOpenWhatsApp(loan.client, loan.installmentValue, loan.nextDue, e)} className="p-2 mr-1 rounded-lg text-green-500 hover:bg-green-50 transition-colors inline-block"><MessageCircle size={18}/></button>
                                 
                                 <div className="relative inline-block text-left"><button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === loan.id ? null : loan.id); }} className={`p-2 rounded-lg transition-all ${openMenuId === loan.id ? 'bg-slate-200 text-slate-900' : 'text-slate-400 hover:text-slate-900 hover:bg-slate-100'}`}><MoreVertical size={18} /></button>
                                 {openMenuId === loan.id && (<div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right"><div className="py-1">
                                     <button onClick={() => { setSelectedLoan(loan); setDetailTab('info'); setIsDetailsOpen(true); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><Eye size={16} className="text-blue-500" /> Ver Detalhes</button>
                                     
-                                    {/* TRAVA DOS BOTÕES DE AÇÃO (SE PAGO, SOME) */}
                                     {displayStatus !== 'Pago' && (
                                         <>
                                             <button onClick={() => { handleOpenPayment(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><DollarSign size={16} className="text-green-600" /> Registrar Baixa</button>
@@ -878,7 +936,6 @@ const Billing = () => {
                         <h3 className="text-xl font-black mb-1">{selectedLoan.client}</h3>
                         <div className="flex gap-4 text-[10px] text-slate-400 font-mono uppercase tracking-widest mt-1"><span>ID: {selectedLoan.id}</span><span>•</span><span>Criado em: {formatDisplayDate(selectedLoan.startDate)}</span></div>
                         
-                        {/* NOVO: PLACAR DE LTV DO CLIENTE */}
                         <div className="mt-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700 flex gap-4">
                             <div className="flex-1">
                                 <span className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Total Já Emprestado (LTV)</span>
@@ -958,7 +1015,23 @@ const Billing = () => {
                                     <div key={idx} className="relative pl-6">
                                         <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-2 border-white ${isOpening ? 'bg-green-500' : isAgreement ? 'bg-orange-500' : 'bg-blue-500'}`}></div>
                                         <div>
-                                            <div className="flex justify-between items-start mb-1"><p className="text-xs text-slate-400 font-mono">{new Date(record.date).toLocaleDateString('pt-BR')} às {new Date(record.date).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}</p><span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${isOpening ? 'bg-blue-100 text-blue-700' : isAgreement ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>{record.type}</span></div>
+                                            <div className="flex justify-between items-start mb-1">
+                                                <div className="flex items-center gap-2">
+                                                    <p className="text-xs text-slate-400 font-mono">
+                                                        {new Date(record.date).toLocaleDateString('pt-BR')} às {new Date(record.date).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}
+                                                    </p>
+                                                    {idx === 0 && !isOpening && (
+                                                        <button 
+                                                            onClick={handleUndoLastPayment} 
+                                                            className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded font-bold hover:bg-red-200 transition-colors flex items-center gap-1"
+                                                            title="Desfazer e estornar este pagamento"
+                                                        >
+                                                            <Trash2 size={10}/> Desfazer Baixa
+                                                        </button>
+                                                    )}
+                                                </div>
+                                                <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${isOpening ? 'bg-blue-100 text-blue-700' : isAgreement ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>{record.type}</span>
+                                            </div>
                                             <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                                                 <div className="flex justify-between items-center mb-1 border-b border-slate-200 pb-1"><span className="text-xs font-bold text-slate-500">{isOpening ? 'VALOR CONCEDIDO:' : 'TOTAL PAGO:'}</span><span className="font-black text-slate-800">R$ {formatMoney(record.amount)}</span></div>
                                                 <div className="grid grid-cols-2 gap-2 mt-2"><div><span className="block text-[10px] uppercase text-slate-400 font-bold">Amortização</span><span className="text-xs font-bold text-slate-700">R$ {formatMoney(record.capitalPaid || 0)}</span></div><div><span className="block text-[10px] uppercase text-slate-400 font-bold">Lucro (Juros)</span><span className="text-xs font-bold text-green-600">R$ {formatMoney(record.interestPaid || 0)}</span></div></div>

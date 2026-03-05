@@ -23,10 +23,28 @@ const History = () => {
   const [logs, setLogs] = useState<Log[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
+  const getCurrentUser = () => {
+      try {
+          const sessionStr = localStorage.getItem('lms_active_session');
+          if (sessionStr) {
+              const user = JSON.parse(sessionStr).user;
+              if (user?.name) return user.name;
+              if (user?.email) return user.email;
+              if (user?.username) return user.username;
+          }
+          const userStr = localStorage.getItem('user');
+          if (userStr) {
+              const userObj = JSON.parse(userStr);
+              if (userObj?.name) return userObj.name;
+          }
+          return 'Administrador Mestre'; 
+      } catch (e) { return 'Administrador Mestre'; }
+  };
+
   const determineLogType = (action: string, details: string): Log['type'] => {
     const text = (action + ' ' + details).toLowerCase();
     if (text.includes('erro') || text.includes('exclusão') || text.includes('deletado') || text.includes('crítica') || text.includes('bloqueio')) return 'critical';
-    if (text.includes('pagamento') || text.includes('empréstimo') || text.includes('financeiro') || text.includes('contrato') || text.includes('baixa')) return 'financial';
+    if (text.includes('pagamento') || text.includes('empréstimo') || text.includes('financeiro') || text.includes('contrato') || text.includes('baixa') || text.includes('acordo')) return 'financial';
     if (text.includes('cliente') || text.includes('cadastro') || text.includes('perfil')) return 'client';
     return 'system';
   };
@@ -41,49 +59,68 @@ const History = () => {
   const fetchAndGenerateLogs = async () => {
     setIsLoading(true);
     try {
-      // 1. Puxa da Nuvem
+      const currentUser = getCurrentUser();
+
       let backendLogs: any[] = [];
       try { backendLogs = await historyService.getLogs(); } catch (e) {}
       
-      // 2. Puxa da Caixa-Preta
       let localLogs: any[] = [];
       try { localLogs = JSON.parse(localStorage.getItem('lms_blackbox_logs') || '[]'); } catch (e) {}
 
-      // Padronizador de Logs
-      const mapLog = (l: any, isLocal: boolean): Log => ({
-        id: l.id || Math.random().toString(),
-        // Se vier da nuvem vazio, ele mantém 'Sistema'. Se vier da caixa preta, crava o nome real.
-        user: (l.user && l.user !== 'Sistema' && l.user !== '') ? l.user : (isLocal ? 'Administrador Mestre' : 'Sistema'),
-        action: l.action || 'Ação Desconhecida',
-        target: l.details || l.target || '',
-        date: formatDate(l.timestamp || new Date().toISOString()),
-        rawDate: l.timestamp || new Date().toISOString(),
-        type: determineLogType(l.action || '', l.details || l.target || '')
-      });
+      const mapLog = (l: any, isLocal: boolean): Log => {
+          let actionName = l.action || 'Ação Desconhecida';
+          let details = l.details || l.target || '';
+          let userName = l.user;
 
-      // Junta tudo
-      const combined = [
-        ...backendLogs.map((l: any) => mapLog(l, false)),
-        ...localLogs.map((l: any) => mapLog(l, true))
-      ];
+          const text = (actionName + ' ' + details).toUpperCase();
+          const isHumanAction = text.includes('NOVO') || text.includes('EMPRÉSTIMO') || 
+                                text.includes('EXCLUSÃO') || text.includes('BAIXA') || 
+                                text.includes('CLIENTE') || text.includes('ACORDO') || 
+                                text.includes('EDIÇÃO') || text.includes('CONFIGURAÇÕES');
 
-      // Ordena rigorosamente por data
-      combined.sort((a, b) => new Date(b.rawDate).getTime() - new Date(a.rawDate).getTime());
+          if (!userName || userName === 'Sistema' || userName === '') {
+              if (isHumanAction || isLocal) {
+                  userName = currentUser; 
+              } else {
+                  userName = 'Sistema'; 
+              }
+          }
 
-      // Filtra duplicados (Se a API do Go e a Caixa Preta gerarem o mesmo registro de tempo e ação)
+          return {
+            id: l.id || Math.random().toString(),
+            user: userName,
+            action: actionName,
+            target: details,
+            date: formatDate(l.timestamp || new Date().toISOString()),
+            rawDate: l.timestamp || new Date().toISOString(),
+            type: determineLogType(actionName, details)
+          };
+      };
+
+      const mappedLocal = localLogs.map((l: any) => mapLog(l, true));
+      const mappedBackend = backendLogs.map((l: any) => mapLog(l, false));
+
       const uniqueLogs: Log[] = [];
-      const seen = new Set();
-      for (const log of combined) {
-          const key = `${log.action.toUpperCase()}-${log.date}`; 
-          if (!seen.has(key)) {
-              seen.add(key);
+      const localSignatures = new Set();
+      
+      for (const log of mappedLocal) {
+          uniqueLogs.push(log);
+          localSignatures.add(`${log.date}-${log.type}`);
+      }
+
+      for (const log of mappedBackend) {
+          const sig = `${log.date}-${log.type}`;
+          if (!localSignatures.has(sig)) {
               uniqueLogs.push(log);
+              localSignatures.add(sig);
           }
       }
 
+      uniqueLogs.sort((a, b) => new Date(b.rawDate).getTime() - new Date(a.rawDate).getTime());
+
       setLogs(uniqueLogs);
     } catch (err) {
-      console.error("Erro ao carregar histórico", err);
+      console.error(err);
     } finally {
         setIsLoading(false);
     }

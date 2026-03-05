@@ -18,7 +18,6 @@ const Dashboard = () => {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   
-  // Alterna entre ver a Dívida Total ou o Fluxo do Mês
   const [viewMode, setViewMode] = useState<'saldo' | 'fluxo'>('saldo');
 
   const [loading, setLoading] = useState(false);
@@ -26,7 +25,7 @@ const Dashboard = () => {
   const [allLoans, setAllLoans] = useState<Loan[]>([]);
   const [allClients, setAllClients] = useState<Client[]>([]);
   
-  const [filteredLoansContext, setFilteredLoansContext] = useState<Loan[]>([]);
+  const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
 
   // --- ESTADOS DO MODAL VENCIMENTOS ---
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
@@ -49,7 +48,7 @@ const Dashboard = () => {
 
   const [recentActivities, setRecentActivities] = useState<any[]>([]);
 
-  // Limpa a data de T00:00:00Z para evitar bugs de fuso horário
+  // Helpers de Tempo e Matemática
   const parseLocalDate = (dateStr: string) => {
     if (!dateStr) return new Date();
     const cleanStr = dateStr.split('T')[0];
@@ -64,28 +63,43 @@ const Dashboard = () => {
       const paidInterest = Number(loan.totalPaidInterest) || 0;
       
       let totalExpectedInterest = Number(loan.projectedProfit) || 0;
-      
       if (totalExpectedInterest <= 0) {
-          if (loan.interestType === 'SIMPLE') {
-              totalExpectedInterest = installmentValue * (installments || 1);
-          } else {
-              totalExpectedInterest = Math.max(0, (installmentValue * installments) - amount);
-          }
+          if (loan.interestType === 'SIMPLE') totalExpectedInterest = installmentValue * (installments || 1);
+          else totalExpectedInterest = Math.max(0, (installmentValue * installments) - amount);
       }
-      
       return Math.max(0, totalExpectedInterest - paidInterest);
   };
 
+  // MÁQUINA DE BOLA DE NEVE: Calcula juros por cada mês não pago!
+  const getSnowballOverdue = (loan: Loan) => {
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      let tempDue = parseLocalDate(loan.nextDue);
+      let total = 0;
+      let count = 0;
+      
+      if (loan.status === 'Acordo') return 0; 
+      
+      while (tempDue < today) {
+          const dateStr = tempDue.toISOString().split('T')[0];
+          total += calculateOverdueValue(loan.installmentValue, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+          
+          if (loan.frequency === 'SEMANAL') tempDue.setDate(tempDue.getDate() + 7);
+          else if (loan.frequency === 'DIARIO') tempDue.setDate(tempDue.getDate() + 1);
+          else tempDue.setMonth(tempDue.getMonth() + 1);
+          
+          count++;
+          if (count > 60) break; // Trava de segurança (5 anos)
+      }
+      return total;
+  };
+
+  // --- MOTOR CENTRAL DE FILTRAGEM E PROJEÇÃO ---
   const fetchAndCalculate = async () => {
     setLoading(true);
     try {
-      const [loans, clients, settings] = await Promise.all([
-          loanService.getAll(),
-          clientService.getAll(),
-          settingsService.get()
-      ]);
+      const [loans, clients] = await Promise.all([ loanService.getAll(), clientService.getAll() ]);
       
-      // Sanitiza dados caso a API devolva algo estranho
       const safeLoans = (loans || []).map(l => ({
           ...l,
           amount: Number(l.amount) || 0,
@@ -101,127 +115,120 @@ const Dashboard = () => {
       
       const today = new Date();
       today.setHours(0,0,0,0);
-      const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
       
-      const dueToday = safeLoans.filter(l => {
-          if (l.status === 'Pago') return false;
-          return l.nextDue.split('T')[0] === todayStr;
-      });
+      // Resolução do Filtro de Datas
+      let startFilter: Date | null = null;
+      let endFilter: Date | null = null;
 
-      const hasSeenModal = sessionStorage.getItem('welcomeModalSeen');
-      
-      if (dueToday.length > 0 && !hasSeenModal) {
-          setMaturityDate(todayStr);
-          setShowWelcomeModal(true);
-          sessionStorage.setItem('welcomeModalSeen', 'true');
+      if (period === 'hoje') {
+          startFilter = new Date(today);
+          endFilter = new Date(today);
+      } else if (period === 'semana') {
+          startFilter = new Date(today);
+          endFilter = new Date(today);
+          endFilter.setDate(today.getDate() + 7);
+      } else if (period === 'mes') {
+          startFilter = new Date(today.getFullYear(), today.getMonth(), 1);
+          endFilter = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+      } else if (period === 'proximo_mes') {
+          startFilter = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+          endFilter = new Date(today.getFullYear(), today.getMonth() + 2, 0);
+      } else if (period === 'personalizado' && customStart && customEnd) {
+          startFilter = parseLocalDate(customStart);
+          endFilter = parseLocalDate(customEnd);
       }
 
-      const activeDebtors = new Set(safeLoans.filter(l => l.status !== 'Pago').map(l => l.client));
+      if (endFilter) endFilter.setHours(23, 59, 59, 999);
 
-      const filteredLoans = safeLoans.filter((loan: any) => {
-        if (period === 'todos') return true;
-        
-        const loanDateStr = loan.nextDue.split('T')[0];
-        const [lYear, lMonth, lDay] = loanDateStr.split('-').map(Number);
-        const loanDue = new Date(lYear, lMonth - 1, lDay);
-
-        if (period === 'personalizado') {
-            // Só filtra se as DUAS datas estiverem preenchidas
-            if (!customStart || !customEnd) return true; 
-            const start = parseLocalDate(customStart);
-            const end = parseLocalDate(customEnd);
-            end.setHours(23, 59, 59, 999); 
-            return loanDue >= start && loanDue <= end;
-        }
-
-        if (period === 'hoje') return loanDue.getTime() === today.getTime(); 
-        if (period === 'semana') {
-          const weekEnd = new Date(today);
-          weekEnd.setDate(today.getDate() + 7);
-          return loanDue >= today && loanDue <= weekEnd;
-        }
-        if (period === 'mes') {
-          return loanDue.getMonth() === today.getMonth() && loanDue.getFullYear() === today.getFullYear();
-        }
-        if (period === 'proximo_mes') {
-            let nextMonth = today.getMonth() + 1;
-            let targetYear = today.getFullYear();
-            if (nextMonth > 11) {
-                nextMonth = 0;
-                targetYear++;
-            }
-            return loanDue.getMonth() === nextMonth && loanDue.getFullYear() === targetYear;
-        }
-        return true;
-      });
-
-      setFilteredLoansContext(filteredLoans);
-
+      const activeDebtors = new Set();
       let capitalTotal = 0;
       let lucroTotal = 0;
       let atrasoTotal = 0;
       let rLowVal = 0, rLowCount = 0, rMidVal = 0, rMidCount = 0, rHighVal = 0, rHighCount = 0;
-
+      
+      const filteredContext: any[] = [];
       const isFluxo = viewMode === 'fluxo' && period !== 'todos';
 
-      filteredLoans.forEach((loan: any) => {
-        const status = loan.status ? loan.status.toLowerCase() : '';
-        
-        // Verifica Saldo e Lucro Restante
-        const capBalance = calculateCapitalBalance(loan);
-        const remProfit = calculateRemainingProfit(loan);
-        const breakdown = calculateInstallmentBreakdown(loan);
+      safeLoans.forEach((loan: any) => {
+        if (loan.status === 'Pago') return;
+        activeDebtors.add(loan.client);
 
-        if (status !== 'pago' && capBalance > 0) {
+        const breakdown = calculateInstallmentBreakdown(loan);
+        let currentDue = parseLocalDate(loan.nextDue);
+        
+        let hasMatch = false;
+        let matchedCapital = 0;
+        let matchedInterest = 0;
+
+        // O MOTOR DE PROJEÇÃO: Fatiador de Contrato (Avança no tempo buscando fatias)
+        if (!startFilter || !endFilter) {
+            hasMatch = true;
+            matchedCapital = calculateCapitalBalance(loan);
+            matchedInterest = calculateRemainingProfit(loan);
+        } else {
+            const limit = loan.interestType === 'SIMPLE' ? 60 : (loan.installments || 1);
+            for (let i = 0; i < limit; i++) {
+                if (currentDue >= startFilter && currentDue <= endFilter) {
+                    hasMatch = true;
+                    matchedCapital += breakdown.capital;
+                    matchedInterest += breakdown.interest;
+                }
+                
+                if (currentDue > endFilter) break; // Otimização para não rodar infinito
+
+                if (loan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
+                else if (loan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
+                else currentDue.setMonth(currentDue.getMonth() + 1);
+            }
+        }
+
+        if (hasMatch) {
+            // Guarda a fatia fatiada no objeto para a tabela de detalhes usar
+            filteredContext.push({ ...loan, projectedCapitalForPeriod: matchedCapital, projectedInterestForPeriod: matchedInterest });
+
             if (isFluxo) {
-                // Modo Fluxo: Pega só a parcela do mês
-                capitalTotal += breakdown.capital;
-                lucroTotal += breakdown.interest;
-                
-                if (loan.interestRate < 10) { rLowCount++; rLowVal += breakdown.capital; } 
-                else if (loan.interestRate <= 15) { rMidCount++; rMidVal += breakdown.capital; } 
-                else { rHighCount++; rHighVal += breakdown.capital; }
+                capitalTotal += matchedCapital;
+                lucroTotal += matchedInterest;
+                if (loan.interestRate < 10) { rLowCount++; rLowVal += matchedCapital; } 
+                else if (loan.interestRate <= 15) { rMidCount++; rMidVal += matchedCapital; } 
+                else { rHighCount++; rHighVal += matchedCapital; }
             } else {
-                // Modo Saldo: Pega a dívida inteira (que tem vencimento no período)
+                const capBalance = calculateCapitalBalance(loan);
                 capitalTotal += capBalance;
-                lucroTotal += remProfit;
-                
+                lucroTotal += calculateRemainingProfit(loan);
                 if (loan.interestRate < 10) { rLowCount++; rLowVal += capBalance; } 
                 else if (loan.interestRate <= 15) { rMidCount++; rMidVal += capBalance; } 
                 else { rHighCount++; rHighVal += capBalance; }
             }
         }
 
-        const loanDateStr = loan.nextDue.split('T')[0];
-        const [lYear, lMonth, lDay] = loanDateStr.split('-').map(Number);
-        const dueDate = new Date(lYear, lMonth - 1, lDay);
-
-        if ((status === 'atrasado' || (dueDate < today && status !== 'acordo')) && status !== 'pago') {
-             const valorComMulta = calculateOverdueValue(loan.installmentValue, loan.nextDue, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
-             atrasoTotal += valorComMulta;
+        // BOLA DE NEVE GLOBAL
+        const actualDueDate = parseLocalDate(loan.nextDue);
+        if (loan.status === 'Atrasado' || (actualDueDate < today && loan.status !== 'Acordo')) {
+             atrasoTotal += getSnowballOverdue(loan);
         }
       });
+
+      setFilteredLoansContext(filteredContext);
 
       setMetrics({
         capitalNaRua: capitalTotal,
         lucroProjetado: lucroTotal,
         atrasoGeral: atrasoTotal,
-        contratosAtivos: filteredLoans.filter((l: any) => l.status !== 'Pago').length,
+        contratosAtivos: filteredContext.length,
         totalClientesCadastrados: clients ? clients.length : 0,
         clientesComDivida: activeDebtors.size,
         taxas: { lowVal: rLowVal, lowCount: rLowCount, midVal: rMidVal, midCount: rMidCount, highVal: rHighVal, highCount: rHighCount }
       });
 
-      const activities = [...filteredLoans].reverse().slice(0, 5).map((loan: any) => {
-        const loanDateStr = loan.nextDue.split('T')[0];
-        const [lYear, lMonth, lDay] = loanDateStr.split('-').map(Number);
-        const dueDate = new Date(lYear, lMonth - 1, lDay);
-        
+      // Alimentando Atividades
+      const activities = [...filteredContext].reverse().slice(0, 5).map((loan: any) => {
+        const dueDate = parseLocalDate(loan.nextDue);
         const isOverdue = dueDate < today && loan.status !== 'Pago';
         return {
           id: loan.id,
           type: isOverdue ? 'atraso' : 'novo_contrato',
-          text: isOverdue ? `Atraso: ${loan.client}` : `Vencimento: ${loan.client}`,
+          text: isOverdue ? `Atraso: ${loan.client}` : `No Período: ${loan.client}`,
           time: dueDate.toLocaleDateString('pt-BR'), 
           value: isOverdue ? 'Cobrar' : `R$ ${formatMoney(loan.installmentValue)}`
         };
@@ -231,31 +238,29 @@ const Dashboard = () => {
     } catch (error) { console.error(error); } finally { setLoading(false); }
   };
 
-  // REGRAS DE ATUALIZAÇÃO AUTOMÁTICA DO RODRIGO:
   useEffect(() => { 
-      // Se não for personalizado, atualiza na hora que a chavinha ou o período mudar
-      if (period !== 'personalizado') {
-          fetchAndCalculate();
-      }
+      if (period !== 'personalizado') fetchAndCalculate();
   }, [period, viewMode]);
 
   useEffect(() => {
-      // MÁGICA: Se estiver no modo personalizado E as duas datas estiverem preenchidas, 
-      // ele dá um tempinho de meio segundo e recalcula a tela sozinho!
       if (period === 'personalizado' && customStart && customEnd) {
-          const timeout = setTimeout(() => {
-              fetchAndCalculate();
-          }, 500);
+          const timeout = setTimeout(() => fetchAndCalculate(), 500);
           return () => clearTimeout(timeout);
       }
   }, [customStart, customEnd, period, viewMode]);
+
+  const handlePeriodChange = (val: string) => {
+      setPeriod(val as any);
+      // Auto-Switch para resolver o conflito do Vídeo do Clóvis
+      if (val !== 'todos' && val !== 'personalizado') setViewMode('fluxo');
+      else if (val === 'todos') setViewMode('saldo');
+  };
 
   const loansOnMaturityDate = useMemo(() => {
       if (!maturityDate) return [];
       return allLoans.filter(l => {
           if (l.status === 'Pago') return false;
-          const loanDateStr = l.nextDue.split('T')[0];
-          return loanDateStr === maturityDate;
+          return l.nextDue.split('T')[0] === maturityDate;
       });
   }, [allLoans, maturityDate]);
 
@@ -266,9 +271,7 @@ const Dashboard = () => {
 
       return filteredLoansContext.filter(l => {
           if (selectedRange === 'overdue') {
-              const loanDateStr = l.nextDue.split('T')[0];
-              const [lYear, lMonth, lDay] = loanDateStr.split('-').map(Number);
-              const dueDate = new Date(lYear, lMonth - 1, lDay);
+              const dueDate = parseLocalDate(l.nextDue);
               return l.status !== 'Pago' && dueDate < today;
           }
           if (selectedRange === 'active') return l.status !== 'Pago';
@@ -283,7 +286,7 @@ const Dashboard = () => {
 
   const rangeTitles = {
       low: 'Capital em Taxa Baixa (< 10%)', mid: 'Capital em Taxa Média (10% - 15%)', high: 'Capital em Taxa Alta (> 15%)',
-      capital: 'Detalhamento de Capital', profit: 'Detalhamento de Lucro', overdue: 'Contratos em Atraso (Crítico)', active: 'Carteira de Clientes Ativos'
+      capital: 'Detalhamento de Capital', profit: 'Detalhamento de Lucro', overdue: 'Contratos em Atraso (Bola de Neve)', active: 'Carteira de Clientes no Período'
   };
 
   const goToBillingWithSearch = (clientName: string) => {
@@ -354,7 +357,7 @@ const Dashboard = () => {
                               <th className="p-4 text-center">Taxa (%)</th>
                               <th className="p-4 text-right">{isFluxoAtivo ? 'Entrada (Capital da Parcela)' : 'Saldo Devedor (Total)'}</th>
                               <th className="p-4 text-right text-green-600">{isFluxoAtivo ? 'Entrada (Juros da Parcela)' : 'Lucro Restante (Total)'}</th>
-                              {selectedRange === 'overdue' && <th className="p-4 text-right text-red-600">Total com Multa</th>}
+                              {selectedRange === 'overdue' && <th className="p-4 text-right text-red-600">Bola de Neve (Atraso Total)</th>}
                               <th className="p-4 text-center">Status</th>
                           </tr>
                       </thead>
@@ -362,8 +365,7 @@ const Dashboard = () => {
                           {detailedLoans.map(loan => {
                               const capBalance = calculateCapitalBalance(loan);
                               const remProfit = calculateRemainingProfit(loan);
-                              const breakdown = calculateInstallmentBreakdown(loan);
-                              const overdueVal = calculateOverdueValue(loan.installmentValue, loan.nextDue, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+                              const overdueVal = getSnowballOverdue(loan);
                               
                               return (
                                   <tr key={loan.id} className="hover:bg-blue-50 transition-colors cursor-pointer" onClick={() => goToBillingWithSearch(loan.client)}>
@@ -374,8 +376,8 @@ const Dashboard = () => {
                                       <td className="p-4 text-center text-sm font-medium">{new Date(loan.nextDue).toLocaleDateString('pt-BR')}</td>
                                       <td className="p-4 text-center font-bold text-slate-600">{loan.interestRate}%</td>
                                       
-                                      <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(isFluxoAtivo ? breakdown.capital : capBalance)}</td>
-                                      <td className="p-4 text-right font-bold text-green-600">R$ {formatMoney(isFluxoAtivo ? breakdown.interest : remProfit)}</td>
+                                      <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(isFluxoAtivo ? loan.projectedCapitalForPeriod : capBalance)}</td>
+                                      <td className="p-4 text-right font-bold text-green-600">R$ {formatMoney(isFluxoAtivo ? loan.projectedInterestForPeriod : remProfit)}</td>
                                       
                                       {selectedRange === 'overdue' && <td className="p-4 text-right font-black text-red-600">R$ {formatMoney(overdueVal)}</td>}
                                       <td className="p-4 text-center">
@@ -411,19 +413,18 @@ const Dashboard = () => {
                                 onClick={() => setViewMode('fluxo')}
                                 className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 ${viewMode === 'fluxo' ? 'bg-white text-slate-800 shadow-sm border border-slate-200' : 'text-slate-400 hover:text-slate-700'}`}
                             >
-                                <TrendingUp size={14}/> Fluxo do Mês
+                                <TrendingUp size={14}/> Fluxo do Período
                             </button>
                         </div>
                     )}
 
                     <button onClick={fetchAndCalculate} className="p-2.5 bg-white border border-gray-200 rounded-xl text-slate-500 hover:text-slate-900 transition-colors shadow-sm"><RefreshCw size={18} className={loading ? "animate-spin" : ""} /></button>
                     <div className="relative">
-                        <select value={period === 'personalizado' ? 'personalizado' : period} onChange={(e) => setPeriod(e.target.value as any)} className="appearance-none bg-white pl-4 pr-10 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-slate-900/10 cursor-pointer">
+                        <select value={period === 'personalizado' ? 'personalizado' : period} onChange={(e) => handlePeriodChange(e.target.value)} className="appearance-none bg-white pl-4 pr-10 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-slate-900/10 cursor-pointer">
                             <option value="todos">Todos os Períodos</option><option value="hoje">Vencendo Hoje</option><option value="semana">Esta Semana</option><option value="mes">Este Mês</option><option value="proximo_mes">Próximo Mês</option><option value="personalizado">Datas Personalizadas</option>
                         </select>
                         <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16}/>
                     </div>
-                    {/* O BOTÃO DE APLICAR SUMIU DAQUI! Agora ele usa o useEffect para atualizar sozinho */}
                     {(period === 'personalizado' || (customStart && customEnd)) && (
                         <div className="flex items-center gap-2 bg-white p-1.5 rounded-xl border border-gray-200 shadow-sm animate-in fade-in slide-in-from-left-2">
                             <div className="flex items-center gap-2 px-2"><input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="text-xs font-bold text-slate-600 bg-transparent outline-none w-28 border border-slate-100 rounded p-1"/><span className="text-slate-300">até</span><input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="text-xs font-bold text-slate-600 bg-transparent outline-none w-28 border border-slate-100 rounded p-1"/></div>
@@ -443,12 +444,12 @@ const Dashboard = () => {
                 <div onClick={() => setSelectedRange('profit')} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-green-300 transition-all cursor-pointer group">
                     <div className="flex justify-between items-start mb-4"><div className="p-3 bg-green-50 text-green-600 rounded-lg"><TrendingUp size={24} /></div></div>
                     <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
-                        {isFluxoAtivo ? 'Lucro Previsto na Parcela' : 'Lucro Restante a Receber'}
+                        {isFluxoAtivo ? 'Lucro Previsto no Filtro' : 'Lucro Restante a Receber'}
                     </h3>
                     <p className="text-2xl font-black text-green-600">+{formatMoney(metrics.lucroProjetado)}</p>
                 </div>
                 <div onClick={() => setSelectedRange('overdue')} className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-red-500 hover:shadow-md hover:bg-red-50/10 transition-all cursor-pointer group">
-                    <div className="flex justify-between items-start mb-2"><div className="p-3 bg-red-50 text-red-600 rounded-lg"><AlertTriangle size={24} /></div></div><h3 className="text-slate-500 text-xs font-bold uppercase mb-1">Total em Atraso</h3><p className="text-2xl font-black text-slate-800 mb-3">{formatMoney(metrics.atrasoGeral)}</p>
+                    <div className="flex justify-between items-start mb-2"><div className="p-3 bg-red-50 text-red-600 rounded-lg"><AlertTriangle size={24} /></div></div><h3 className="text-slate-500 text-xs font-bold uppercase mb-1">Total em Atraso (Acumulado)</h3><p className="text-2xl font-black text-slate-800 mb-3">{formatMoney(metrics.atrasoGeral)}</p>
                 </div>
                 <div onClick={() => setSelectedRange('active')} className="bg-slate-900 p-6 rounded-xl shadow-lg text-white relative overflow-hidden cursor-pointer hover:bg-slate-800 transition-all">
                     <div className="absolute right-0 top-0 opacity-10 p-2"><FileText size={64} /></div><h3 className="text-slate-300 text-xs font-bold uppercase mb-1">Contratos no Filtro</h3><p className="text-3xl font-black text-white">{metrics.contratosAtivos}</p><p className="text-[10px] text-slate-400 mt-2 flex items-center gap-1"><Users size={12}/> {metrics.totalClientesCadastrados} clientes cadastrados</p>
@@ -458,7 +459,7 @@ const Dashboard = () => {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                        <div className="flex items-center gap-2 mb-4"><PieChart className="text-slate-400" size={20}/><h3 className="font-bold text-lg text-slate-800">Distribuição por Taxa ({isFluxoAtivo ? 'Entrada do Mês' : 'Saldo Total'})</h3></div>
+                        <div className="flex items-center gap-2 mb-4"><PieChart className="text-slate-400" size={20}/><h3 className="font-bold text-lg text-slate-800">Distribuição por Taxa ({isFluxoAtivo ? 'Capital de Entrada' : 'Saldo Total'})</h3></div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div onClick={() => setSelectedRange('low')} className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center cursor-pointer hover:bg-slate-100 transition-colors group"><p className="text-xs font-bold text-slate-500 uppercase mb-1 group-hover:text-blue-600 transition-colors">1% a 9% (Baixa)</p><p className="text-2xl font-black text-slate-700">R$ {formatMoney(metrics.taxas.lowVal)}</p></div>
                             <div onClick={() => setSelectedRange('mid')} className="p-4 bg-blue-50 rounded-lg border border-blue-100 text-center cursor-pointer hover:bg-blue-100 transition-colors group"><p className="text-xs font-bold text-blue-500 uppercase mb-1 group-hover:text-blue-700 transition-colors">10% a 15% (Média)</p><p className="text-2xl font-black text-blue-700">R$ {formatMoney(metrics.taxas.midVal)}</p></div>
@@ -480,9 +481,9 @@ const Dashboard = () => {
                 </div>
 
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 h-fit">
-                    <div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg text-slate-800">Atividade Recente</h3><button onClick={() => navigate('/history')} className="text-blue-600 text-xs font-medium hover:underline flex items-center gap-1">Ver tudo <ArrowRight size={12} /></button></div>
+                    <div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg text-slate-800">Atividade no Filtro</h3><button onClick={() => navigate('/history')} className="text-blue-600 text-xs font-medium hover:underline flex items-center gap-1">Ver tudo <ArrowRight size={12} /></button></div>
                     <div className="space-y-6">
-                        {recentActivities.length > 0 ? (recentActivities.map((activity) => (<div key={activity.id} className="flex gap-4 items-start"><div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${activity.type === 'atraso' ? 'bg-red-500' : 'bg-green-500'}`} /><div><p className="text-sm font-medium text-slate-800 leading-tight">{activity.text}</p><p className="text-xs text-slate-400 mt-1">{activity.time}</p></div>{activity.value !== '-' && (<span className={`ml-auto text-xs font-bold whitespace-nowrap ${activity.type === 'atraso' ? 'text-red-600 bg-red-50 px-2 py-1 rounded' : 'text-slate-600'}`}>{activity.value}</span>)}</div>))) : (<div className="text-center py-8 text-slate-400 text-sm"><Activity size={24} className="mx-auto mb-2 opacity-50"/>Nenhuma atividade.</div>)}
+                        {recentActivities.length > 0 ? (recentActivities.map((activity) => (<div key={activity.id} className="flex gap-4 items-start"><div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${activity.type === 'atraso' ? 'bg-red-500' : 'bg-green-500'}`} /><div><p className="text-sm font-medium text-slate-800 leading-tight">{activity.text}</p><p className="text-xs text-slate-400 mt-1">{activity.time}</p></div>{activity.value !== '-' && (<span className={`ml-auto text-xs font-bold whitespace-nowrap ${activity.type === 'atraso' ? 'text-red-600 bg-red-50 px-2 py-1 rounded' : 'text-slate-600'}`}>{activity.value}</span>)}</div>))) : (<div className="text-center py-8 text-slate-400 text-sm"><Activity size={24} className="mx-auto mb-2 opacity-50"/>Nenhuma atividade neste período.</div>)}
                     </div>
                 </div>
             </div>
