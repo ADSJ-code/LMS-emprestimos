@@ -70,27 +70,40 @@ const Dashboard = () => {
       return Math.max(0, totalExpectedInterest - paidInterest);
   };
 
+  // MÁQUINA DE BOLA DE NEVE (SINCRONIZADA COM A ABA DE ATRASADOS)
   const getSnowballOverdue = (loan: Loan) => {
       const today = new Date();
       today.setHours(0,0,0,0);
       let tempDue = parseLocalDate(loan.nextDue);
-      let total = 0;
+      let totalUpdated = 0;
       let count = 0;
+      let missedCount = 0;
       
-      if (loan.status === 'Acordo') return 0; 
+      const baseAmount = loan.status === 'Acordo' ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
+      const remainingInstallments = loan.interestType === 'SIMPLE' ? 999 : (loan.installments || 1);
       
       while (tempDue < today) {
           const dateStr = tempDue.toISOString().split('T')[0];
-          total += calculateOverdueValue(loan.installmentValue, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+          totalUpdated += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+          missedCount++;
+          
+          if (loan.status === 'Acordo') break; 
+          
+          count++;
+          if (count >= remainingInstallments) break; // Trava que faltava no Dashboard!
+          if (count > 60) break; 
           
           if (loan.frequency === 'SEMANAL') tempDue.setDate(tempDue.getDate() + 7);
           else if (loan.frequency === 'DIARIO') tempDue.setDate(tempDue.getDate() + 1);
           else tempDue.setMonth(tempDue.getMonth() + 1);
-          
-          count++;
-          if (count > 60) break; 
       }
-      return total;
+
+      if (missedCount === 0 && loan.status === 'Atrasado') {
+           const dateStr = loan.nextDue.split('T')[0];
+           totalUpdated += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+      }
+
+      return totalUpdated;
   };
 
   // --- MOTOR CENTRAL DE FILTRAGEM E PROJEÇÃO ---
@@ -147,6 +160,7 @@ const Dashboard = () => {
       
       const filteredContext: any[] = [];
       const isFluxo = viewMode === 'fluxo' && period !== 'todos';
+      const pad = (n: number) => n.toString().padStart(2, '0');
 
       safeLoans.forEach((loan: any) => {
         if (loan.status === 'Pago') return;
@@ -158,9 +172,9 @@ const Dashboard = () => {
         let hasMatch = false;
         let matchedCapital = 0;
         let matchedInterest = 0;
-        let matchedCount = 0; // Conta quantas parcelas caíram dentro do filtro
+        let matchedCount = 0; 
+        let matchedDates: string[] = []; 
 
-        // O MOTOR DE PROJEÇÃO
         if (!startFilter || !endFilter) {
             hasMatch = true;
             matchedCapital = calculateCapitalBalance(loan);
@@ -173,6 +187,7 @@ const Dashboard = () => {
                     matchedCapital += breakdown.capital;
                     matchedInterest += breakdown.interest;
                     matchedCount++;
+                    matchedDates.push(`${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`);
                 }
                 
                 if (currentDue > endFilter) break;
@@ -188,7 +203,8 @@ const Dashboard = () => {
                 ...loan, 
                 projectedCapitalForPeriod: matchedCapital, 
                 projectedInterestForPeriod: matchedInterest,
-                matchedCount // Adicionado para a tabela mostrar a justificativa
+                matchedCount,
+                matchedDates 
             });
 
             if (isFluxo) {
@@ -207,9 +223,10 @@ const Dashboard = () => {
             }
         }
 
-        // BOLA DE NEVE GLOBAL (Independente do Filtro)
+        // BOLA DE NEVE GLOBAL
         const actualDueDate = parseLocalDate(loan.nextDue);
-        if (loan.status === 'Atrasado' || (actualDueDate < today && loan.status !== 'Acordo')) {
+        const isOverdue = actualDueDate < today || loan.status === 'Atrasado';
+        if (isOverdue) {
              atrasoTotal += getSnowballOverdue(loan);
         }
       });
@@ -226,7 +243,6 @@ const Dashboard = () => {
         taxas: { lowVal: rLowVal, lowCount: rLowCount, midVal: rMidVal, midCount: rMidCount, highVal: rHighVal, highCount: rHighCount }
       });
 
-      // Atividades Globais (Sempre mostra o pulso geral da base, ignora o filtro de data)
       const activities = [...safeLoans].sort((a, b) => new Date(b.nextDue).getTime() - new Date(a.nextDue).getTime()).slice(0, 6).map((loan: any) => {
         const dueDate = parseLocalDate(loan.nextDue);
         const isOverdue = dueDate < today && loan.status !== 'Pago';
@@ -268,14 +284,11 @@ const Dashboard = () => {
       });
   }, [allLoans, maturityDate]);
 
-  // --- FILTRO INTELIGENTE PARA A TABELA INFERIOR ---
   const detailedLoans = useMemo(() => {
       if (!selectedRange) return [];
       const today = new Date();
       today.setHours(0,0,0,0);
 
-      // CORREÇÃO CRÍTICA: Se for "Atrasados", ignora o array 'filteredContext' (que está fatiado por data) 
-      // e busca direto do 'allLoans' para mostrar a dívida real.
       if (selectedRange === 'overdue') {
           return allLoans.filter(l => {
               const dueDate = parseLocalDate(l.nextDue);
@@ -283,7 +296,6 @@ const Dashboard = () => {
           });
       }
 
-      // Para os outros cards, usa o contexto filtrado
       return filteredLoansContext.filter(l => {
           if (selectedRange === 'active') return l.status !== 'Pago';
           if (l.status === 'Pago') return false; 
@@ -309,7 +321,6 @@ const Dashboard = () => {
 
   return (
     <Layout>
-      {/* MODAL DE VENCIMENTOS MANTIDO INTACTO */}
       {showWelcomeModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
               <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95">
@@ -365,7 +376,9 @@ const Dashboard = () => {
                       <thead>
                           <tr className="bg-slate-50/50 text-[11px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-100">
                               <th className="p-4">Cliente</th>
-                              <th className="p-4 text-center">Venc. Original</th>
+                              <th className="p-4 text-center">
+                                  {selectedRange === 'overdue' ? 'Atrasado Desde' : period === 'todos' ? 'Venc. Original' : 'Data Projetada'}
+                              </th>
                               <th className="p-4 text-center">Taxa (%)</th>
                               <th className="p-4 text-right">
                                   {selectedRange === 'overdue' ? 'Valor Original (Atrasado)' : isFluxoAtivo ? 'Entrada (Capital da Parcela)' : 'Saldo Devedor (Total)'}
@@ -389,15 +402,41 @@ const Dashboard = () => {
                                           {loan.client}
                                           <div className="text-[10px] font-mono text-slate-400 font-normal">{loan.id}</div>
                                       </td>
+                                      
                                       <td className="p-4 text-center text-sm font-medium">
-                                          {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
-                                          <div className="text-[9px] text-blue-500 uppercase tracking-wider font-bold">Base</div>
-                                          {isFluxoAtivo && loan.matchedCount > 0 && selectedRange !== 'overdue' && (
-                                              <div className="text-[9px] text-slate-500 mt-1 bg-slate-100 rounded px-1 py-0.5 inline-block">
-                                                  {loan.matchedCount}x no filtro
-                                              </div>
+                                          {selectedRange === 'overdue' ? (
+                                              <>
+                                                  <div className="flex items-center justify-center gap-1 text-red-600 font-bold">
+                                                      <Calendar size={12}/>
+                                                      {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
+                                                  </div>
+                                                  <div className="text-[9px] text-red-400 font-bold uppercase tracking-wider mt-0.5">Pendente</div>
+                                              </>
+                                          ) : period === 'todos' ? (
+                                              <>
+                                                  {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
+                                                  <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Atual</div>
+                                              </>
+                                          ) : (
+                                              <>
+                                                  {loan.matchedDates && loan.matchedDates.length > 0 ? (
+                                                      <>
+                                                          {parseLocalDate(loan.matchedDates[0]).toLocaleDateString('pt-BR')}
+                                                          {loan.matchedCount > 1 && (
+                                                              <div className="block mt-1">
+                                                                  <span className="text-[9px] text-blue-600 font-bold uppercase tracking-wider bg-blue-50 rounded px-1.5 py-0.5 inline-block border border-blue-100">
+                                                                      e mais {loan.matchedCount - 1}x
+                                                                  </span>
+                                                              </div>
+                                                          )}
+                                                      </>
+                                                  ) : (
+                                                      parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')
+                                                  )}
+                                              </>
                                           )}
                                       </td>
+
                                       <td className="p-4 text-center font-bold text-slate-600">{loan.interestRate}%</td>
                                       
                                       <td className="p-4 text-right font-bold text-slate-700">

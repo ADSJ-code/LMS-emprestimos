@@ -36,7 +36,9 @@ const Billing = () => {
 
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'Todos' | 'Em Dia' | 'Atrasado' | 'Pago' | 'Acordo'>('Todos');
+  
+  // NOVO STATUS: Alterado para refletir a nova regra de negócio do Clóvis
+  const [statusFilter, setStatusFilter] = useState<'Todos' | 'Em Dia' | 'Atrasado' | 'Quitado' | 'Acordo' | 'PagosNoPeriodo'>('Todos');
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]); 
 
@@ -182,16 +184,33 @@ const Billing = () => {
   };
 
   const getLoanRealStatus = (loan: Loan) => {
-    if (loan.status === 'Pago') return 'Pago';
+    if (loan.status === 'Pago') return 'Quitado'; // Atualizado nome para o Clóvis
     if (loan.status === 'Acordo') return 'Acordo';
     const balance = loan.amount - (loan.totalPaidCapital || 0);
-    if (balance <= 0.10) return 'Pago';
+    if (balance <= 0.10) return 'Quitado'; // Atualizado nome
     const today = new Date();
     const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
     const dueStr = loan.nextDue.split('T')[0];
     if (dueStr < todayStr) return 'Atrasado';
     return 'Em Dia';
   };
+
+  // BUSCADOR DA ÚLTIMA DATA DE PAGAMENTO
+  const getLastPaymentDate = (loan: Loan) => {
+      if (!loan.history || loan.history.length === 0) return '-';
+      
+      const paymentsOnly = loan.history.filter(h => h.amount > 0 && !h.type.toLowerCase().includes('abertura'));
+      if (paymentsOnly.length === 0) return '-';
+
+      // Ordena do mais recente pro mais antigo
+      const sorted = paymentsOnly.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      
+      // Retorna a data do índice 0 formatada
+      const last = sorted[0];
+      const dateObj = new Date(last.date);
+      dateObj.setMinutes(dateObj.getMinutes() + dateObj.getTimezoneOffset());
+      return dateObj.toLocaleDateString('pt-BR');
+  }
 
   const handleOpenWhatsApp = (clientName: string, loanAmount: number, dueDate: string, e?: React.MouseEvent) => {
       if (e) e.stopPropagation();
@@ -226,6 +245,8 @@ const Billing = () => {
 
       if (loan.status !== 'Pago') {
           const [y, m, d] = loan.nextDue.split('T')[0].split('-').map(Number);
+          const today = new Date();
+          today.setHours(0,0,0,0);
           
           for (let i = 0; i < loan.installments; i++) {
               const stepDate = new Date(y, m - 1, d);
@@ -237,16 +258,17 @@ const Billing = () => {
               let status = 'Pendente';
               let amountToDisplay = loan.installmentValue;
 
-              if (isFirst) {
-                  const realStatus = getLoanRealStatus(loan);
-                  if (realStatus === 'Atrasado') {
-                      status = 'Atrasado';
-                      const baseAmount = loan.status === 'Acordo' ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
-                      amountToDisplay = calculateOverdueValue(baseAmount, loan.nextDue, 'Atrasado', loan.fineRate, loan.moraInterestRate, loan.amount);
-                  } else if (loan.status === 'Acordo') {
-                      status = 'Acordo';
-                      amountToDisplay = loan.installmentValue + (loan.agreementValue || 0);
-                  }
+              // NOVA LÓGICA DO CLÓVIS: Testa o atraso de TODAS as parcelas projetadas
+              if (stepDate < today) {
+                  status = 'Atrasado';
+                  const baseAmount = (isFirst && loan.status === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
+                  
+                  // Para exibir a multa real, usa a data exata daquela fatia do laço
+                  const stepDateStr = stepDate.toISOString().split('T')[0];
+                  amountToDisplay = calculateOverdueValue(baseAmount, stepDateStr, 'Atrasado', loan.fineRate, loan.moraInterestRate, loan.amount);
+              } else if (isFirst && loan.status === 'Acordo') {
+                  status = 'Acordo';
+                  amountToDisplay = loan.installmentValue + (loan.agreementValue || 0);
               }
 
               schedule.push({
@@ -359,16 +381,56 @@ const Billing = () => {
   const filteredLoans = useMemo(() => {
       return loans.filter(l => {
         const matchesSearch = (l.client || '').toLowerCase().includes(searchTerm.toLowerCase()) || (l.id || '').toLowerCase().includes(searchTerm.toLowerCase());
+        
         const realStatus = getLoanRealStatus(l);
-        const matchesStatus = statusFilter === 'Todos' || realStatus === statusFilter;
+        
+        let matchesStatus = true;
+        if (statusFilter !== 'Todos') {
+            if (statusFilter === 'PagosNoPeriodo') {
+                // Valida se houve pagamento no periodo sem matar a listagem global
+                // Só processa a fundo se o filtro for ativado
+            } else {
+                matchesStatus = realStatus === statusFilter;
+            }
+        }
+        
         let matchesDate = true;
         if (filterStart && filterEnd) {
-            const dueStr = l.nextDue.split('T')[0];
-            matchesDate = dueStr >= filterStart && dueStr <= filterEnd;
+            // LÓGICA DO FILTRO "PAGOS NO PERÍODO"
+            if (statusFilter === 'PagosNoPeriodo') {
+                if (!l.history) return false;
+                const hasPaymentInPeriod = l.history.some(h => {
+                    if (h.amount <= 0 || h.type.toLowerCase().includes('abertura')) return false;
+                    const hDate = h.date.split('T')[0];
+                    return hDate >= filterStart && hDate <= filterEnd;
+                });
+                matchesDate = hasPaymentInPeriod;
+            } else {
+                const dueStr = l.nextDue.split('T')[0];
+                matchesDate = dueStr >= filterStart && dueStr <= filterEnd;
+            }
+        } else if (statusFilter === 'PagosNoPeriodo') {
+            matchesDate = false; // Exige data preenchida para esse filtro ter sentido
         }
+
         return matchesSearch && matchesStatus && matchesDate;
       });
   }, [loans, searchTerm, statusFilter, filterStart, filterEnd]);
+
+  // --- CÁLCULO DOS TOTAIS DA TABELA NA TELA ---
+  const tableTotals = useMemo(() => {
+      let capSum = 0;
+      let intSum = 0;
+      let instSum = 0;
+
+      filteredLoans.forEach(loan => {
+          capSum += Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
+          intSum += (loan.totalPaidInterest || 0);
+          instSum += loan.installmentValue;
+      });
+
+      return { capital: capSum, interest: intSum, installments: instSum };
+  }, [filteredLoans]);
 
   const handleOpenPayment = (loan: Loan) => {
     setSelectedLoan(loan);
@@ -526,14 +588,11 @@ const Billing = () => {
     } catch (err) { alert("Erro ao registrar."); }
   };
 
-  // ==========================================
-  // NOVA FUNÇÃO: ESTORNO INTELIGENTE
-  // ==========================================
   const handleUndoLastPayment = async () => {
     if (!selectedLoan || !selectedLoan.history || selectedLoan.history.length === 0) return;
 
     const history = selectedLoan.history;
-    const lastEntry = history[history.length - 1]; // Pega o último lá no final do array
+    const lastEntry = history[history.length - 1]; 
 
     if (lastEntry.type === 'Abertura') {
         alert("Não é possível desfazer a abertura do contrato. Caso precise, exclua o contrato pelo botão 'Excluir'.");
@@ -550,14 +609,11 @@ const Billing = () => {
 
     let updatedLoan = { ...selectedLoan };
 
-    // 1. Devolve o dinheiro pro Saldo
     updatedLoan.totalPaidCapital = Math.max(0, (updatedLoan.totalPaidCapital || 0) - (lastEntry.capitalPaid || 0));
     updatedLoan.totalPaidInterest = Math.max(0, (updatedLoan.totalPaidInterest || 0) - (lastEntry.interestPaid || 0));
 
-    // 2. Remove da linha do tempo
     updatedLoan.history = history.slice(0, -1);
 
-    // 3. Rebobina a data e o ciclo
     const advancedCycle = lastEntry.note?.includes('[QUITAÇÃO MENSAL]') || (lastEntry.capitalPaid && lastEntry.capitalPaid > 0) || lastEntry.type === 'Parcela';
     
     if (advancedCycle && lastEntry.type !== 'Acordo') {
@@ -575,7 +631,6 @@ const Billing = () => {
         }
     }
 
-    // 4. Ressuscita o contrato se ele estava Pago
     if (updatedLoan.status === 'Pago') {
         updatedLoan.status = 'Em Dia';
     }
@@ -840,16 +895,31 @@ const Billing = () => {
           <div className="relative w-full xl:w-96"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><input type="text" placeholder="Buscar cliente..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-slate-900/5 transition-all"/></div>
           <div className="flex gap-2 w-full xl:w-auto flex-wrap justify-end">
               <button onClick={() => setShowFilters(!showFilters)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold border transition-colors ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600'}`}><Filter size={16}/> Filtros</button>
-              <select value={statusFilter} onChange={(e: any) => setStatusFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-medium outline-none"><option value="Todos">Todos</option><option value="Em Dia">Em Dia</option><option value="Atrasado">Atrasado</option><option value="Acordo">Em Acordo</option><option value="Pago">Pago</option></select>
+              
+              {/* O NOVO MENU SUSPENSO */}
+              <select value={statusFilter} onChange={(e: any) => setStatusFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-medium outline-none cursor-pointer hover:bg-slate-50 transition-colors">
+                  <option value="Todos">Todos</option>
+                  <option value="Em Dia">Em Dia</option>
+                  <option value="Atrasado">Atrasado</option>
+                  <option value="Acordo">Em Acordo</option>
+                  <option value="Quitado">Quitado (Finalizado)</option>
+                  <option value="PagosNoPeriodo">Pagamentos no Período</option>
+              </select>
+
               <button onClick={handleExportExcel} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-green-700 transition-colors shadow-lg shadow-green-900/10"><Download size={18} /> Excel (Extrato)</button>
           </div>
         </div>
         
         {showFilters && (
             <div className="p-4 bg-slate-50 border-b border-slate-200 flex gap-4 items-end animate-in slide-in-from-top-2">
-                <div><label className="text-xs font-bold text-slate-500 block mb-1">Vencimento Inicial</label><input type="date" value={filterStart} onChange={e => setFilterStart(e.target.value)} className="p-2 rounded border border-slate-300"/></div>
-                <div><label className="text-xs font-bold text-slate-500 block mb-1">Vencimento Final</label><input type="date" value={filterEnd} onChange={e => setFilterEnd(e.target.value)} className="p-2 rounded border border-slate-300"/></div>
+                <div><label className="text-xs font-bold text-slate-500 block mb-1">Data Inicial</label><input type="date" value={filterStart} onChange={e => setFilterStart(e.target.value)} className="p-2 rounded border border-slate-300"/></div>
+                <div><label className="text-xs font-bold text-slate-500 block mb-1">Data Final</label><input type="date" value={filterEnd} onChange={e => setFilterEnd(e.target.value)} className="p-2 rounded border border-slate-300"/></div>
                 <button onClick={() => { setFilterStart(''); setFilterEnd(''); }} className="px-4 py-2 text-red-600 font-bold text-sm hover:bg-red-50 rounded-lg">Limpar</button>
+                {statusFilter === 'PagosNoPeriodo' && (!filterStart || !filterEnd) && (
+                    <span className="text-xs text-orange-600 font-bold ml-4 bg-orange-100 px-3 py-1.5 rounded-lg border border-orange-200 animate-pulse">
+                        ⚠️ Informe as duas datas para ver quem pagou no período.
+                    </span>
+                )}
             </div>
         )}
 
@@ -860,7 +930,8 @@ const Billing = () => {
                     <th className="p-4 text-center w-10"><input type="checkbox" onChange={toggleSelectAll} checked={filteredLoans.length > 0 && selectedIds.length === filteredLoans.length} className="w-4 h-4 rounded border-gray-300 text-slate-900 cursor-pointer"/></th>
                     <th className="p-4">Cliente</th>
                     <th className="p-4 text-center">Parcelas</th>
-                    <th className="p-4 text-center">Vencimento</th>
+                    <th className="p-4 text-center">Próx. Venc.</th>
+                    <th className="p-4 text-center text-blue-600">Última Baixa</th>
                     <th className="p-4 text-right">Saldo Capital</th>
                     <th className="p-4 text-right text-green-600">Juros Pagos</th>
                     <th className="p-4 text-right text-slate-500">Parcela Fixa</th>
@@ -869,7 +940,7 @@ const Billing = () => {
                 </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-                {filteredLoans.length === 0 ? (<tr><td colSpan={9} className="p-8 text-center text-slate-400">Nenhum contrato encontrado.</td></tr>) : (filteredLoans.map(loan => {
+                {filteredLoans.length === 0 ? (<tr><td colSpan={10} className="p-8 text-center text-slate-400">Nenhum contrato encontrado.</td></tr>) : (filteredLoans.map(loan => {
                     const displayStatus = getLoanRealStatus(loan);
                     return (
                         <tr key={loan.id} className={`transition-colors group ${selectedIds.includes(loan.id) ? 'bg-blue-50/50' : 'hover:bg-slate-50/80'}`}>
@@ -878,17 +949,20 @@ const Billing = () => {
                             <td className="p-4 text-center"><span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">{loan.installments}x</span></td>
                             <td className="p-4 text-center"><span className={`font-bold text-sm ${displayStatus === 'Atrasado' ? 'text-red-600' : 'text-slate-700'}`}>{formatDisplayDate(loan.nextDue)}</span></td>
                             
+                            {/* NOVA COLUNA DE ULTIMO PAGAMENTO */}
+                            <td className="p-4 text-center text-sm font-bold text-blue-600">{getLastPaymentDate(loan)}</td>
+
                             <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(Math.max(0, loan.amount - (loan.totalPaidCapital || 0)))}</td>
                             
                             <td className="p-4 text-right font-bold text-green-600 bg-green-50/30 rounded">R$ {formatMoney(loan.totalPaidInterest || 0)}</td>
                             <td className="p-4 text-right font-bold text-slate-500">R$ {formatMoney(loan.installmentValue)}</td>
                             
                             <td className="p-4 text-center">
-                                <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${
-                                    displayStatus === 'Em Dia' ? 'bg-blue-50 text-blue-600' : 
-                                    displayStatus === 'Atrasado' ? 'bg-red-50 text-red-600' : 
-                                    displayStatus === 'Acordo' ? 'bg-orange-100 text-orange-700' : 
-                                    displayStatus === 'Pago' ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
+                                <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase shadow-sm ${
+                                    displayStatus === 'Em Dia' ? 'bg-blue-50 text-blue-700 border border-blue-100' : 
+                                    displayStatus === 'Atrasado' ? 'bg-red-50 text-red-700 border border-red-100' : 
+                                    displayStatus === 'Acordo' ? 'bg-orange-50 text-orange-700 border border-orange-100' : 
+                                    displayStatus === 'Quitado' ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-gray-100 text-gray-500'}`}>
                                     {displayStatus}
                                 </span>
                             </td>
@@ -899,7 +973,7 @@ const Billing = () => {
                                 {openMenuId === loan.id && (<div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right"><div className="py-1">
                                     <button onClick={() => { setSelectedLoan(loan); setDetailTab('info'); setIsDetailsOpen(true); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><Eye size={16} className="text-blue-500" /> Ver Detalhes</button>
                                     
-                                    {displayStatus !== 'Pago' && (
+                                    {displayStatus !== 'Quitado' && (
                                         <>
                                             <button onClick={() => { handleOpenPayment(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><DollarSign size={16} className="text-green-600" /> Registrar Baixa</button>
                                             <button onClick={() => { handleOpenAgreement(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-orange-700 hover:bg-orange-50 flex items-center gap-2"><FileSignature size={16} /> Registrar Acordo</button>
@@ -916,6 +990,26 @@ const Billing = () => {
                     );
                 }))}
             </tbody>
+            
+            {/* O NOVO RODAPÉ DE TOTAIS DINÂMICOS */}
+            <tfoot className="bg-slate-50 border-t-2 border-slate-200">
+                <tr>
+                    <td colSpan={5} className="p-4 text-right font-bold text-slate-500 uppercase tracking-widest text-xs">
+                        Soma da Tela Atual ({filteredLoans.length} contratos):
+                    </td>
+                    <td className="p-4 text-right font-black text-slate-800 text-lg">
+                        R$ {formatMoney(tableTotals.capital)}
+                    </td>
+                    <td className="p-4 text-right font-black text-green-600 text-lg">
+                        R$ {formatMoney(tableTotals.interest)}
+                    </td>
+                    <td className="p-4 text-right font-black text-slate-600 text-lg">
+                        R$ {formatMoney(tableTotals.installments)}
+                    </td>
+                    <td colSpan={2}></td>
+                </tr>
+            </tfoot>
+            
             </table>
         </div>
       </div>
@@ -1191,7 +1285,7 @@ const Billing = () => {
             
             {/* SIMULAÇÃO COM TEXTO DINÂMICO DE PERIODICIDADE */}
             <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-inner">
-                <div className="flex items-center gap-2 mb-4 border-b border-slate-200 pb-3"><Calculator size={20} className="text-slate-800" /><h4 className="text-[12px] font-bold text-slate-800 uppercase tracking-widest">Simulação Financeira ({formData.interestType === 'SIMPLE' ? 'Juros Simples' : 'Price / Linear'})</h4></div>
+                <div className="flex items-center gap-2 mb-4 border-b border-slate-200 pb-3"><Calculator size={20} className="text-slate-800" /><h4 className="text-[12px] font-bold text-slate-800 uppercase tracking-widest">Simulação Financeira ({formData.interestType === 'SIMPLE' ? 'Juros Simples' : 'Price'})</h4></div>
                 {isSimulating ? (<div className="flex justify-center py-4"><Loader2 className="animate-spin text-slate-400" /></div>) : simulation.isValid ? (
                     <div className="space-y-4">
                         <div className="flex justify-between items-center text-sm font-medium"><span className="text-slate-500">Montante Financiado:</span><span className="text-slate-900 font-bold">R$ {formatMoney(parseFloat(formData.amount))}</span></div>
