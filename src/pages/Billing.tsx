@@ -37,7 +37,6 @@ const Billing = () => {
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   
-  // NOVO STATUS: Alterado para refletir a nova regra de negócio do Clóvis
   const [statusFilter, setStatusFilter] = useState<'Todos' | 'Em Dia' | 'Atrasado' | 'Quitado' | 'Acordo' | 'PagosNoPeriodo'>('Todos');
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]); 
@@ -184,10 +183,10 @@ const Billing = () => {
   };
 
   const getLoanRealStatus = (loan: Loan) => {
-    if (loan.status === 'Pago') return 'Quitado'; // Atualizado nome para o Clóvis
+    if (loan.status === 'Pago') return 'Quitado'; 
     if (loan.status === 'Acordo') return 'Acordo';
     const balance = loan.amount - (loan.totalPaidCapital || 0);
-    if (balance <= 0.10) return 'Quitado'; // Atualizado nome
+    if (balance <= 0.10) return 'Quitado'; 
     const today = new Date();
     const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
     const dueStr = loan.nextDue.split('T')[0];
@@ -195,17 +194,11 @@ const Billing = () => {
     return 'Em Dia';
   };
 
-  // BUSCADOR DA ÚLTIMA DATA DE PAGAMENTO
   const getLastPaymentDate = (loan: Loan) => {
       if (!loan.history || loan.history.length === 0) return '-';
-      
       const paymentsOnly = loan.history.filter(h => h.amount > 0 && !h.type.toLowerCase().includes('abertura'));
       if (paymentsOnly.length === 0) return '-';
-
-      // Ordena do mais recente pro mais antigo
       const sorted = paymentsOnly.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      
-      // Retorna a data do índice 0 formatada
       const last = sorted[0];
       const dateObj = new Date(last.date);
       dateObj.setMinutes(dateObj.getMinutes() + dateObj.getTimezoneOffset());
@@ -258,12 +251,9 @@ const Billing = () => {
               let status = 'Pendente';
               let amountToDisplay = loan.installmentValue;
 
-              // NOVA LÓGICA DO CLÓVIS: Testa o atraso de TODAS as parcelas projetadas
               if (stepDate < today) {
                   status = 'Atrasado';
                   const baseAmount = (isFirst && loan.status === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
-                  
-                  // Para exibir a multa real, usa a data exata daquela fatia do laço
                   const stepDateStr = stepDate.toISOString().split('T')[0];
                   amountToDisplay = calculateOverdueValue(baseAmount, stepDateStr, 'Atrasado', loan.fineRate, loan.moraInterestRate, loan.amount);
               } else if (isFirst && loan.status === 'Acordo') {
@@ -388,7 +378,6 @@ const Billing = () => {
         if (statusFilter !== 'Todos') {
             if (statusFilter === 'PagosNoPeriodo') {
                 // Valida se houve pagamento no periodo sem matar a listagem global
-                // Só processa a fundo se o filtro for ativado
             } else {
                 matchesStatus = realStatus === statusFilter;
             }
@@ -396,7 +385,6 @@ const Billing = () => {
         
         let matchesDate = true;
         if (filterStart && filterEnd) {
-            // LÓGICA DO FILTRO "PAGOS NO PERÍODO"
             if (statusFilter === 'PagosNoPeriodo') {
                 if (!l.history) return false;
                 const hasPaymentInPeriod = l.history.some(h => {
@@ -410,27 +398,32 @@ const Billing = () => {
                 matchesDate = dueStr >= filterStart && dueStr <= filterEnd;
             }
         } else if (statusFilter === 'PagosNoPeriodo') {
-            matchesDate = false; // Exige data preenchida para esse filtro ter sentido
+            matchesDate = false; 
         }
 
         return matchesSearch && matchesStatus && matchesDate;
       });
   }, [loans, searchTerm, statusFilter, filterStart, filterEnd]);
 
-  // --- CÁLCULO DOS TOTAIS DA TABELA NA TELA ---
+  // --- CÁLCULO DOS TOTAIS DA TABELA NA TELA (APENAS OS SELECIONADOS) ---
   const tableTotals = useMemo(() => {
       let capSum = 0;
       let intSum = 0;
       let instSum = 0;
+      let count = 0;
 
       filteredLoans.forEach(loan => {
-          capSum += Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
-          intSum += (loan.totalPaidInterest || 0);
-          instSum += loan.installmentValue;
+          // A mágica acontece aqui: Só soma se o ID do contrato estiver na lista de selecionados
+          if (selectedIds.includes(loan.id)) {
+              capSum += Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
+              intSum += (loan.totalPaidInterest || 0);
+              instSum += loan.installmentValue;
+              count++;
+          }
       });
 
-      return { capital: capSum, interest: intSum, installments: instSum };
-  }, [filteredLoans]);
+      return { capital: capSum, interest: intSum, installments: instSum, count };
+  }, [filteredLoans, selectedIds]);
 
   const handleOpenPayment = (loan: Loan) => {
     setSelectedLoan(loan);
@@ -995,7 +988,7 @@ const Billing = () => {
             <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                 <tr>
                     <td colSpan={5} className="p-4 text-right font-bold text-slate-500 uppercase tracking-widest text-xs">
-                        Soma da Tela Atual ({filteredLoans.length} contratos):
+                        Soma dos Selecionados ({tableTotals.count} contratos):
                     </td>
                     <td className="p-4 text-right font-black text-slate-800 text-lg">
                         R$ {formatMoney(tableTotals.capital)}
