@@ -70,7 +70,6 @@ const Dashboard = () => {
       return Math.max(0, totalExpectedInterest - paidInterest);
   };
 
-  // MÁQUINA DE BOLA DE NEVE: Calcula juros por cada mês não pago!
   const getSnowballOverdue = (loan: Loan) => {
       const today = new Date();
       today.setHours(0,0,0,0);
@@ -89,7 +88,7 @@ const Dashboard = () => {
           else tempDue.setMonth(tempDue.getMonth() + 1);
           
           count++;
-          if (count > 60) break; // Trava de segurança (5 anos)
+          if (count > 60) break; 
       }
       return total;
   };
@@ -159,8 +158,9 @@ const Dashboard = () => {
         let hasMatch = false;
         let matchedCapital = 0;
         let matchedInterest = 0;
+        let matchedCount = 0; // Conta quantas parcelas caíram dentro do filtro
 
-        // O MOTOR DE PROJEÇÃO: Fatiador de Contrato (Avança no tempo buscando fatias)
+        // O MOTOR DE PROJEÇÃO
         if (!startFilter || !endFilter) {
             hasMatch = true;
             matchedCapital = calculateCapitalBalance(loan);
@@ -172,9 +172,10 @@ const Dashboard = () => {
                     hasMatch = true;
                     matchedCapital += breakdown.capital;
                     matchedInterest += breakdown.interest;
+                    matchedCount++;
                 }
                 
-                if (currentDue > endFilter) break; // Otimização para não rodar infinito
+                if (currentDue > endFilter) break;
 
                 if (loan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
                 else if (loan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
@@ -183,8 +184,12 @@ const Dashboard = () => {
         }
 
         if (hasMatch) {
-            // Guarda a fatia fatiada no objeto para a tabela de detalhes usar
-            filteredContext.push({ ...loan, projectedCapitalForPeriod: matchedCapital, projectedInterestForPeriod: matchedInterest });
+            filteredContext.push({ 
+                ...loan, 
+                projectedCapitalForPeriod: matchedCapital, 
+                projectedInterestForPeriod: matchedInterest,
+                matchedCount // Adicionado para a tabela mostrar a justificativa
+            });
 
             if (isFluxo) {
                 capitalTotal += matchedCapital;
@@ -202,7 +207,7 @@ const Dashboard = () => {
             }
         }
 
-        // BOLA DE NEVE GLOBAL
+        // BOLA DE NEVE GLOBAL (Independente do Filtro)
         const actualDueDate = parseLocalDate(loan.nextDue);
         if (loan.status === 'Atrasado' || (actualDueDate < today && loan.status !== 'Acordo')) {
              atrasoTotal += getSnowballOverdue(loan);
@@ -221,14 +226,14 @@ const Dashboard = () => {
         taxas: { lowVal: rLowVal, lowCount: rLowCount, midVal: rMidVal, midCount: rMidCount, highVal: rHighVal, highCount: rHighCount }
       });
 
-      // Alimentando Atividades
-      const activities = [...filteredContext].reverse().slice(0, 5).map((loan: any) => {
+      // Atividades Globais (Sempre mostra o pulso geral da base, ignora o filtro de data)
+      const activities = [...safeLoans].sort((a, b) => new Date(b.nextDue).getTime() - new Date(a.nextDue).getTime()).slice(0, 6).map((loan: any) => {
         const dueDate = parseLocalDate(loan.nextDue);
         const isOverdue = dueDate < today && loan.status !== 'Pago';
         return {
           id: loan.id,
           type: isOverdue ? 'atraso' : 'novo_contrato',
-          text: isOverdue ? `Atraso: ${loan.client}` : `No Período: ${loan.client}`,
+          text: isOverdue ? `Atraso: ${loan.client}` : `Pendente: ${loan.client}`,
           time: dueDate.toLocaleDateString('pt-BR'), 
           value: isOverdue ? 'Cobrar' : `R$ ${formatMoney(loan.installmentValue)}`
         };
@@ -251,7 +256,6 @@ const Dashboard = () => {
 
   const handlePeriodChange = (val: string) => {
       setPeriod(val as any);
-      // Auto-Switch para resolver o conflito do Vídeo do Clóvis
       if (val !== 'todos' && val !== 'personalizado') setViewMode('fluxo');
       else if (val === 'todos') setViewMode('saldo');
   };
@@ -264,16 +268,23 @@ const Dashboard = () => {
       });
   }, [allLoans, maturityDate]);
 
+  // --- FILTRO INTELIGENTE PARA A TABELA INFERIOR ---
   const detailedLoans = useMemo(() => {
       if (!selectedRange) return [];
       const today = new Date();
       today.setHours(0,0,0,0);
 
-      return filteredLoansContext.filter(l => {
-          if (selectedRange === 'overdue') {
+      // CORREÇÃO CRÍTICA: Se for "Atrasados", ignora o array 'filteredContext' (que está fatiado por data) 
+      // e busca direto do 'allLoans' para mostrar a dívida real.
+      if (selectedRange === 'overdue') {
+          return allLoans.filter(l => {
               const dueDate = parseLocalDate(l.nextDue);
-              return l.status !== 'Pago' && dueDate < today;
-          }
+              return l.status !== 'Pago' && (dueDate < today || l.status === 'Atrasado');
+          });
+      }
+
+      // Para os outros cards, usa o contexto filtrado
+      return filteredLoansContext.filter(l => {
           if (selectedRange === 'active') return l.status !== 'Pago';
           if (l.status === 'Pago') return false; 
           if (selectedRange === 'capital' || selectedRange === 'profit') return true; 
@@ -282,7 +293,7 @@ const Dashboard = () => {
           if (selectedRange === 'high') return l.interestRate > 15;
           return false;
       });
-  }, [filteredLoansContext, selectedRange]);
+  }, [filteredLoansContext, allLoans, selectedRange]);
 
   const rangeTitles = {
       low: 'Capital em Taxa Baixa (< 10%)', mid: 'Capital em Taxa Média (10% - 15%)', high: 'Capital em Taxa Alta (> 15%)',
@@ -298,6 +309,7 @@ const Dashboard = () => {
 
   return (
     <Layout>
+      {/* MODAL DE VENCIMENTOS MANTIDO INTACTO */}
       {showWelcomeModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
               <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95">
@@ -346,18 +358,22 @@ const Dashboard = () => {
           <div className="animate-in slide-in-from-right-10 duration-300">
               <header className="mb-6 flex items-center gap-4">
                   <button onClick={() => setSelectedRange(null)} className="p-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors shadow-sm"><ArrowLeft size={20}/></button>
-                  <div><h2 className="text-2xl font-bold text-slate-800">{rangeTitles[selectedRange]}</h2><p className="text-slate-500">Detalhamento dos valores baseado no filtro atual.</p></div>
+                  <div><h2 className="text-2xl font-bold text-slate-800">{rangeTitles[selectedRange]}</h2><p className="text-slate-500">Detalhamento dos valores baseados na sua seleção.</p></div>
               </header>
               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
                   <table className="w-full text-left">
                       <thead>
                           <tr className="bg-slate-50/50 text-[11px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-100">
                               <th className="p-4">Cliente</th>
-                              <th className="p-4 text-center">Vencimento</th>
+                              <th className="p-4 text-center">Venc. Original</th>
                               <th className="p-4 text-center">Taxa (%)</th>
-                              <th className="p-4 text-right">{isFluxoAtivo ? 'Entrada (Capital da Parcela)' : 'Saldo Devedor (Total)'}</th>
-                              <th className="p-4 text-right text-green-600">{isFluxoAtivo ? 'Entrada (Juros da Parcela)' : 'Lucro Restante (Total)'}</th>
-                              {selectedRange === 'overdue' && <th className="p-4 text-right text-red-600">Bola de Neve (Atraso Total)</th>}
+                              <th className="p-4 text-right">
+                                  {selectedRange === 'overdue' ? 'Valor Original (Atrasado)' : isFluxoAtivo ? 'Entrada (Capital da Parcela)' : 'Saldo Devedor (Total)'}
+                              </th>
+                              <th className="p-4 text-right text-green-600">
+                                  {selectedRange === 'overdue' ? '-' : isFluxoAtivo ? 'Entrada (Juros da Parcela)' : 'Lucro Restante (Total)'}
+                              </th>
+                              {selectedRange === 'overdue' && <th className="p-4 text-right text-red-600">Bola de Neve (Atualizado)</th>}
                               <th className="p-4 text-center">Status</th>
                           </tr>
                       </thead>
@@ -373,11 +389,23 @@ const Dashboard = () => {
                                           {loan.client}
                                           <div className="text-[10px] font-mono text-slate-400 font-normal">{loan.id}</div>
                                       </td>
-                                      <td className="p-4 text-center text-sm font-medium">{new Date(loan.nextDue).toLocaleDateString('pt-BR')}</td>
+                                      <td className="p-4 text-center text-sm font-medium">
+                                          {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
+                                          <div className="text-[9px] text-blue-500 uppercase tracking-wider font-bold">Base</div>
+                                          {isFluxoAtivo && loan.matchedCount > 0 && selectedRange !== 'overdue' && (
+                                              <div className="text-[9px] text-slate-500 mt-1 bg-slate-100 rounded px-1 py-0.5 inline-block">
+                                                  {loan.matchedCount}x no filtro
+                                              </div>
+                                          )}
+                                      </td>
                                       <td className="p-4 text-center font-bold text-slate-600">{loan.interestRate}%</td>
                                       
-                                      <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(isFluxoAtivo ? loan.projectedCapitalForPeriod : capBalance)}</td>
-                                      <td className="p-4 text-right font-bold text-green-600">R$ {formatMoney(isFluxoAtivo ? loan.projectedInterestForPeriod : remProfit)}</td>
+                                      <td className="p-4 text-right font-bold text-slate-700">
+                                          R$ {formatMoney(selectedRange === 'overdue' ? loan.installmentValue : isFluxoAtivo ? loan.projectedCapitalForPeriod : capBalance)}
+                                      </td>
+                                      <td className="p-4 text-right font-bold text-green-600">
+                                          {selectedRange === 'overdue' ? '-' : `R$ ${formatMoney(isFluxoAtivo ? loan.projectedInterestForPeriod : remProfit)}`}
+                                      </td>
                                       
                                       {selectedRange === 'overdue' && <td className="p-4 text-right font-black text-red-600">R$ {formatMoney(overdueVal)}</td>}
                                       <td className="p-4 text-center">
@@ -397,7 +425,7 @@ const Dashboard = () => {
             <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-8 gap-4">
                 <div>
                     <h2 className="text-2xl font-bold text-slate-800">Dashboard</h2>
-                    <p className="text-slate-500">Visão geral e projeções.</p>
+                    <p className="text-slate-500">Visão geral e projeções do sistema.</p>
                 </div>
                 
                 <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center w-full xl:w-auto">
@@ -449,7 +477,7 @@ const Dashboard = () => {
                     <p className="text-2xl font-black text-green-600">+{formatMoney(metrics.lucroProjetado)}</p>
                 </div>
                 <div onClick={() => setSelectedRange('overdue')} className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-red-500 hover:shadow-md hover:bg-red-50/10 transition-all cursor-pointer group">
-                    <div className="flex justify-between items-start mb-2"><div className="p-3 bg-red-50 text-red-600 rounded-lg"><AlertTriangle size={24} /></div></div><h3 className="text-slate-500 text-xs font-bold uppercase mb-1">Total em Atraso (Acumulado)</h3><p className="text-2xl font-black text-slate-800 mb-3">{formatMoney(metrics.atrasoGeral)}</p>
+                    <div className="flex justify-between items-start mb-2"><div className="p-3 bg-red-50 text-red-600 rounded-lg"><AlertTriangle size={24} /></div></div><h3 className="text-slate-500 text-xs font-bold uppercase mb-1">Total em Atraso (Global)</h3><p className="text-2xl font-black text-slate-800 mb-3">{formatMoney(metrics.atrasoGeral)}</p>
                 </div>
                 <div onClick={() => setSelectedRange('active')} className="bg-slate-900 p-6 rounded-xl shadow-lg text-white relative overflow-hidden cursor-pointer hover:bg-slate-800 transition-all">
                     <div className="absolute right-0 top-0 opacity-10 p-2"><FileText size={64} /></div><h3 className="text-slate-300 text-xs font-bold uppercase mb-1">Contratos no Filtro</h3><p className="text-3xl font-black text-white">{metrics.contratosAtivos}</p><p className="text-[10px] text-slate-400 mt-2 flex items-center gap-1"><Users size={12}/> {metrics.totalClientesCadastrados} clientes cadastrados</p>
@@ -481,9 +509,9 @@ const Dashboard = () => {
                 </div>
 
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 h-fit">
-                    <div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg text-slate-800">Atividade no Filtro</h3><button onClick={() => navigate('/history')} className="text-blue-600 text-xs font-medium hover:underline flex items-center gap-1">Ver tudo <ArrowRight size={12} /></button></div>
+                    <div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg text-slate-800">Atividade Global</h3><button onClick={() => navigate('/history')} className="text-blue-600 text-xs font-medium hover:underline flex items-center gap-1">Ver tudo <ArrowRight size={12} /></button></div>
                     <div className="space-y-6">
-                        {recentActivities.length > 0 ? (recentActivities.map((activity) => (<div key={activity.id} className="flex gap-4 items-start"><div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${activity.type === 'atraso' ? 'bg-red-500' : 'bg-green-500'}`} /><div><p className="text-sm font-medium text-slate-800 leading-tight">{activity.text}</p><p className="text-xs text-slate-400 mt-1">{activity.time}</p></div>{activity.value !== '-' && (<span className={`ml-auto text-xs font-bold whitespace-nowrap ${activity.type === 'atraso' ? 'text-red-600 bg-red-50 px-2 py-1 rounded' : 'text-slate-600'}`}>{activity.value}</span>)}</div>))) : (<div className="text-center py-8 text-slate-400 text-sm"><Activity size={24} className="mx-auto mb-2 opacity-50"/>Nenhuma atividade neste período.</div>)}
+                        {recentActivities.length > 0 ? (recentActivities.map((activity) => (<div key={activity.id} className="flex gap-4 items-start"><div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${activity.type === 'atraso' ? 'bg-red-500' : 'bg-slate-300'}`} /><div><p className="text-sm font-medium text-slate-800 leading-tight">{activity.text}</p><p className="text-xs text-slate-400 mt-1">{activity.time}</p></div>{activity.value !== '-' && (<span className={`ml-auto text-xs font-bold whitespace-nowrap ${activity.type === 'atraso' ? 'text-red-600 bg-red-50 px-2 py-1 rounded' : 'text-slate-600'}`}>{activity.value}</span>)}</div>))) : (<div className="text-center py-8 text-slate-400 text-sm"><Activity size={24} className="mx-auto mb-2 opacity-50"/>Nenhuma atividade no momento.</div>)}
                     </div>
                 </div>
             </div>
