@@ -12,7 +12,7 @@ import (
 )
 
 type WhatsappService interface {
-	SendMessage(ctx context.Context, userConectado string, phone string, message string, delay int, name string, lateDays int, updatedAmount float64) error
+	SendMessage(ctx context.Context, userConectado string, phone string, message string, delay int, name string, lateDays int, updatedAmount float64, dateVencimento string) error
 }
 
 type whatsappService struct {
@@ -44,13 +44,12 @@ type MessagePayload struct {
 }
 
 
-
-func (s *whatsappService) SendMessage(ctx context.Context, userConectado string, phone string, message string, delayLevel int, name string, lateDays int, updatedAmount float64) error {
+func (s *whatsappService) SendMessage(ctx context.Context, userConectado string, phone string, message string, delayLevel int, name string, lateDays int, updatedAmount float64, dateVencimento string) error {
 	endPoint := "message/sendText"
 	if userConectado == "" {
 		userConectado = "teste"
 	}
-	message = DefinirMensagemComDetalhes(delayLevel, name, lateDays, updatedAmount)
+	message = DefinirMensagemComDetalhes(delayLevel, name, lateDays, updatedAmount, dateVencimento)
 
 	// Tirar caracteres não numéricos do telefone
 	re := regexp.MustCompile(`\D`)
@@ -112,8 +111,7 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 	return err
 }
 
-func DefinirMensagemComDetalhes(delayLevel int, name string, lateDays int, updatedAmount float64) string {
-	delayLevel = 1
+func DefinirMensagemComDetalhes(delayLevel int, name string, lateDays int, updatedAmount float64, dateVencimento string) string {
 	
 	// Formatação simples para moeda (R$)
 	valorFormatado := fmt.Sprintf("R$ %.2f", updatedAmount)
@@ -130,10 +128,9 @@ func DefinirMensagemComDetalhes(delayLevel int, name string, lateDays int, updat
 	case 2:
 		// Alerta de Pendência (Atraso Médio: 6-15 dias)
 		return fmt.Sprintf(
-			"Atenção, *%s*! ⚠️\n\nIdentificamos que a sua pendência de %s completou %d dias.\n\n" +
-			"A regularização imediata evita a suspensão de benefícios e a incidência de novos juros. " +
-			"Podemos gerar um novo boleto ou PIX para você agora?", 
-			name, valorFormatado, lateDays)
+			"Olá, *%s*! Tudo bem? ⚠️\n\n"+
+			"Passando para lembrar do vencimento da sua parcela no valor de  *%s* no dia %s Qualquer dúvida, estamos à disposição!\n\n",
+			name, valorFormatado, dateVencimento)
 
 	case 3:
 		// Notificação Urgente/Pré-Jurídico (Atraso Longo: +15 dias)

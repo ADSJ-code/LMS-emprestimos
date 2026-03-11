@@ -40,7 +40,7 @@ const sendWhatsappApi = async (
     body: JSON.stringify({
       userconectado: "teste",
       phone: phone,
-      delay: 1200,
+      delay: 1,
       name: name,
       lateDays: lateDays,
       updatedAmount: updatedAmount,

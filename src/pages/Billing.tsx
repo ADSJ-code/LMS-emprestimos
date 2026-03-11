@@ -35,6 +35,7 @@ const sendWhatsappApi = async (
   contract: string,
   lateDays: number,
   updatedAmount: number,
+  dateVencimento: string
 ) => {
   const response = await fetch("http://localhost:8080/api/message", {
     method: "POST",
@@ -42,10 +43,11 @@ const sendWhatsappApi = async (
     body: JSON.stringify({
       userconectado: "teste",
       phone: phone,
-      delay: 1200,
+      delay: 2,
       name: name,
       lateDays: lateDays,
       updatedAmount: updatedAmount,
+      dateVencimento: dateVencimento,
     }),
   });
 
@@ -131,20 +133,22 @@ const Billing = () => {
   const contractCode = `CTR-${loan.id?.substring(0, 6).toUpperCase()}`;
   const diffDays = loan.diffDays || 0;
 
+  const formattedDate = formatDisplayDate(loan.nextDue);
   try {
     await sendWhatsappApi(
-      loan.client,
+      client.name,
       client.phone,
       contractCode,
       diffDays,
-      safeSnowball.totalUpdated, // Valor seguro
+      loan.installmentValue, // Valor seguro
+      formattedDate // Data formatada
     );
     alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
   } catch (error) {
     // 2. Fallback: Se a API falhar, abre o link direto do WhatsApp Web
     console.warn("API Offline, usando link direto...");
 
-    const message = `Olá ${firstName}, identificamos ${parcelasText} totalizando R$ ${formatMoney(snowball.totalUpdated)} (valor atualizado) referente ao seu contrato ${contractCode}.\n\nPodemos agendar um pagamento para regularizar?`;
+    const message = `Olá, ${client.name}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loan.installmentValue)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
 
     const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
     window.open(url, "_blank");
