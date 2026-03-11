@@ -4,7 +4,7 @@ import {
   MoreVertical, Loader2, RefreshCw, ShieldAlert, ShieldCheck, 
   Calculator, FileText, Check, ChevronRight, DollarSign, 
   Printer, Eye, TrendingUp, TrendingDown, History, Download, Calendar, AlertTriangle, Info, PartyPopper, UserCheck,
-  Percent, Landmark, CreditCard, Repeat, BellRing, X, FileSignature, Filter, MessageCircle, Users
+  Percent, Landmark, CreditCard, Repeat, BellRing, X, FileSignature, Filter, MessageCircle, Users, Send
 } from 'lucide-react';
 
 import ExcelJS from 'exceljs';
@@ -183,7 +183,7 @@ const Billing = () => {
   };
 
   const getLoanRealStatus = (loan: Loan) => {
-    if (loan.status === 'Pago') return 'Quitado'; 
+    if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
     if (loan.status === 'Acordo') return 'Acordo';
     const balance = loan.amount - (loan.totalPaidCapital || 0);
     if (balance <= 0.10) return 'Quitado'; 
@@ -204,6 +204,40 @@ const Billing = () => {
       dateObj.setMinutes(dateObj.getMinutes() + dateObj.getTimezoneOffset());
       return dateObj.toLocaleDateString('pt-BR');
   }
+
+  // NOVA LÓGICA: Envio em Massa
+  const handleMassMessage = async () => {
+      if (selectedIds.length === 0) return;
+      
+      const confirmMass = window.confirm(`Você está prestes a abrir o WhatsApp para ${selectedIds.length} cliente(s).\n\nDeseja continuar? (O navegador pode bloquear se forem muitas abas, você precisará permitir pop-ups)`);
+      if (!confirmMass) return;
+
+      const selectedLoansData = loans.filter(l => selectedIds.includes(l.id));
+
+      for (let i = 0; i < selectedLoansData.length; i++) {
+          const loan = selectedLoansData[i];
+          const client = availableClients.find(c => c.name === loan.client);
+          
+          if (client && client.phone) {
+              const cleanPhone = client.phone.replace(/\D/g, '');
+              const formattedDate = formatDisplayDate(loan.nextDue);
+              const status = getLoanRealStatus(loan);
+              
+              let message = `Olá, ${client.name}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loan.installmentValue)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
+              
+              if (status === 'Atrasado') {
+                   message = `Olá, ${client.name}! Consta em nosso sistema uma parcela em atraso referente ao dia ${formattedDate}. Por favor, entre em contato para regularizarmos a situação.`;
+              }
+              
+              const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
+              window.open(url, '_blank');
+              
+              // Pequeno delay para evitar travamento do navegador se forem muitos clientes
+              await new Promise(resolve => setTimeout(resolve, 800));
+          }
+      }
+      setSelectedIds([]); // Limpa a seleção após envio
+  };
 
   const handleOpenWhatsApp = (clientName: string, loanAmount: number, dueDate: string, e?: React.MouseEvent) => {
       if (e) e.stopPropagation();
@@ -236,7 +270,7 @@ const Billing = () => {
           });
       });
 
-      if (loan.status !== 'Pago') {
+      if (loan.status !== 'Pago' && loan.status !== 'Quitado') {
           const [y, m, d] = loan.nextDue.split('T')[0].split('-').map(Number);
           const today = new Date();
           today.setHours(0,0,0,0);
@@ -308,16 +342,16 @@ const Billing = () => {
     
     const dueToday = loans.filter(l => {
        const dStr = l.nextDue.split('T')[0];
-       return dStr === todayStr && l.status !== 'Pago';
+       return dStr === todayStr && l.status !== 'Pago' && l.status !== 'Quitado';
     });
     setTodaysLoans(dueToday);
 
     const targetStr = collectionDate;
-    const list = loans.filter(l => l.nextDue.split('T')[0] === targetStr && l.status !== 'Pago');
+    const list = loans.filter(l => l.nextDue.split('T')[0] === targetStr && l.status !== 'Pago' && l.status !== 'Quitado');
     setCollectionLoans(list);
 
     const totalOverdue = loans.reduce((acc, l) => {
-      if (l.status === 'Pago') return acc;
+      if (l.status === 'Pago' || l.status === 'Quitado') return acc;
       const realStatus = getLoanRealStatus(l);
       if (realStatus === 'Atrasado') {
           const val = calculateOverdueValue(l.installmentValue, l.nextDue, 'Atrasado', l.fineRate ?? 0, l.moraInterestRate ?? 0, l.amount);
@@ -367,6 +401,11 @@ const Billing = () => {
         setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false }); 
     }
   }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency]);
+
+  // NOVA LÓGICA: Limpar a seleção sempre que os filtros de visualização mudarem
+  useEffect(() => {
+      setSelectedIds([]);
+  }, [searchTerm, statusFilter, filterStart, filterEnd]);
 
   const filteredLoans = useMemo(() => {
       return loans.filter(l => {
@@ -530,7 +569,7 @@ const Billing = () => {
     else noteText += ` [PARCIAL]`;
 
     if (balance <= 0.10) {
-        updatedLoan.status = 'Pago';
+        updatedLoan.status = 'Quitado';
         updatedLoan.installments = 0;
     } else {
         updatedLoan.status = 'Em Dia'; 
@@ -624,7 +663,7 @@ const Billing = () => {
         }
     }
 
-    if (updatedLoan.status === 'Pago') {
+    if (updatedLoan.status === 'Pago' || updatedLoan.status === 'Quitado') {
         updatedLoan.status = 'Em Dia';
     }
 
@@ -665,8 +704,15 @@ const Billing = () => {
       } catch (e) { alert("Erro ao salvar acordo."); }
   };
 
+  // NOVA LÓGICA: Exportar APENAS OS SELECIONADOS
   const handleExportExcel = async () => {
-    if (filteredLoans.length === 0) { alert("Nenhum contrato encontrado com os filtros atuais."); return; }
+    // Agora olhamos apenas para os contratos que estão no array `selectedIds`
+    const loansToExport = loans.filter(l => selectedIds.includes(l.id));
+
+    if (loansToExport.length === 0) { 
+        alert("Nenhum contrato selecionado. Por favor, marque as caixas (checkboxes) dos contratos que deseja exportar."); 
+        return; 
+    }
     
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Extrato de Recebimentos');
@@ -688,7 +734,8 @@ const Billing = () => {
 
     let hasRecords = false;
 
-    filteredLoans.forEach(loan => {
+    // Usamos loansToExport em vez de filteredLoans
+    loansToExport.forEach(loan => {
         if (loan.history && loan.history.length > 0) {
             loan.history.forEach(record => {
                 if (record.amount > 0 || record.type === 'Abertura') {
@@ -709,7 +756,7 @@ const Billing = () => {
     });
 
     if (!hasRecords) {
-        alert("Os contratos filtrados não possuem nenhum histórico de pagamento para gerar o extrato.");
+        alert("Os contratos selecionados não possuem nenhum histórico de pagamento para gerar o extrato.");
         return;
     }
 
@@ -887,9 +934,16 @@ const Billing = () => {
         <div className="p-4 border-b border-slate-50 bg-slate-50/30 flex flex-col xl:flex-row gap-4 justify-between items-center rounded-t-2xl">
           <div className="relative w-full xl:w-96"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><input type="text" placeholder="Buscar cliente..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-slate-900/5 transition-all"/></div>
           <div className="flex gap-2 w-full xl:w-auto flex-wrap justify-end">
+              
+              {/* BOTÃO DE AVISO EM MASSA (SÓ APARECE SE TIVER SELEÇÃO) */}
+              {selectedIds.length > 0 && (
+                  <button onClick={handleMassMessage} className="flex items-center gap-2 bg-[#25D366] text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-[#128C7E] transition-colors shadow-lg shadow-green-900/10 animate-in fade-in zoom-in">
+                      <Send size={18} /> Avisar Selecionados ({selectedIds.length})
+                  </button>
+              )}
+
               <button onClick={() => setShowFilters(!showFilters)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold border transition-colors ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600'}`}><Filter size={16}/> Filtros</button>
               
-              {/* O NOVO MENU SUSPENSO */}
               <select value={statusFilter} onChange={(e: any) => setStatusFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-medium outline-none cursor-pointer hover:bg-slate-50 transition-colors">
                   <option value="Todos">Todos</option>
                   <option value="Em Dia">Em Dia</option>
@@ -899,7 +953,7 @@ const Billing = () => {
                   <option value="PagosNoPeriodo">Pagamentos no Período</option>
               </select>
 
-              <button onClick={handleExportExcel} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-green-700 transition-colors shadow-lg shadow-green-900/10"><Download size={18} /> Excel (Extrato)</button>
+              <button onClick={handleExportExcel} className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-slate-800 transition-colors shadow-lg shadow-slate-900/10"><Download size={18} /> Exportar Selecionados</button>
           </div>
         </div>
         
@@ -942,7 +996,7 @@ const Billing = () => {
                             <td className="p-4 text-center"><span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">{loan.installments}x</span></td>
                             <td className="p-4 text-center"><span className={`font-bold text-sm ${displayStatus === 'Atrasado' ? 'text-red-600' : 'text-slate-700'}`}>{formatDisplayDate(loan.nextDue)}</span></td>
                             
-                            {/* NOVA COLUNA DE ULTIMO PAGAMENTO */}
+                            {/* COLUNA DE ULTIMO PAGAMENTO */}
                             <td className="p-4 text-center text-sm font-bold text-blue-600">{getLastPaymentDate(loan)}</td>
 
                             <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(Math.max(0, loan.amount - (loan.totalPaidCapital || 0)))}</td>
@@ -984,7 +1038,7 @@ const Billing = () => {
                 }))}
             </tbody>
             
-            {/* O NOVO RODAPÉ DE TOTAIS DINÂMICOS */}
+            {/* O RODAPÉ DE TOTAIS DINÂMICOS */}
             <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                 <tr>
                     <td colSpan={5} className="p-4 text-right font-bold text-slate-500 uppercase tracking-widest text-xs">
@@ -1134,7 +1188,7 @@ const Billing = () => {
             )}
             
             <div className="flex flex-col gap-2 pt-4 border-t border-slate-100">
-                {selectedLoan.status !== 'Pago' && (
+                {selectedLoan.status !== 'Pago' && selectedLoan.status !== 'Quitado' && (
                     <button onClick={() => { handleOpenPayment(selectedLoan); setIsDetailsOpen(false); }} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-slate-800 transition-all shadow-lg"><DollarSign size={18} /> Registrar Novo Pagamento</button>
                 )}
             </div>

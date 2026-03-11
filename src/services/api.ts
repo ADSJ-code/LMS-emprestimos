@@ -18,7 +18,8 @@ export interface Loan {
   interestRate: number;
   startDate: string;
   nextDue: string;
-  status: 'Em Dia' | 'Atrasado' | 'Pago' | 'Pendente' | 'Acordo';
+  // AQUI ESTÁ A CORREÇÃO: Adicionado o 'Quitado'
+  status: 'Em Dia' | 'Atrasado' | 'Pago' | 'Pendente' | 'Acordo' | 'Quitado';
   installmentValue: number;
   fineRate?: number;
   moraInterestRate?: number;

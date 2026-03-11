@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Search, Plus, MoreVertical, Edit2, Trash2, Eye, 
@@ -24,7 +24,6 @@ const Clients = () => {
   const [editingId, setEditingId] = useState<string | number | null>(null);
   const [modalTab, setModalTab] = useState<'dados' | 'financeiro'>('dados');
   
-  // NOVO: Estado para controlar qual métrica global foi clicada
   const [globalMetricModal, setGlobalMetricModal] = useState<'base' | 'ativos' | 'emprestado' | 'lucro' | null>(null);
 
   const [isCepLoading, setIsCepLoading] = useState(false);
@@ -91,8 +90,20 @@ const Clients = () => {
     return () => window.removeEventListener('click', handleGlobalClick);
   }, []);
 
+  // --- INTELIGÊNCIA DE NUMERAÇÃO SEQUENCIAL DOS CLIENTES ---
+  const processedClients = useMemo(() => {
+      // Ordena do mais antigo para o mais novo usando o ID (que é um timestamp Date.now())
+      const sortedByTime = [...clients].sort((a, b) => Number(a.id) - Number(b.id));
+      
+      return sortedByTime.map((c, index) => ({
+          ...c,
+          // Se o cliente já tiver um número gravado, usa ele. Se não, atribui baseado na ordem histórica.
+          displayNumber: (c as any).clientNumber || (index + 1)
+      })).reverse(); // Inverte para mostrar o mais recente no topo da tabela
+  }, [clients]);
+
   // --- PLACAR GLOBAL ---
-  const globalMetrics = React.useMemo(() => {
+  const globalMetrics = useMemo(() => {
       let totalLent = 0;
       let totalProfit = 0;
       const activeClientsSet = new Set();
@@ -100,7 +111,7 @@ const Clients = () => {
       loans.forEach(l => {
           totalLent += Number(l.amount) || 0;
           totalProfit += Number(l.totalPaidInterest) || 0;
-          if (l.status !== 'Pago') {
+          if (l.status !== 'Pago' && l.status !== 'Quitado') {
               activeClientsSet.add(l.client);
           }
       });
@@ -171,6 +182,23 @@ const Clients = () => {
       }
   };
 
+  const viewDoc = (doc: ClientDoc) => {
+      if (doc && doc.data) {
+          const w = window.open("");
+          if (w) {
+              if (doc.type.includes('image')) {
+                  w.document.write(`<iframe src="${doc.data}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
+              } else if (doc.type.includes('pdf')) {
+                  w.document.write(`<iframe src="${doc.data}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
+              } else {
+                 w.location.href = doc.data;
+              }
+          } else {
+              alert("Por favor, permita pop-ups no seu navegador para visualizar o documento.");
+          }
+      }
+  };
+
   const UploadSlot = ({ label, type }: { label: string, type: DocType }) => {
       const currentDoc = getDoc(type);
       return (
@@ -181,15 +209,20 @@ const Clients = () => {
                       <div className="flex items-center gap-2 truncate">
                           <div className="bg-green-100 p-1.5 rounded text-green-700"><FileText size={16}/></div>
                           <div className="flex flex-col truncate">
-                              <span className="text-xs font-bold text-green-800 truncate max-w-[120px]">
+                              <span className="text-xs font-bold text-green-800 truncate max-w-[120px]" title={currentDoc.name.replace(`[${type}] `, '')}>
                                   {currentDoc.name.replace(`[${type}] `, '')}
                               </span>
                               <span className="text-[9px] text-green-600">Anexado</span>
                           </div>
                       </div>
-                      <button type="button" onClick={() => removeDoc(type)} className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-lg transition-colors" title="Remover anexo">
-                          <Trash2 size={16}/>
-                      </button>
+                      <div className="flex gap-1">
+                          <button type="button" onClick={() => viewDoc(currentDoc)} className="text-blue-500 hover:text-blue-700 hover:bg-blue-100 p-1.5 rounded-lg transition-colors" title="Visualizar anexo">
+                              <Eye size={16}/>
+                          </button>
+                          <button type="button" onClick={() => removeDoc(type)} className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-lg transition-colors" title="Remover anexo">
+                              <Trash2 size={16}/>
+                          </button>
+                      </div>
                   </div>
               ) : (
                   <label className="flex flex-col items-center justify-center gap-1 p-3 border-2 border-dashed border-slate-300 rounded-xl text-slate-400 cursor-pointer hover:bg-slate-50 hover:border-slate-400 hover:text-slate-600 transition-all group h-[62px]">
@@ -203,7 +236,7 @@ const Clients = () => {
   };
 
   // --- HANDLERS PRINCIPAIS ---
-  const handleOpenModal = (client?: Client, defaultTab: 'dados' | 'financeiro' = 'dados') => {
+  const handleOpenModal = (client?: any, defaultTab: 'dados' | 'financeiro' = 'dados') => {
     setModalTab(defaultTab); 
     if (client) {
       setEditingId(client.id);
@@ -224,13 +257,15 @@ const Clients = () => {
     e.preventDefault();
     setIsLoading(true);
     try {
-      const payload = { ...formData, documents: formData.documents || [] } as Client;
+      const payload = { ...formData, documents: formData.documents || [] };
       if (editingId) {
-        await clientService.update(editingId, payload);
+        await clientService.update(editingId, payload as Client);
         alert('Cliente atualizado com sucesso!');
       } else {
-        const newClient = { ...payload, id: Date.now() }; 
-        await clientService.create(newClient);
+        // Pega no maior número registado atualmente e soma 1
+        const maxNum = processedClients.reduce((max, c) => Math.max(max, c.displayNumber), 0);
+        const newClient = { ...payload, id: Date.now(), clientNumber: maxNum + 1 }; 
+        await clientService.create(newClient as Client);
         alert('Cliente cadastrado com sucesso!');
       }
       setIsModalOpen(false);
@@ -245,7 +280,7 @@ const Clients = () => {
   };
 
   const handleDelete = async (id: string | number) => {
-    if (confirm('Tem certeza que deseja excluir este cliente?')) {
+    if (confirm('Tem certeza que deseja excluir este cliente? O número dele deixará de existir.')) {
       try { await clientService.delete(id.toString()); fetchData(); } 
       catch (err) { alert('Erro ao excluir cliente.'); }
     }
@@ -260,19 +295,22 @@ const Clients = () => {
       const hasOverdue = clientLoans.some(l => {
           const today = new Date(); today.setHours(0,0,0,0);
           const due = new Date(l.nextDue); due.setMinutes(due.getMinutes() + due.getTimezoneOffset()); due.setHours(0,0,0,0);
-          return l.status !== 'Pago' && due < today;
+          return l.status !== 'Pago' && l.status !== 'Quitado' && due < today;
       });
 
       if (hasOverdue) return { label: 'Inadimplente', color: 'red' };
       
-      const hasActive = clientLoans.some(l => l.status !== 'Pago');
+      const hasActive = clientLoans.some(l => l.status !== 'Pago' && l.status !== 'Quitado');
       if (hasActive) return { label: 'Em Dia (Ativo)', color: 'blue' };
 
       return { label: 'Quitado (Histórico)', color: 'green' };
   };
 
-  const filteredClients = clients.filter(c => 
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) || c.cpf.includes(searchTerm)
+  // Filtra usando a lista processada que já tem a numeração
+  const filteredClients = processedClients.filter(c => 
+    c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    c.cpf.includes(searchTerm) ||
+    c.displayNumber.toString().includes(searchTerm) // Permite buscar pelo número!
   );
 
   return (
@@ -321,7 +359,7 @@ const Clients = () => {
         <div className="p-4 border-b border-slate-50 bg-slate-50/30 flex justify-between items-center rounded-t-2xl">
           <div className="relative w-full md:w-96">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-            <input type="text" placeholder="Buscar por nome, CPF ou email..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-slate-900/5 transition-all"/>
+            <input type="text" placeholder="Buscar por número, nome ou CPF..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-slate-900/5 transition-all"/>
           </div>
         </div>
         <div className="overflow-visible">
@@ -337,9 +375,15 @@ const Clients = () => {
                   return (
                   <tr key={client.id} className="hover:bg-slate-50/80 transition-colors group cursor-pointer" onClick={() => handleOpenModal(client, 'financeiro')}>
                     <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold border border-slate-200 shadow-sm">{client.name.charAt(0).toUpperCase()}</div>
-                        <div><div className="font-bold text-slate-800 group-hover:text-blue-600 transition-colors">{client.name}</div><div className="text-xs text-slate-400 flex items-center gap-1"><ShieldCheck size={12} /> {client.cpf}</div></div>
+                      <div className="flex items-center gap-4">
+                        {/* MEDALHA DO NÚMERO DO CLIENTE */}
+                        <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center text-white font-bold shadow-md text-sm border-[3px] border-slate-100 group-hover:scale-105 transition-transform" title={`Cliente Número ${client.displayNumber}`}>
+                            #{client.displayNumber}
+                        </div>
+                        <div>
+                            <div className="font-bold text-slate-800 group-hover:text-blue-600 transition-colors text-base">{client.name}</div>
+                            <div className="text-xs text-slate-400 flex items-center gap-1 mt-0.5"><ShieldCheck size={12} /> {client.cpf}</div>
+                        </div>
                       </div>
                     </td>
                     <td className="p-4"><div className="text-sm text-slate-600 flex items-center gap-2 mb-1"><Mail size={14} className="text-slate-400" /> {client.email || '-'}</div><div className="text-sm text-slate-600 flex items-center gap-2"><Phone size={14} className="text-slate-400" /> {client.phone}</div></td>
@@ -381,7 +425,7 @@ const Clients = () => {
       </div>
 
       {/* --- MODAL DA FICHA DO CLIENTE --- */}
-      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingId ? `Cliente: ${formData.name}` : "Novo Cliente"}>
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingId ? `Ficha do Cliente #${(formData as any).displayNumber || '-'}` : "Novo Cliente"}>
         {/* --- ABAS DO MODAL --- */}
         <div className="flex border-b border-slate-200 mb-6">
             <button onClick={() => setModalTab('dados')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${modalTab === 'dados' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Dados Cadastrais</button>
@@ -509,7 +553,7 @@ const Clients = () => {
                 ) : (
                     <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                         {loans.filter(l => l.client === formData.name).map(loan => {
-                            const isPaid = loan.status === 'Pago';
+                            const isPaid = loan.status === 'Pago' || loan.status === 'Quitado';
                             return (
                                 <div 
                                     key={loan.id} 
@@ -554,15 +598,18 @@ const Clients = () => {
                           <div className="p-2 bg-slate-200 rounded-lg text-slate-600"><Users size={20}/></div>
                           <div>
                               <p className="text-[10px] uppercase font-bold text-slate-400">Listagem de Base</p>
-                              <h3 className="font-bold text-slate-800">Todos os Clientes ({clients.length})</h3>
+                              <h3 className="font-bold text-slate-800">Todos os Clientes ({processedClients.length})</h3>
                           </div>
                       </div>
                       <div className="max-h-[400px] overflow-y-auto pr-2 custom-scrollbar space-y-2">
-                          {clients.map(c => (
+                          {processedClients.map(c => (
                               <div key={c.id} className="p-3 border border-slate-100 rounded-lg flex justify-between items-center hover:bg-slate-50 transition-colors">
-                                  <div>
-                                      <p className="font-bold text-slate-700 text-sm">{c.name}</p>
-                                      <p className="text-[10px] text-slate-400 font-mono">CPF: {c.cpf}</p>
+                                  <div className="flex items-center gap-3">
+                                      <span className="font-bold text-slate-400 text-xs">#{c.displayNumber}</span>
+                                      <div>
+                                          <p className="font-bold text-slate-700 text-sm">{c.name}</p>
+                                          <p className="text-[10px] text-slate-400 font-mono">CPF: {c.cpf}</p>
+                                      </div>
                                   </div>
                                   <span className={`text-[10px] px-2 py-1 rounded-full font-bold ${c.status === 'Bloqueado' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>{c.status}</span>
                               </div>
@@ -581,12 +628,18 @@ const Clients = () => {
                           </div>
                       </div>
                       <div className="max-h-[400px] overflow-y-auto pr-2 custom-scrollbar space-y-2">
-                          {Array.from(new Set(loans.filter(l => l.status !== 'Pago').map(l => l.client))).map((clientName, idx) => (
-                              <div key={idx} className="p-3 border border-slate-100 rounded-lg flex justify-between items-center hover:bg-blue-50/50 transition-colors cursor-pointer" onClick={() => { setGlobalMetricModal(null); handleOpenModal(clients.find(c => c.name === clientName), 'financeiro'); }}>
-                                  <p className="font-bold text-slate-700 text-sm">{clientName}</p>
-                                  <span className="text-[10px] px-2 py-1 rounded-full font-bold bg-blue-100 text-blue-700">Dívida Ativa</span>
-                              </div>
-                          ))}
+                          {Array.from(new Set(loans.filter(l => l.status !== 'Pago' && l.status !== 'Quitado').map(l => l.client))).map((clientName, idx) => {
+                              const foundClient = processedClients.find(c => c.name === clientName);
+                              return (
+                                  <div key={idx} className="p-3 border border-slate-100 rounded-lg flex justify-between items-center hover:bg-blue-50/50 transition-colors cursor-pointer" onClick={() => { setGlobalMetricModal(null); handleOpenModal(foundClient, 'financeiro'); }}>
+                                      <div className="flex items-center gap-2">
+                                          <span className="font-bold text-slate-400 text-xs">#{foundClient?.displayNumber || '-'}</span>
+                                          <p className="font-bold text-slate-700 text-sm">{clientName}</p>
+                                      </div>
+                                      <span className="text-[10px] px-2 py-1 rounded-full font-bold bg-blue-100 text-blue-700">Dívida Ativa</span>
+                                  </div>
+                              )
+                          })}
                       </div>
                   </>
               )}

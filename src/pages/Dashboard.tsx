@@ -19,9 +19,13 @@ const Dashboard = () => {
   const [customEnd, setCustomEnd] = useState('');
   
   const [viewMode, setViewMode] = useState<'saldo' | 'fluxo'>('saldo');
+  const [taxasViewMode, setTaxasViewMode] = useState<'capital' | 'lucro'>('capital');
+
+  // FILTROS LOCAIS DOS CARDS
+  const [tierFilters, setTierFilters] = useState({ capital: 'all', profit: 'all', overdue: 'all' });
 
   const [loading, setLoading] = useState(false);
-  const [selectedRange, setSelectedRange] = useState<'low' | 'mid' | 'high' | 'capital' | 'profit' | 'overdue' | 'active' | null>(null);
+  const [selectedRange, setSelectedRange] = useState<'low' | 'mid' | 'high' | 'capital' | 'profit' | 'overdue' | 'active' | 'clients_contracts' | null>(null);
   const [allLoans, setAllLoans] = useState<Loan[]>([]);
   const [allClients, setAllClients] = useState<Client[]>([]);
   
@@ -36,14 +40,17 @@ const Dashboard = () => {
       return new Date(d.getTime() - offset).toISOString().split('T')[0];
   });
 
+  const defaultTiers = { all: 0, low: 0, mid: 0, high: 0 };
   const [metrics, setMetrics] = useState({
-    capitalNaRua: 0,
-    lucroProjetado: 0,
-    atrasoGeral: 0,
-    contratosAtivos: 0,
+    capitalNaRua: { ...defaultTiers },
+    lucroProjetado: { ...defaultTiers },
+    atrasoGeral: { ...defaultTiers },
+    contratosAtivosFiltro: 0,
+    contratosAtivosGlobais: 0,
+    totalContratosLancados: 0,
     totalClientesCadastrados: 0,
     clientesComDivida: 0,
-    taxas: { lowVal: 0, lowCount: 0, midVal: 0, midCount: 0, highVal: 0, highCount: 0 }
+    taxas: { lowCap: 0, midCap: 0, highCap: 0, lowProf: 0, midProf: 0, highProf: 0 }
   });
 
   const [recentActivities, setRecentActivities] = useState<any[]>([]);
@@ -70,20 +77,20 @@ const Dashboard = () => {
       return Math.max(0, totalExpectedInterest - paidInterest);
   };
 
-  const getSnowballOverdue = (loan: Loan) => {
+  const getLoanDetails = (loan: Loan) => {
       const today = new Date();
       today.setHours(0,0,0,0);
       let tempDue = parseLocalDate(loan.nextDue);
-      let totalUpdated = 0;
-      let count = 0;
+      let totalOverdue = 0;
       let missedCount = 0;
+      let count = 0;
       
       const baseAmount = loan.status === 'Acordo' ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
       const remainingInstallments = loan.interestType === 'SIMPLE' ? 999 : (loan.installments || 1);
       
       while (tempDue < today) {
           const dateStr = tempDue.toISOString().split('T')[0];
-          totalUpdated += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+          totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
           missedCount++;
           
           if (loan.status === 'Acordo') break; 
@@ -99,10 +106,11 @@ const Dashboard = () => {
 
       if (missedCount === 0 && loan.status === 'Atrasado') {
            const dateStr = loan.nextDue.split('T')[0];
-           totalUpdated += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+           totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+           missedCount = 1;
       }
 
-      return totalUpdated;
+      return { totalOverdue, missedCount };
   };
 
   // --- MOTOR CENTRAL DE FILTRAGEM E PROJEÇÃO ---
@@ -152,38 +160,64 @@ const Dashboard = () => {
 
       const activeDebtors = new Set();
       const uniqueMatchedContracts = new Set();
-      let capitalTotal = 0;
-      let lucroTotal = 0;
-      let atrasoTotal = 0;
-      let rLowVal = 0, rLowCount = 0, rMidVal = 0, rMidCount = 0, rHighVal = 0, rHighCount = 0;
+      
+      let capAcc = { all: 0, low: 0, mid: 0, high: 0 };
+      let profAcc = { all: 0, low: 0, mid: 0, high: 0 };
+      let overAcc = { all: 0, low: 0, mid: 0, high: 0 };
+
+      let rLowCap = 0, rMidCap = 0, rHighCap = 0;
+      let rLowProf = 0, rMidProf = 0, rHighProf = 0;
+      let totalGloballyActive = 0;
       
       const filteredContext: any[] = [];
       const isFluxo = viewMode === 'fluxo' && period !== 'todos';
       const pad = (n: number) => n.toString().padStart(2, '0');
 
       safeLoans.forEach((loan: any) => {
-        if (loan.status === 'Pago') return;
-        activeDebtors.add(loan.client);
+        const isPaid = loan.status === 'Pago' || loan.status === 'Quitado';
+        
+        if (!isPaid) {
+            totalGloballyActive++;
+            activeDebtors.add(loan.client);
+        }
+        
+        if (isPaid) return;
 
         const breakdown = calculateInstallmentBreakdown(loan);
+        const { totalOverdue, missedCount } = getLoanDetails(loan);
+        
+        // Lucro real restante = Todo o lucro - (lucro das parcelas que já estão em atraso)
+        const remProfit = calculateRemainingProfit(loan);
+        const futureProfitTotal = Math.max(0, remProfit - (missedCount * breakdown.interest));
+        const capBalance = calculateCapitalBalance(loan);
+
         let currentDue = parseLocalDate(loan.nextDue);
         
         let hasMatch = false;
-        let matchedCapital = 0;
-        let matchedInterest = 0;
+        let capToAdd = 0;
+        let profToAdd = 0;
+        let overToAdd = 0;
         let slices: any[] = []; 
 
         if (!startFilter || !endFilter) {
             hasMatch = true;
-            matchedCapital = calculateCapitalBalance(loan);
-            matchedInterest = calculateRemainingProfit(loan);
+            capToAdd = capBalance;          // TODO o capital fica
+            profToAdd = futureProfitTotal;  // Somente lucro futuro
+            overToAdd = totalOverdue;       // Bola de neve das atrasadas
         } else {
             const limit = loan.interestType === 'SIMPLE' ? 60 : (loan.installments || 1);
             for (let i = 0; i < limit; i++) {
                 if (currentDue >= startFilter && currentDue <= endFilter) {
                     hasMatch = true;
-                    matchedCapital += breakdown.capital;
-                    matchedInterest += breakdown.interest;
+                    capToAdd += breakdown.capital;
+                    
+                    // Separando o que é lucro futuro do que é atraso dentro deste período
+                    if (currentDue < today || (i === 0 && loan.status === 'Atrasado')) {
+                        const baseAmount = (i === 0 && loan.status === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
+                        overToAdd += calculateOverdueValue(baseAmount, currentDue.toISOString().split('T')[0], 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+                    } else {
+                        profToAdd += breakdown.interest;
+                    }
                     
                     slices.push({
                         date: `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`,
@@ -192,7 +226,6 @@ const Dashboard = () => {
                         index: i
                     });
                 }
-                
                 if (currentDue > endFilter) break;
 
                 if (loan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
@@ -201,11 +234,30 @@ const Dashboard = () => {
             }
         }
 
-        // TUDO QUE ACONTECE SÓ SE O CONTRATO CAIR NO FILTRO DE DATA
         if (hasMatch) {
             uniqueMatchedContracts.add(loan.id);
 
-            // O Fatiador Visual
+            const tier = loan.interestRate < 10 ? 'low' : loan.interestRate <= 15 ? 'mid' : 'high';
+
+            // Alimentando os acumuladores dos Cards
+            capAcc.all += capToAdd;
+            capAcc[tier] += capToAdd;
+
+            profAcc.all += profToAdd;
+            profAcc[tier] += profToAdd;
+
+            overAcc.all += overToAdd;
+            overAcc[tier] += overToAdd;
+
+            // Alimentando o gráfico de pizza (Tiers Globais)
+            let capGraph = isFluxo ? capToAdd : capBalance;
+            let profGraph = isFluxo ? profToAdd : calculateRemainingProfit(loan);
+
+            if (tier === 'low') { rLowCap += capGraph; rLowProf += profGraph; } 
+            else if (tier === 'mid') { rMidCap += capGraph; rMidProf += profGraph; } 
+            else { rHighCap += capGraph; rHighProf += profGraph; }
+
+            // Alimentando a Tabela de Detalhes
             if (period !== 'todos' && slices.length > 0) {
                 slices.forEach(slice => {
                     filteredContext.push({ 
@@ -221,31 +273,9 @@ const Dashboard = () => {
                     ...loan, 
                     uniqueSliceId: loan.id,
                     projectedDate: loan.nextDue,
-                    projectedCapitalForPeriod: matchedCapital, 
-                    projectedInterestForPeriod: matchedInterest
+                    projectedCapitalForPeriod: capToAdd, 
+                    projectedInterestForPeriod: profToAdd
                 });
-            }
-
-            if (isFluxo) {
-                capitalTotal += matchedCapital;
-                lucroTotal += matchedInterest;
-                if (loan.interestRate < 10) { rLowCount++; rLowVal += matchedCapital; } 
-                else if (loan.interestRate <= 15) { rMidCount++; rMidVal += matchedCapital; } 
-                else { rHighCount++; rHighVal += matchedCapital; }
-            } else {
-                const capBalance = calculateCapitalBalance(loan);
-                capitalTotal += capBalance;
-                lucroTotal += calculateRemainingProfit(loan);
-                if (loan.interestRate < 10) { rLowCount++; rLowVal += capBalance; } 
-                else if (loan.interestRate <= 15) { rMidCount++; rMidVal += capBalance; } 
-                else { rHighCount++; rHighVal += capBalance; }
-            }
-
-            // BOLA DE NEVE (AGORA DE VOLTA PARA DENTRO DO HASMATCH)
-            const actualDueDate = parseLocalDate(loan.nextDue);
-            const isOverdue = actualDueDate < today || loan.status === 'Atrasado';
-            if (isOverdue) {
-                 atrasoTotal += getSnowballOverdue(loan);
             }
         }
       });
@@ -253,18 +283,20 @@ const Dashboard = () => {
       setFilteredLoansContext(filteredContext);
 
       setMetrics({
-        capitalNaRua: capitalTotal,
-        lucroProjetado: lucroTotal,
-        atrasoGeral: atrasoTotal,
-        contratosAtivos: uniqueMatchedContracts.size,
+        capitalNaRua: capAcc,
+        lucroProjetado: profAcc,
+        atrasoGeral: overAcc,
+        contratosAtivosFiltro: uniqueMatchedContracts.size,
+        contratosAtivosGlobais: totalGloballyActive,
+        totalContratosLancados: safeLoans.length,
         totalClientesCadastrados: clients ? clients.length : 0,
         clientesComDivida: activeDebtors.size,
-        taxas: { lowVal: rLowVal, lowCount: rLowCount, midVal: rMidVal, midCount: rMidCount, highVal: rHighVal, highCount: rHighCount }
+        taxas: { lowCap: rLowCap, midCap: rMidCap, highCap: rHighCap, lowProf: rLowProf, midProf: rMidProf, highProf: rHighProf }
       });
 
       const activities = [...safeLoans].sort((a, b) => new Date(b.nextDue).getTime() - new Date(a.nextDue).getTime()).slice(0, 6).map((loan: any) => {
         const dueDate = parseLocalDate(loan.nextDue);
-        const isOverdue = dueDate < today && loan.status !== 'Pago';
+        const isOverdue = dueDate < today && loan.status !== 'Pago' && loan.status !== 'Quitado';
         return {
           id: loan.id,
           type: isOverdue ? 'atraso' : 'novo_contrato',
@@ -298,41 +330,78 @@ const Dashboard = () => {
   const loansOnMaturityDate = useMemo(() => {
       if (!maturityDate) return [];
       return allLoans.filter(l => {
-          if (l.status === 'Pago') return false;
+          if (l.status === 'Pago' || l.status === 'Quitado') return false;
           return l.nextDue.split('T')[0] === maturityDate;
       });
   }, [allLoans, maturityDate]);
 
   const detailedLoans = useMemo(() => {
-      if (!selectedRange) return [];
+      if (!selectedRange || selectedRange === 'clients_contracts') return [];
       const today = new Date();
       today.setHours(0,0,0,0);
 
-      // Tratamento especial para atrasados para não duplicar clientes que foram "fatiados"
       if (selectedRange === 'overdue') {
           const contextIds = new Set(filteredLoansContext.map(l => l.id));
           return allLoans.filter(l => {
               const dueDate = parseLocalDate(l.nextDue);
-              const isOverdue = l.status !== 'Pago' && (dueDate < today || l.status === 'Atrasado');
-              // Retorna apenas se for atrasado E fizer parte dos contratos que caíram no filtro de data
-              return isOverdue && contextIds.has(l.id);
+              const isOverdue = l.status !== 'Pago' && l.status !== 'Quitado' && (dueDate < today || l.status === 'Atrasado');
+              
+              // Filtro de Faixa Aplicado na Tabela
+              let passTier = true;
+              if (tierFilters.overdue === 'low') passTier = l.interestRate < 10;
+              if (tierFilters.overdue === 'mid') passTier = l.interestRate >= 10 && l.interestRate <= 15;
+              if (tierFilters.overdue === 'high') passTier = l.interestRate > 15;
+
+              return isOverdue && contextIds.has(l.id) && passTier;
           });
       }
 
       return filteredLoansContext.filter(l => {
-          if (selectedRange === 'active') return l.status !== 'Pago';
-          if (l.status === 'Pago') return false; 
+          if (selectedRange === 'active') return l.status !== 'Pago' && l.status !== 'Quitado';
+          if (l.status === 'Pago' || l.status === 'Quitado') return false; 
+          
+          // Filtros de Faixa Aplicados na Tabela
+          let passTier = true;
+          if (selectedRange === 'capital' && tierFilters.capital !== 'all') {
+              if (tierFilters.capital === 'low') passTier = l.interestRate < 10;
+              if (tierFilters.capital === 'mid') passTier = l.interestRate >= 10 && l.interestRate <= 15;
+              if (tierFilters.capital === 'high') passTier = l.interestRate > 15;
+          }
+          if (selectedRange === 'profit' && tierFilters.profit !== 'all') {
+              if (tierFilters.profit === 'low') passTier = l.interestRate < 10;
+              if (tierFilters.profit === 'mid') passTier = l.interestRate >= 10 && l.interestRate <= 15;
+              if (tierFilters.profit === 'high') passTier = l.interestRate > 15;
+          }
+          
+          if (!passTier) return false;
+
           if (selectedRange === 'capital' || selectedRange === 'profit') return true; 
           if (selectedRange === 'low') return l.interestRate < 10;
           if (selectedRange === 'mid') return l.interestRate >= 10 && l.interestRate <= 15;
           if (selectedRange === 'high') return l.interestRate > 15;
           return false;
       });
-  }, [filteredLoansContext, allLoans, selectedRange]);
+  }, [filteredLoansContext, allLoans, selectedRange, tierFilters]);
+
+  // Agrupamento para a visão de Clientes vs Contratos
+  const activeContractsByClient = useMemo(() => {
+      if (selectedRange !== 'clients_contracts') return [];
+      const map = new Map();
+      allLoans.forEach(l => {
+          if (l.status === 'Pago' || l.status === 'Quitado') return;
+          if (!map.has(l.client)) map.set(l.client, { name: l.client, contracts: [], totalCapital: 0, totalProfit: 0 });
+          const c = map.get(l.client);
+          c.contracts.push(l);
+          c.totalCapital += calculateCapitalBalance(l);
+          c.totalProfit += calculateRemainingProfit(l);
+      });
+      return Array.from(map.values()).sort((a,b) => b.contracts.length - a.contracts.length);
+  }, [allLoans, selectedRange]);
 
   const rangeTitles = {
-      low: 'Capital em Taxa Baixa (< 10%)', mid: 'Capital em Taxa Média (10% - 15%)', high: 'Capital em Taxa Alta (> 15%)',
-      capital: 'Detalhamento de Capital', profit: 'Detalhamento de Lucro', overdue: 'Contratos em Atraso (Bola de Neve)', active: 'Carteira de Clientes no Período'
+      low: 'Taxa Baixa (< 10%)', mid: 'Taxa Média (10% - 15%)', high: 'Taxa Alta (> 15%)',
+      capital: 'Detalhamento de Capital', profit: 'Detalhamento de Lucro', overdue: 'Contratos em Atraso (Bola de Neve)', active: 'Carteira de Contratos no Filtro',
+      clients_contracts: 'Relação de Clientes e Contratos Ativos'
   };
 
   const goToBillingWithSearch = (clientName: string) => {
@@ -395,79 +464,109 @@ const Dashboard = () => {
                   <div><h2 className="text-2xl font-bold text-slate-800">{rangeTitles[selectedRange]}</h2><p className="text-slate-500">Detalhamento dos valores baseados na sua seleção.</p></div>
               </header>
               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                  <table className="w-full text-left">
-                      <thead>
-                          <tr className="bg-slate-50/50 text-[11px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-100">
-                              <th className="p-4">Cliente</th>
-                              <th className="p-4 text-center">
-                                  {selectedRange === 'overdue' ? 'Atrasado Desde' : period === 'todos' ? 'Venc. Original' : 'Data Projetada'}
-                              </th>
-                              <th className="p-4 text-center">Taxa (%)</th>
-                              <th className="p-4 text-right">
-                                  {selectedRange === 'overdue' ? 'Valor Original (Atrasado)' : period !== 'todos' ? 'Capital da Parcela' : 'Saldo Devedor (Total)'}
-                              </th>
-                              <th className="p-4 text-right text-green-600">
-                                  {selectedRange === 'overdue' ? '-' : period !== 'todos' ? 'Juros da Parcela' : 'Lucro Restante (Total)'}
-                              </th>
-                              {selectedRange === 'overdue' && <th className="p-4 text-right text-red-600">Bola de Neve (Atualizado)</th>}
-                              <th className="p-4 text-center">Status</th>
-                          </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-50">
-                          {detailedLoans.map(loan => {
-                              const capBalance = calculateCapitalBalance(loan);
-                              const remProfit = calculateRemainingProfit(loan);
-                              const overdueVal = getSnowballOverdue(loan);
-                              
-                              return (
-                                  <tr key={loan.uniqueSliceId || loan.id} className="hover:bg-blue-50 transition-colors cursor-pointer" onClick={() => goToBillingWithSearch(loan.client)}>
-                                      <td className="p-4 font-bold text-slate-800">
-                                          {loan.client}
-                                          <div className="text-[10px] font-mono text-slate-400 font-normal">{loan.id}</div>
-                                      </td>
-                                      
-                                      <td className="p-4 text-center text-sm font-medium">
-                                          {selectedRange === 'overdue' ? (
-                                              <>
-                                                  <div className="flex items-center justify-center gap-1 text-red-600 font-bold">
-                                                      <Calendar size={12}/>
-                                                      {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
-                                                  </div>
-                                                  <div className="text-[9px] text-red-400 font-bold uppercase tracking-wider mt-0.5">Pendente</div>
-                                              </>
-                                          ) : period === 'todos' ? (
-                                              <>
-                                                  {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
-                                                  <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Atual</div>
-                                              </>
-                                          ) : (
-                                              <>
-                                                  {parseLocalDate(loan.projectedDate).toLocaleDateString('pt-BR')}
-                                                  <div className="text-[9px] text-blue-500 font-bold uppercase tracking-wider mt-0.5">Projetada</div>
-                                              </>
-                                          )}
-                                      </td>
-
-                                      <td className="p-4 text-center font-bold text-slate-600">{loan.interestRate}%</td>
-                                      
-                                      <td className="p-4 text-right font-bold text-slate-700">
-                                          R$ {formatMoney(selectedRange === 'overdue' ? loan.installmentValue : period !== 'todos' ? loan.projectedCapitalForPeriod : capBalance)}
-                                      </td>
-                                      <td className="p-4 text-right font-bold text-green-600">
-                                          {selectedRange === 'overdue' ? '-' : `R$ ${formatMoney(period !== 'todos' ? loan.projectedInterestForPeriod : remProfit)}`}
-                                      </td>
-                                      
-                                      {selectedRange === 'overdue' && <td className="p-4 text-right font-black text-red-600">R$ {formatMoney(overdueVal)}</td>}
+                  
+                  {selectedRange === 'clients_contracts' ? (
+                      <table className="w-full text-left">
+                          <thead>
+                              <tr className="bg-slate-50/50 text-[11px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-100">
+                                  <th className="p-4">Cliente / Devedor</th>
+                                  <th className="p-4 text-center">Contratos Ativos</th>
+                                  <th className="p-4 text-center">IDs de Referência</th>
+                                  <th className="p-4 text-right">Risco Capital (R$)</th>
+                                  <th className="p-4 text-right text-green-600">Lucro Esperado (R$)</th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                              {activeContractsByClient.map(c => (
+                                  <tr key={c.name} className="hover:bg-blue-50 transition-colors cursor-pointer" onClick={() => goToBillingWithSearch(c.name)}>
+                                      <td className="p-4 font-bold text-slate-800">{c.name}</td>
                                       <td className="p-4 text-center">
-                                          <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${loan.status === 'Atrasado' ? 'bg-red-50 text-red-600' : loan.status === 'Acordo' ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>
-                                              {loan.status}
-                                          </span>
+                                          <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold">{c.contracts.length} ativos</span>
                                       </td>
+                                      <td className="p-4 text-center text-[10px] text-slate-400 font-mono tracking-widest">
+                                          {c.contracts.map((cnt: any) => cnt.id.substring(0,6)).join(', ')}
+                                      </td>
+                                      <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(c.totalCapital)}</td>
+                                      <td className="p-4 text-right font-bold text-green-600">R$ {formatMoney(c.totalProfit)}</td>
                                   </tr>
-                              )
-                          })}
-                      </tbody>
-                  </table>
+                              ))}
+                          </tbody>
+                      </table>
+                  ) : (
+                      <table className="w-full text-left">
+                          <thead>
+                              <tr className="bg-slate-50/50 text-[11px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-100">
+                                  <th className="p-4">Cliente</th>
+                                  <th className="p-4 text-center">
+                                      {selectedRange === 'overdue' ? 'Atrasado Desde' : period === 'todos' ? 'Venc. Original' : 'Data Projetada'}
+                                  </th>
+                                  <th className="p-4 text-center">Taxa (%)</th>
+                                  <th className="p-4 text-right">
+                                      {selectedRange === 'overdue' ? 'Valor Original (Atrasado)' : period !== 'todos' ? 'Capital da Parcela' : 'Saldo Devedor (Total)'}
+                                  </th>
+                                  <th className="p-4 text-right text-green-600">
+                                      {selectedRange === 'overdue' ? '-' : period !== 'todos' ? 'Juros da Parcela' : 'Lucro Restante (Total)'}
+                                  </th>
+                                  {selectedRange === 'overdue' && <th className="p-4 text-right text-red-600">Bola de Neve (Atualizado)</th>}
+                                  <th className="p-4 text-center">Status</th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                              {detailedLoans.map(loan => {
+                                  const capBalance = calculateCapitalBalance(loan);
+                                  const remProfit = calculateRemainingProfit(loan);
+                                  const overdueVal = getLoanDetails(loan).totalOverdue;
+                                  
+                                  return (
+                                      <tr key={loan.uniqueSliceId || loan.id} className="hover:bg-blue-50 transition-colors cursor-pointer" onClick={() => goToBillingWithSearch(loan.client)}>
+                                          <td className="p-4 font-bold text-slate-800">
+                                              {loan.client}
+                                              <div className="text-[10px] font-mono text-slate-400 font-normal">{loan.id}</div>
+                                          </td>
+                                          
+                                          <td className="p-4 text-center text-sm font-medium">
+                                              {selectedRange === 'overdue' ? (
+                                                  <>
+                                                      <div className="flex items-center justify-center gap-1 text-red-600 font-bold">
+                                                          <Calendar size={12}/>
+                                                          {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
+                                                      </div>
+                                                      <div className="text-[9px] text-red-400 font-bold uppercase tracking-wider mt-0.5">Pendente</div>
+                                                  </>
+                                              ) : period === 'todos' ? (
+                                                  <>
+                                                      {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
+                                                      <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Atual</div>
+                                                  </>
+                                              ) : (
+                                                  <>
+                                                      {parseLocalDate(loan.projectedDate).toLocaleDateString('pt-BR')}
+                                                      <div className="text-[9px] text-blue-500 font-bold uppercase tracking-wider mt-0.5">Projetada</div>
+                                                  </>
+                                              )}
+                                          </td>
+
+                                          <td className="p-4 text-center font-bold text-slate-600">{loan.interestRate}%</td>
+                                          
+                                          <td className="p-4 text-right font-bold text-slate-700">
+                                              R$ {formatMoney(selectedRange === 'overdue' ? loan.installmentValue : period !== 'todos' ? loan.projectedCapitalForPeriod : capBalance)}
+                                          </td>
+                                          <td className="p-4 text-right font-bold text-green-600">
+                                              {selectedRange === 'overdue' ? '-' : `R$ ${formatMoney(period !== 'todos' ? loan.projectedInterestForPeriod : remProfit)}`}
+                                          </td>
+                                          
+                                          {selectedRange === 'overdue' && <td className="p-4 text-right font-black text-red-600">R$ {formatMoney(overdueVal)}</td>}
+                                          <td className="p-4 text-center">
+                                              <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${loan.status === 'Atrasado' ? 'bg-red-50 text-red-600' : loan.status === 'Acordo' ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>
+                                                  {loan.status}
+                                              </span>
+                                          </td>
+                                      </tr>
+                                  )
+                              })}
+                          </tbody>
+                      </table>
+                  )}
               </div>
           </div>
       ) : (
@@ -512,40 +611,106 @@ const Dashboard = () => {
             </header>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                
+                {/* CARD CAPITAL */}
                 <div onClick={() => setSelectedRange('capital')} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-300 transition-all cursor-pointer group">
-                    <div className="flex justify-between items-start mb-4"><div className="p-3 bg-blue-50 text-blue-600 rounded-lg"><Briefcase size={24} /></div></div>
+                    <div className="flex justify-between items-start mb-4">
+                        <div className="p-3 bg-blue-50 text-blue-600 rounded-lg"><Briefcase size={24} /></div>
+                        <select onClick={e => e.stopPropagation()} value={tierFilters.capital} onChange={e => setTierFilters({...tierFilters, capital: e.target.value})} className="text-[10px] bg-slate-50 border border-slate-200 rounded p-1 outline-none text-slate-600 font-bold cursor-pointer hover:bg-slate-100">
+                            <option value="all">Todas as Faixas</option>
+                            <option value="low">1% a 9%</option>
+                            <option value="mid">10% a 15%</option>
+                            <option value="high">+ 15%</option>
+                        </select>
+                    </div>
                     <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
-                        {viewMode === 'fluxo' && period !== 'todos' ? 'Entrada Prevista (Capital)' : 'Capital na Rua (Saldo)'}
+                        {viewMode === 'fluxo' && period !== 'todos' ? 'Entrada Prevista (Capital)' : 'Capital a Receber (Global)'}
                     </h3>
-                    <p className="text-2xl font-black text-slate-800">{formatMoney(metrics.capitalNaRua)}</p>
+                    <p className="text-2xl font-black text-slate-800">{formatMoney(metrics.capitalNaRua[tierFilters.capital as keyof typeof defaultTiers])}</p>
                 </div>
+
+                {/* CARD LUCRO */}
                 <div onClick={() => setSelectedRange('profit')} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-green-300 transition-all cursor-pointer group">
-                    <div className="flex justify-between items-start mb-4"><div className="p-3 bg-green-50 text-green-600 rounded-lg"><TrendingUp size={24} /></div></div>
+                    <div className="flex justify-between items-start mb-4">
+                        <div className="p-3 bg-green-50 text-green-600 rounded-lg"><TrendingUp size={24} /></div>
+                        <select onClick={e => e.stopPropagation()} value={tierFilters.profit} onChange={e => setTierFilters({...tierFilters, profit: e.target.value})} className="text-[10px] bg-slate-50 border border-slate-200 rounded p-1 outline-none text-slate-600 font-bold cursor-pointer hover:bg-slate-100">
+                            <option value="all">Todas as Faixas</option>
+                            <option value="low">1% a 9%</option>
+                            <option value="mid">10% a 15%</option>
+                            <option value="high">+ 15%</option>
+                        </select>
+                    </div>
                     <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
                         {viewMode === 'fluxo' && period !== 'todos' ? 'Lucro Previsto no Filtro' : 'Lucro Restante a Receber'}
                     </h3>
-                    <p className="text-2xl font-black text-green-600">+{formatMoney(metrics.lucroProjetado)}</p>
+                    <p className="text-2xl font-black text-green-600">+{formatMoney(metrics.lucroProjetado[tierFilters.profit as keyof typeof defaultTiers])}</p>
                 </div>
+
+                {/* CARD ATRASO */}
                 <div onClick={() => setSelectedRange('overdue')} className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-red-500 hover:shadow-md hover:bg-red-50/10 transition-all cursor-pointer group">
-                    <div className="flex justify-between items-start mb-2"><div className="p-3 bg-red-50 text-red-600 rounded-lg"><AlertTriangle size={24} /></div></div>
+                    <div className="flex justify-between items-start mb-2">
+                        <div className="p-3 bg-red-50 text-red-600 rounded-lg"><AlertTriangle size={24} /></div>
+                        <select onClick={e => e.stopPropagation()} value={tierFilters.overdue} onChange={e => setTierFilters({...tierFilters, overdue: e.target.value})} className="text-[10px] bg-red-50/50 border border-red-200 rounded p-1 outline-none text-red-700 font-bold cursor-pointer hover:bg-red-100">
+                            <option value="all">Todas as Faixas</option>
+                            <option value="low">1% a 9%</option>
+                            <option value="mid">10% a 15%</option>
+                            <option value="high">+ 15%</option>
+                        </select>
+                    </div>
                     <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
                         {period === 'todos' ? 'Total em Atraso (Global)' : 'Total em Atraso (No Filtro)'}
                     </h3>
-                    <p className="text-2xl font-black text-slate-800 mb-3">{formatMoney(metrics.atrasoGeral)}</p>
+                    <p className="text-2xl font-black text-slate-800 mb-3">{formatMoney(metrics.atrasoGeral[tierFilters.overdue as keyof typeof defaultTiers])}</p>
                 </div>
-                <div onClick={() => setSelectedRange('active')} className="bg-slate-900 p-6 rounded-xl shadow-lg text-white relative overflow-hidden cursor-pointer hover:bg-slate-800 transition-all">
-                    <div className="absolute right-0 top-0 opacity-10 p-2"><FileText size={64} /></div><h3 className="text-slate-300 text-xs font-bold uppercase mb-1">Contratos no Filtro</h3><p className="text-3xl font-black text-white">{metrics.contratosAtivos}</p><p className="text-[10px] text-slate-400 mt-2 flex items-center gap-1"><Users size={12}/> {metrics.totalClientesCadastrados} clientes cadastrados</p>
+                
+                {/* Novo Card Global de Clientes e Contratos */}
+                <div onClick={() => setSelectedRange('clients_contracts')} className="bg-slate-900 p-6 rounded-xl shadow-lg text-white relative overflow-hidden cursor-pointer hover:bg-slate-800 transition-all group">
+                    <div className="absolute right-0 top-0 opacity-10 p-2 group-hover:scale-110 transition-transform"><Users size={64} /></div>
+                    <h3 className="text-slate-300 text-xs font-bold uppercase mb-1 flex items-center gap-1"><Briefcase size={12}/> Clientes & Contratos</h3>
+                    <div className="flex justify-between items-end mt-2">
+                        <div>
+                            <p className="text-3xl font-black text-white">{metrics.clientesComDivida}</p>
+                            <p className="text-[10px] text-slate-400">Clientes Ativos</p>
+                        </div>
+                        <div className="text-right">
+                            <p className="text-xl font-bold text-white">{metrics.contratosAtivosGlobais}</p>
+                            <p className="text-[10px] text-slate-400">Contratos Ativos</p>
+                        </div>
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-slate-700/50 flex justify-between text-[10px] text-slate-400 font-medium">
+                        <span>Cadastros: {metrics.totalClientesCadastrados}</span>
+                        <span>Lançados: {metrics.totalContratosLancados}</span>
+                    </div>
                 </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                        <div className="flex items-center gap-2 mb-4"><PieChart className="text-slate-400" size={20}/><h3 className="font-bold text-lg text-slate-800">Distribuição por Taxa ({viewMode === 'fluxo' && period !== 'todos' ? 'Capital de Entrada' : 'Saldo Total'})</h3></div>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                            <div className="flex items-center gap-2">
+                                <PieChart className="text-slate-400" size={20}/>
+                                <h3 className="font-bold text-lg text-slate-800">Distribuição por Taxa</h3>
+                            </div>
+                            <div className="flex bg-slate-100 p-1 rounded-lg w-fit">
+                                <button onClick={() => setTaxasViewMode('capital')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${taxasViewMode === 'capital' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Capital</button>
+                                <button onClick={() => setTaxasViewMode('lucro')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${taxasViewMode === 'lucro' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Lucro</button>
+                            </div>
+                        </div>
+                        
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div onClick={() => setSelectedRange('low')} className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center cursor-pointer hover:bg-slate-100 transition-colors group"><p className="text-xs font-bold text-slate-500 uppercase mb-1 group-hover:text-blue-600 transition-colors">1% a 9% (Baixa)</p><p className="text-2xl font-black text-slate-700">R$ {formatMoney(metrics.taxas.lowVal)}</p></div>
-                            <div onClick={() => setSelectedRange('mid')} className="p-4 bg-blue-50 rounded-lg border border-blue-100 text-center cursor-pointer hover:bg-blue-100 transition-colors group"><p className="text-xs font-bold text-blue-500 uppercase mb-1 group-hover:text-blue-700 transition-colors">10% a 15% (Média)</p><p className="text-2xl font-black text-blue-700">R$ {formatMoney(metrics.taxas.midVal)}</p></div>
-                            <div onClick={() => setSelectedRange('high')} className="p-4 bg-indigo-50 rounded-lg border border-indigo-100 text-center cursor-pointer hover:bg-indigo-100 transition-colors group"><p className="text-xs font-bold text-indigo-500 uppercase mb-1 group-hover:text-indigo-700 transition-colors">Acima de 15% (Alta)</p><p className="text-2xl font-black text-indigo-700">R$ {formatMoney(metrics.taxas.highVal)}</p></div>
+                            <div onClick={() => { setTierFilters({...tierFilters, capital: 'low', profit: 'low'}); setSelectedRange(taxasViewMode === 'capital' ? 'capital' : 'profit'); }} className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center cursor-pointer hover:bg-slate-100 transition-colors group">
+                                <p className="text-xs font-bold text-slate-500 uppercase mb-1 group-hover:text-blue-600 transition-colors">1% a 9% (Baixa)</p>
+                                <p className="text-2xl font-black text-slate-700">R$ {formatMoney(taxasViewMode === 'capital' ? metrics.taxas.lowCap : metrics.taxas.lowProf)}</p>
+                            </div>
+                            <div onClick={() => { setTierFilters({...tierFilters, capital: 'mid', profit: 'mid'}); setSelectedRange(taxasViewMode === 'capital' ? 'capital' : 'profit'); }} className="p-4 bg-blue-50 rounded-lg border border-blue-100 text-center cursor-pointer hover:bg-blue-100 transition-colors group">
+                                <p className="text-xs font-bold text-blue-500 uppercase mb-1 group-hover:text-blue-700 transition-colors">10% a 15% (Média)</p>
+                                <p className="text-2xl font-black text-blue-700">R$ {formatMoney(taxasViewMode === 'capital' ? metrics.taxas.midCap : metrics.taxas.midProf)}</p>
+                            </div>
+                            <div onClick={() => { setTierFilters({...tierFilters, capital: 'high', profit: 'high'}); setSelectedRange(taxasViewMode === 'capital' ? 'capital' : 'profit'); }} className="p-4 bg-indigo-50 rounded-lg border border-indigo-100 text-center cursor-pointer hover:bg-indigo-100 transition-colors group">
+                                <p className="text-xs font-bold text-indigo-500 uppercase mb-1 group-hover:text-indigo-700 transition-colors">Acima de 15% (Alta)</p>
+                                <p className="text-2xl font-black text-indigo-700">R$ {formatMoney(taxasViewMode === 'capital' ? metrics.taxas.highCap : metrics.taxas.highProf)}</p>
+                            </div>
                         </div>
                     </div>
 
