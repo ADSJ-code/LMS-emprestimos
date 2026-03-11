@@ -189,7 +189,10 @@ const Dashboard = () => {
         // Lucro real restante = Todo o lucro - (lucro das parcelas que já estão em atraso)
         const remProfit = calculateRemainingProfit(loan);
         const futureProfitTotal = Math.max(0, remProfit - (missedCount * breakdown.interest));
+        
+        // Capital real restante = Todo o capital - (capital das parcelas que já estão em atraso)
         const capBalance = calculateCapitalBalance(loan);
+        const futureCapitalTotal = Math.max(0, capBalance - (missedCount * breakdown.capital));
 
         let currentDue = parseLocalDate(loan.nextDue);
         
@@ -201,7 +204,7 @@ const Dashboard = () => {
 
         if (!startFilter || !endFilter) {
             hasMatch = true;
-            capToAdd = capBalance;          // TODO o capital fica
+            capToAdd = futureCapitalTotal;  // Somente o capital que NÃO está atrasado
             profToAdd = futureProfitTotal;  // Somente lucro futuro
             overToAdd = totalOverdue;       // Bola de neve das atrasadas
         } else {
@@ -209,22 +212,31 @@ const Dashboard = () => {
             for (let i = 0; i < limit; i++) {
                 if (currentDue >= startFilter && currentDue <= endFilter) {
                     hasMatch = true;
-                    capToAdd += breakdown.capital;
                     
-                    // Separando o que é lucro futuro do que é atraso dentro deste período
-                    if (currentDue < today || (i === 0 && loan.status === 'Atrasado')) {
+                    const isOverdueInstallment = currentDue < today || (i === 0 && loan.status === 'Atrasado');
+
+                    // Separando o que é lucro/capital futuro do que é atraso dentro deste período (Acaba com a duplicidade!)
+                    if (isOverdueInstallment) {
                         const baseAmount = (i === 0 && loan.status === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
                         overToAdd += calculateOverdueValue(baseAmount, currentDue.toISOString().split('T')[0], 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+                        
+                        slices.push({
+                            date: `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`,
+                            capital: 0, // Está em atraso, não soma no capital futuro
+                            interest: 0, 
+                            index: i
+                        });
                     } else {
+                        capToAdd += breakdown.capital;
                         profToAdd += breakdown.interest;
+                        
+                        slices.push({
+                            date: `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`,
+                            capital: breakdown.capital,
+                            interest: breakdown.interest,
+                            index: i
+                        });
                     }
-                    
-                    slices.push({
-                        date: `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`,
-                        capital: breakdown.capital,
-                        interest: breakdown.interest,
-                        index: i
-                    });
                 }
                 if (currentDue > endFilter) break;
 
@@ -249,9 +261,9 @@ const Dashboard = () => {
             overAcc.all += overToAdd;
             overAcc[tier] += overToAdd;
 
-            // Alimentando o gráfico de pizza (Tiers Globais)
-            let capGraph = isFluxo ? capToAdd : capBalance;
-            let profGraph = isFluxo ? profToAdd : calculateRemainingProfit(loan);
+            // Alimentando o gráfico de pizza (Agora sem duplicidade para Global e Filtro)
+            let capGraph = capToAdd;
+            let profGraph = profToAdd;
 
             if (tier === 'low') { rLowCap += capGraph; rLowProf += profGraph; } 
             else if (tier === 'mid') { rMidCap += capGraph; rMidProf += profGraph; } 
@@ -346,7 +358,6 @@ const Dashboard = () => {
               const dueDate = parseLocalDate(l.nextDue);
               const isOverdue = l.status !== 'Pago' && l.status !== 'Quitado' && (dueDate < today || l.status === 'Atrasado');
               
-              // Filtro de Faixa Aplicado na Tabela
               let passTier = true;
               if (tierFilters.overdue === 'low') passTier = l.interestRate < 10;
               if (tierFilters.overdue === 'mid') passTier = l.interestRate >= 10 && l.interestRate <= 15;
@@ -360,7 +371,6 @@ const Dashboard = () => {
           if (selectedRange === 'active') return l.status !== 'Pago' && l.status !== 'Quitado';
           if (l.status === 'Pago' || l.status === 'Quitado') return false; 
           
-          // Filtros de Faixa Aplicados na Tabela
           let passTier = true;
           if (selectedRange === 'capital' && tierFilters.capital !== 'all') {
               if (tierFilters.capital === 'low') passTier = l.interestRate < 10;
@@ -383,7 +393,6 @@ const Dashboard = () => {
       });
   }, [filteredLoansContext, allLoans, selectedRange, tierFilters]);
 
-  // Agrupamento para a visão de Clientes vs Contratos
   const activeContractsByClient = useMemo(() => {
       if (selectedRange !== 'clients_contracts') return [];
       const map = new Map();
@@ -392,8 +401,13 @@ const Dashboard = () => {
           if (!map.has(l.client)) map.set(l.client, { name: l.client, contracts: [], totalCapital: 0, totalProfit: 0 });
           const c = map.get(l.client);
           c.contracts.push(l);
-          c.totalCapital += calculateCapitalBalance(l);
-          c.totalProfit += calculateRemainingProfit(l);
+          
+          const breakdown = calculateInstallmentBreakdown(l);
+          const { missedCount } = getLoanDetails(l);
+          
+          // O detalhamento do cliente agora também respeita a retirada de duplicidade
+          c.totalCapital += Math.max(0, calculateCapitalBalance(l) - (missedCount * breakdown.capital));
+          c.totalProfit += Math.max(0, calculateRemainingProfit(l) - (missedCount * breakdown.interest));
       });
       return Array.from(map.values()).sort((a,b) => b.contracts.length - a.contracts.length);
   }, [allLoans, selectedRange]);
@@ -502,10 +516,10 @@ const Dashboard = () => {
                                   </th>
                                   <th className="p-4 text-center">Taxa (%)</th>
                                   <th className="p-4 text-right">
-                                      {selectedRange === 'overdue' ? 'Valor Original (Atrasado)' : period !== 'todos' ? 'Capital da Parcela' : 'Saldo Devedor (Total)'}
+                                      {selectedRange === 'overdue' ? 'Valor Original (Atrasado)' : period !== 'todos' ? 'Capital da Parcela' : 'Capital a Receber'}
                                   </th>
                                   <th className="p-4 text-right text-green-600">
-                                      {selectedRange === 'overdue' ? '-' : period !== 'todos' ? 'Juros da Parcela' : 'Lucro Restante (Total)'}
+                                      {selectedRange === 'overdue' ? '-' : period !== 'todos' ? 'Juros da Parcela' : 'Lucro a Receber'}
                                   </th>
                                   {selectedRange === 'overdue' && <th className="p-4 text-right text-red-600">Bola de Neve (Atualizado)</th>}
                                   <th className="p-4 text-center">Status</th>
@@ -513,8 +527,6 @@ const Dashboard = () => {
                           </thead>
                           <tbody className="divide-y divide-slate-50">
                               {detailedLoans.map(loan => {
-                                  const capBalance = calculateCapitalBalance(loan);
-                                  const remProfit = calculateRemainingProfit(loan);
                                   const overdueVal = getLoanDetails(loan).totalOverdue;
                                   
                                   return (
@@ -541,7 +553,7 @@ const Dashboard = () => {
                                               ) : (
                                                   <>
                                                       {parseLocalDate(loan.projectedDate).toLocaleDateString('pt-BR')}
-                                                      <div className="text-[9px] text-blue-500 font-bold uppercase tracking-wider mt-0.5">Projetada</div>
+                                                      {loan.projectedCapitalForPeriod === 0 && <div className="text-[9px] text-red-500 font-bold uppercase tracking-wider mt-0.5">(Já em Atraso)</div>}
                                                   </>
                                               )}
                                           </td>
@@ -549,10 +561,10 @@ const Dashboard = () => {
                                           <td className="p-4 text-center font-bold text-slate-600">{loan.interestRate}%</td>
                                           
                                           <td className="p-4 text-right font-bold text-slate-700">
-                                              R$ {formatMoney(selectedRange === 'overdue' ? loan.installmentValue : period !== 'todos' ? loan.projectedCapitalForPeriod : capBalance)}
+                                              R$ {formatMoney(selectedRange === 'overdue' ? loan.installmentValue : loan.projectedCapitalForPeriod)}
                                           </td>
                                           <td className="p-4 text-right font-bold text-green-600">
-                                              {selectedRange === 'overdue' ? '-' : `R$ ${formatMoney(period !== 'todos' ? loan.projectedInterestForPeriod : remProfit)}`}
+                                              {selectedRange === 'overdue' ? '-' : `R$ ${formatMoney(loan.projectedInterestForPeriod)}`}
                                           </td>
                                           
                                           {selectedRange === 'overdue' && <td className="p-4 text-right font-black text-red-600">R$ {formatMoney(overdueVal)}</td>}

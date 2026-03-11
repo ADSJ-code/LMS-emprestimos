@@ -8,6 +8,7 @@ export interface PaymentRecord {
   capitalPaid?: number;
   interestPaid?: number;
   registeredAt?: string;
+  originalDueDate?: string; // <-- ADICIONADO AQUI PARA CORRIGIR OS ERROS
 }
 
 export interface Loan {
@@ -18,7 +19,6 @@ export interface Loan {
   interestRate: number;
   startDate: string;
   nextDue: string;
-  // AQUI ESTÁ A CORREÇÃO: Adicionado o 'Quitado'
   status: 'Em Dia' | 'Atrasado' | 'Pago' | 'Pendente' | 'Acordo' | 'Quitado';
   installmentValue: number;
   fineRate?: number;
