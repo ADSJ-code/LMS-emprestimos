@@ -1,5 +1,4 @@
 import { Loan } from '../services/api';
-import Billing from '../pages/Billing';
 
 export const formatMoney = (value: number | undefined | null | string): string => {
   if (value === undefined || value === null || value === '') return "0,00";
@@ -15,8 +14,6 @@ export const calculateOverdueValue = (
   finePercent?: number, 
   moraPercent?: number,
   totalAmount?: number, // NOVO: Valor do capital total que o Billing está enviando (ex: R$ 1000)
-
-
   screenData?: { payCapital: string, payInterest: string } // NOVO
 ): number => {
   if (status !== 'Atrasado' && status !== 'Acordo') return amount;
@@ -36,22 +33,15 @@ export const calculateOverdueValue = (
   const diffTime = Math.abs(today.getTime() - due.getTime());
   const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-  // A MÁGICA AQUI: Define se vai calcular juros sobre os 1000 (totalAmount) ou sobre os 200 (amount)
-  //const baseForCalculation = (totalAmount && totalAmount > 0) ? totalAmount : amount;
   const baseForCalculation = (totalAmount && totalAmount > 0) ? totalAmount : 0;
 
   const safeFine = (finePercent || 0);
-  // Multa calculada em cima da baseForCalculation (R$ 1000)
   const fineValue = baseForCalculation * (safeFine / 100);
 
   const safeMora = (moraPercent || 0);
-
-  // Mora integral sobre a BASE (Capital Total), multiplicada pelos dias reais
   const dailyInterestRate = (safeMora / 100); 
   const interestValue = baseForCalculation * (dailyInterestRate * days);
 
-
-  // Retorna a parcela fixa (200) + Multa do Capital (ex: 0) + Mora do Capital (ex: 100)
   return amount + fineValue + interestValue;
 };
 
@@ -64,52 +54,101 @@ export const calculateRealBalance = (loan: Loan): number => {
     return calculateCapitalBalance(loan);
 };
 
+// ============================================================================
+// CÉREBRO MODIFICADO: A CHAVE MESTRA E O "MODO RODRIGO" DE DIVISÃO LINEAR
+// ============================================================================
 export const calculateInstallmentBreakdown = (
     loan: Loan
 ): { interest: number, capital: number, total: number } => {
     const currentCapitalBalance = calculateCapitalBalance(loan);
 
+    // Se a dívida já foi paga, retorna zerado
     if (currentCapitalBalance <= 0.10) {
         return { interest: 0, capital: 0, total: 0 };
     }
 
-    let periodicRate = loan.interestRate / 100; 
-
-    if (loan.frequency === 'SEMANAL') {
-        periodicRate = periodicRate / 4; 
-    } else if (loan.frequency === 'DIARIO') {
-        periodicRate = periodicRate / 30; 
+    // Modalidade 1: Pagamento Mínimo (Só Juros)
+    if (loan.interestType === 'SIMPLE') {
+        const pmt = Number(loan.installmentValue) || 0;
+        return { capital: 0, interest: pmt, total: pmt };
     }
 
-    let fixedInstallment = loan.installmentValue;
+    // Chave Mestra
+    const mode = localStorage.getItem('amortizationMode') || 'LINEAR'; 
+
+    const pmt = Number(loan.installmentValue) || 0;
+    const installments = Number(loan.installments) || 1; // Fator atualizado a cada pagamento
+    const originalAmount = Number(loan.amount) || 0;
     
-    if (!fixedInstallment || fixedInstallment === 0) {
-        const n = loan.installments; 
-        if (periodicRate === 0) fixedInstallment = loan.amount / (n || 1);
-        else fixedInstallment = loan.amount * ( (periodicRate * Math.pow(1 + periodicRate, n)) / (Math.pow(1 + periodicRate, n) - 1) );
+    // Calcula o lucro projetado original do contrato
+    const expectedTotalInterest = Number(loan.projectedProfit) > 0 
+        ? Number(loan.projectedProfit) 
+        : Math.max(0, (pmt * installments) - originalAmount);
+
+    if (mode === 'LINEAR') {
+        // ==========================================
+        // MODO RODRIGO (CORRIGIDO): Divide o SALDO pelas PARCELAS RESTANTES
+        // Isso garante que todo mês a fatia seja idêntica, mesmo após pagar.
+        // ==========================================
+        const remainingProfit = Math.max(0, expectedTotalInterest - (Number(loan.totalPaidInterest) || 0));
+        
+        let capitalPart = currentCapitalBalance / installments;
+        let interestPart = remainingProfit / installments;
+
+        // Ajuste fino para não dar diferença de centavos em relação à parcela
+        if (Math.abs((capitalPart + interestPart) - pmt) > 0.05) {
+            interestPart = pmt - capitalPart;
+        }
+
+        // Arredondamento contábil para não quebrar a tela
+        capitalPart = Math.round(capitalPart * 100) / 100;
+        interestPart = Math.round(interestPart * 100) / 100;
+
+        // Regra de segurança: O Capital da parcela não pode ser maior que a dívida real restante
+        if (currentCapitalBalance < capitalPart) {
+            capitalPart = currentCapitalBalance;
+            interestPart = pmt - capitalPart;
+            if (interestPart < 0) interestPart = 0;
+        }
+
+        return { capital: capitalPart, interest: interestPart, total: pmt };
+
+    } else {
+        // ==========================================
+        // MODO CLÓVIS: Tabela Price Bancária Original
+        // ==========================================
+        let periodicRate = loan.interestRate / 100; 
+
+        if (loan.frequency === 'SEMANAL') periodicRate = periodicRate / 4; 
+        else if (loan.frequency === 'DIARIO') periodicRate = periodicRate / 30; 
+
+        let fixedInstallment = loan.installmentValue;
+        
+        if (!fixedInstallment || fixedInstallment === 0) {
+            if (periodicRate === 0) fixedInstallment = loan.amount / installments;
+            else fixedInstallment = loan.amount * ( (periodicRate * Math.pow(1 + periodicRate, installments)) / (Math.pow(1 + periodicRate, installments) - 1) );
+        }
+
+        let periodicInterest = currentCapitalBalance * periodicRate;
+        let capitalPart = fixedInstallment - periodicInterest;
+
+        if (capitalPart < 0) {
+            capitalPart = 0;
+            periodicInterest = fixedInstallment; 
+        }
+
+        if (currentCapitalBalance < capitalPart) {
+            capitalPart = currentCapitalBalance;
+            periodicInterest = fixedInstallment - capitalPart;
+        }
+
+        periodicInterest = Math.round(periodicInterest * 100) / 100;
+        capitalPart = Math.round(capitalPart * 100) / 100;
+        
+        return {
+            interest: periodicInterest,
+            capital: capitalPart,
+            total: periodicInterest + capitalPart
+        };
     }
-
-    let periodicInterest = currentCapitalBalance * periodicRate;
-    let capitalPart = fixedInstallment - periodicInterest;
-
-    if (capitalPart < 0) {
-        capitalPart = 0;
-        periodicInterest = fixedInstallment; 
-    }
-
-    if (currentCapitalBalance < capitalPart) {
-        capitalPart = currentCapitalBalance;
-        periodicInterest = fixedInstallment - capitalPart;
-    }
-
-    periodicInterest = Math.round(periodicInterest * 100) / 100;
-    capitalPart = Math.round(capitalPart * 100) / 100;
-    
-    const totalToPay = periodicInterest + capitalPart;
-
-    return {
-        interest: periodicInterest,
-        capital: capitalPart,
-        total: totalToPay
-    };
 };

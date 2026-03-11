@@ -60,10 +60,10 @@ func SetupRoutes(router *gin.Engine, logger *slog.Logger) {
 		protected.DELETE("/loans/:id", loanController.DeleteLoan)
 
 		// Clientes (Customers)
-		protected.GET("/customers", clientController.GetClients)
-		protected.POST("/customers", clientController.CreateClient)
-		protected.PUT("/customers/:id", clientController.UpdateClient)
-		protected.DELETE("/customers/:id", clientController.DeleteClient)
+		protected.GET("/clients", clientController.GetClients)
+		protected.POST("/clients", clientController.CreateClient)
+		protected.PUT("/clients/:id", clientController.UpdateClient)
+		protected.DELETE("/clients/:id", clientController.DeleteClient)
 
 		// Afiliados
 		protected.GET("/affiliates", affiliateController.GetAffiliates)
