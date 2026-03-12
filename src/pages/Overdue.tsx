@@ -35,6 +35,7 @@ const sendWhatsappApi = async (
   lateDays: number,
   updatedAmount: number,
   companyName: string,
+  token: string,
 ) => {
   const response = await fetch("http://localhost:8080/api/message", {
     method: "POST",
@@ -46,7 +47,7 @@ const sendWhatsappApi = async (
       name: name,
       lateDays: lateDays,
       updatedAmount: updatedAmount,
-      apiKey: "96CF28F9329F-44A3-80DB-5190D7B27185",
+      apiKey: token,
     }),
   });
 
@@ -179,37 +180,60 @@ const Overdue = () => {
   }, []);
 
   // --- FUNÇÃO DO WHATSAPP COM BOLA DE NEVE ---
-  interface WhatsAppInstance {
-    instanceName: string;
-    token: string;
-    status?: string;
-  }
   const getInstanceToken = async (
     targetName: string,
-    targetPhone: string
+    targetPhone: string,
   ): Promise<string | null> => {
     try {
-      const response = await fetch(
-        "http://localhost:8080/api/instances/ver",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: targetName, phone: targetPhone }),
-        },
+      const response = await fetch("http://localhost:8080/api/instances/ver", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: targetName, // Verifique se no Go o campo é 'name' ou 'instanceName'
+          phone: targetPhone,
+        }),
+      });
+
+      // Se o status não for 200, ele já lança erro para o catch
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Erro HTTP ${response.status}: ${errorText}`);
+      }
+
+      const data = await response.json();
+
+      // Garantimos que 'list' seja um array, não importa o que venha
+      const list = Array.isArray(data)
+        ? data
+        : data.data || data.instances || [];
+
+      if (list.length === 0) {
+        console.warn("A lista de instâncias veio vazia.");
+        return null;
+      }
+
+      // Buscamos a instância pelo nome
+      // Dica: use toUpperCase() ou trim() se houver risco de espaços extras
+      const targetInstance = list.find((inst: any) => {
+        const nameInApi = inst.instance.instanceName
+
+        return (
+          nameInApi?.toString().trim().toLowerCase() ===
+          targetName.trim().toLowerCase()
+        );
+      });
+      var instance = targetInstance.instance;
+
+      if (instance.instanceName && instance.apikey) {
+        return instance.apikey;
+      }
+
+      console.warn(
+        `❌ Instância "${targetName}" não encontrada na lista de ${instance.length} itens.`,
       );
-
-      console.log("parametros: ", targetName, response)
-      // Tipamos o array de instâncias aqui também
-      const instances: WhatsAppInstance[] = await response.json();
-
-      // O TypeScript agora sabe que 'inst' tem a propriedade 'instanceName'
-      const targetInstance = instances.find(
-        (inst) => inst.instanceName === targetName,
-      );
-
-      return targetInstance ? targetInstance.token : null;
+      return null;
     } catch (error) {
-      console.error("Erro ao buscar instâncias:", error);
+      console.error("❌ Erro fatal no getInstanceToken:", error);
       return null;
     }
   };
@@ -237,10 +261,8 @@ const Overdue = () => {
 
     try {
       // Busca o token
-      console.log(`Buscando token para a instância: ${companyName}...`);
       const token = await getInstanceToken(companyName, companyPhone);
 
-      console.log(`Token recebido para "${companyName}":`, token);
 
       if (!token) {
         throw new Error(
@@ -255,6 +277,7 @@ const Overdue = () => {
         diffDays,
         snowball.totalUpdated,
         companyName,
+        token,
       );
       alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
     } catch (error) {

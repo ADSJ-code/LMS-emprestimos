@@ -28,6 +28,63 @@ interface LoanExtended extends Loan {
     missedInstallments: any[];
   };
 }
+ const getInstanceToken = async (
+   targetName: string,
+   targetPhone: string,
+ ): Promise<string | null> => {
+   try {
+     const response = await fetch("http://localhost:8080/api/instances/ver", {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({
+         name: targetName, // Verifique se no Go o campo é 'name' ou 'instanceName'
+         phone: targetPhone,
+       }),
+     });
+
+     // Se o status não for 200, ele já lança erro para o catch
+     if (!response.ok) {
+       const errorText = await response.text();
+       throw new Error(`Erro HTTP ${response.status}: ${errorText}`);
+     }
+
+     const data = await response.json();
+
+     // Garantimos que 'list' seja um array, não importa o que venha
+     const list = Array.isArray(data)
+       ? data
+       : data.data || data.instances || [];
+
+     if (list.length === 0) {
+       console.warn("A lista de instâncias veio vazia.");
+       return null;
+     }
+
+     // Buscamos a instância pelo nome
+     // Dica: use toUpperCase() ou trim() se houver risco de espaços extras
+     const targetInstance = list.find((inst: any) => {
+       const nameInApi = inst.instance.instanceName;
+
+       return (
+         nameInApi?.toString().trim().toLowerCase() ===
+         targetName.trim().toLowerCase()
+       );
+     });
+     var instance = targetInstance.instance;
+
+     if (instance.instanceName && instance.apikey) {
+       return instance.apikey;
+     }
+
+     console.warn(
+       `❌ Instância "${targetName}" não encontrada na lista de ${targetInstance.length} itens.`,
+     );
+     return null;
+   } catch (error) {
+     console.error("❌ Erro fatal no getInstanceToken:", error);
+     return null;
+   }
+ };
 
 const sendWhatsappApi = async (
   name: string,
@@ -35,8 +92,10 @@ const sendWhatsappApi = async (
   contract: string,
   lateDays: number,
   updatedAmount: number,
-  dateVencimento: string
+  dateVencimento: string,
+  token: string,
 ) => {
+  // Busca o token
   const response = await fetch("http://localhost:8080/api/message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -47,13 +106,14 @@ const sendWhatsappApi = async (
       name: name,
       lateDays: lateDays,
       updatedAmount: updatedAmount,
+      apiKey: token,
       dateVencimento: dateVencimento,
     }),
   });
 
   if (!response.ok) throw new Error("Falha ao enviar via API");
   return response.json();
-};
+};;
 
 type LoanFlowStep = 'closed' | 'form' | 'checklist';
 
@@ -111,6 +171,8 @@ const Billing = () => {
   });
 
   const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
+  const companyName = localStorage.getItem("companyName") || "";
+  const companyPhone = localStorage.getItem("companyPhone") || "";
   // Se snowball for undefined, usamos um fallback para não dar erro de "length"
   const safeSnowball = snowball || { missedInstallments: [], totalUpdated: 0 };
 
@@ -135,13 +197,19 @@ const Billing = () => {
 
   const formattedDate = formatDisplayDate(loan.nextDue);
   try {
+    const token = await getInstanceToken(companyName, companyPhone);
+
+    if (!token) {
+      throw new Error(`Token não encontrado para a instância "${client.name}"`);
+    }
     await sendWhatsappApi(
       client.name,
-      client.phone,
+      cleanPhone,
       contractCode,
       diffDays,
       loan.installmentValue, // Valor seguro
-      formattedDate // Data formatada
+      formattedDate, // Data formatada
+      token,
     );
     alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
   } catch (error) {
