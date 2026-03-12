@@ -13,81 +13,50 @@ import { loanService, clientService, settingsService, Loan, Client } from '../se
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  
+
   // --- ESTADOS DE FILTRO E VISÃO ---
-  const [period, setPeriod] = useState<'hoje' | 'semana' | 'mes' | 'proximo_mes' | 'personalizado' | 'todos'>('todos');
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd, setCustomEnd] = useState('');
-  
-  const [viewMode, setViewMode] = useState<'saldo' | 'fluxo'>('saldo');
-  const [taxasViewMode, setTaxasViewMode] = useState<'capital' | 'lucro'>('capital');
+  const [period, setPeriod] = useState<
+    "hoje" | "semana" | "mes" | "proximo_mes" | "personalizado" | "todos"
+  >("todos");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+
+  const [viewMode, setViewMode] = useState<"saldo" | "fluxo">("saldo");
+  const [taxasViewMode, setTaxasViewMode] = useState<"capital" | "lucro">(
+    "capital",
+  );
 
   // FILTROS LOCAIS DOS CARDS
-  const [tierFilters, setTierFilters] = useState({ capital: 'all', profit: 'all', overdue: 'all' });
+  const [tierFilters, setTierFilters] = useState({
+    capital: "all",
+    profit: "all",
+    overdue: "all",
+  });
 
   const [loading, setLoading] = useState(false);
-  const [selectedRange, setSelectedRange] = useState<'low' | 'mid' | 'high' | 'capital' | 'profit' | 'overdue' | 'active' | 'clients_contracts' | null>(null);
+  const [selectedRange, setSelectedRange] = useState<
+    | "low"
+    | "mid"
+    | "high"
+    | "capital"
+    | "profit"
+    | "overdue"
+    | "active"
+    | "clients_contracts"
+    | null
+  >(null);
   const [allLoans, setAllLoans] = useState<Loan[]>([]);
   const [allClients, setAllClients] = useState<Client[]>([]);
-  
+
   const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
-
-  // Whatsapp
-  const [showQRModal, setShowQRModal] = useState(false);
-  const [qrCodeBase64, setQrCodeBase64] = useState("");
-  const [isConnecting, setIsConnecting] = useState(false);
-
-  const handleConnectWhatsApp = async () => {
-    console.log("Botão clicado!"); // Debug 1
-    setIsConnecting(true);
-
-    try {
-      const response = await fetch(
-        "http://localhost:8080/api/instances/connect",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            name: "teste2", // Nome da instância no Go
-            phone: "5511990277630", // Seu número
-          }),
-        },
-      );
-
-      console.log("Resposta do servidor recebida:", response.status); // Debug 2
-
-      const data = await response.json();
-      console.log("Dados da API:", data); // Debug 3
-
-      // Verifique aqui como o seu Go está devolvendo o QR Code.
-      // Se você seguiu o código anterior, ele está em data.details.base64
-      if (data.details && data.details.base64) {
-        setQrCodeBase64(data.details.base64);
-        setShowQRModal(true);
-      } else if (data.base64) {
-        // Caso o Go devolva direto na raiz
-        setQrCodeBase64(data.base64);
-        setShowQRModal(true);
-      } else {
-        alert("QR Code não encontrado na resposta do servidor.");
-      }
-    } catch (error) {
-      console.error("Erro na conexão:", error);
-      alert("Erro ao conectar com o servidor Go.");
-    } finally {
-      setIsConnecting(false);
-    }
-  };
 
   // --- ESTADOS DO MODAL VENCIMENTOS ---
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
-  
+
   const [maturityDate, setMaturityDate] = useState(() => {
-      const d = new Date();
-      const offset = d.getTimezoneOffset() * 60000;
-      return new Date(d.getTime() - offset).toISOString().split('T')[0];
+    const d = new Date();
+    const offset = d.getTimezoneOffset() * 60000;
+    return new Date(d.getTime() - offset).toISOString().split("T")[0];
   });
 
   const defaultTiers = { all: 0, low: 0, mid: 0, high: 0 };
@@ -100,7 +69,14 @@ const Dashboard = () => {
     totalContratosLancados: 0,
     totalClientesCadastrados: 0,
     clientesComDivida: 0,
-    taxas: { lowCap: 0, midCap: 0, highCap: 0, lowProf: 0, midProf: 0, highProf: 0 }
+    taxas: {
+      lowCap: 0,
+      midCap: 0,
+      highCap: 0,
+      lowProf: 0,
+      midProf: 0,
+      highProf: 0,
+    },
   });
 
   const [recentActivities, setRecentActivities] = useState<any[]>([]);
@@ -108,225 +84,287 @@ const Dashboard = () => {
   // Helpers de Tempo e Matemática
   const parseLocalDate = (dateStr: string) => {
     if (!dateStr) return new Date();
-    const cleanStr = dateStr.split('T')[0];
-    const [year, month, day] = cleanStr.split('-').map(Number);
+    const cleanStr = dateStr.split("T")[0];
+    const [year, month, day] = cleanStr.split("-").map(Number);
     return new Date(year, month - 1, day);
   };
 
   const calculateRemainingProfit = (loan: Loan) => {
-      const amount = Number(loan.amount) || 0;
-      const installments = Number(loan.installments) || 0;
-      const installmentValue = Number(loan.installmentValue) || 0;
-      const paidInterest = Number(loan.totalPaidInterest) || 0;
-      
-      let totalExpectedInterest = Number(loan.projectedProfit) || 0;
-      if (totalExpectedInterest <= 0) {
-          if (loan.interestType === 'SIMPLE') totalExpectedInterest = installmentValue * (installments || 1);
-          else totalExpectedInterest = Math.max(0, (installmentValue * installments) - amount);
-      }
-      return Math.max(0, totalExpectedInterest - paidInterest);
+    const amount = Number(loan.amount) || 0;
+    const installments = Number(loan.installments) || 0;
+    const installmentValue = Number(loan.installmentValue) || 0;
+    const paidInterest = Number(loan.totalPaidInterest) || 0;
+
+    let totalExpectedInterest = Number(loan.projectedProfit) || 0;
+    if (totalExpectedInterest <= 0) {
+      if (loan.interestType === "SIMPLE")
+        totalExpectedInterest = installmentValue * (installments || 1);
+      else
+        totalExpectedInterest = Math.max(
+          0,
+          installmentValue * installments - amount,
+        );
+    }
+    return Math.max(0, totalExpectedInterest - paidInterest);
   };
 
   const getLoanDetails = (loan: Loan) => {
-      const today = new Date();
-      today.setHours(0,0,0,0);
-      let tempDue = parseLocalDate(loan.nextDue);
-      let totalOverdue = 0;
-      let missedCount = 0;
-      let count = 0;
-      
-      const baseAmount = loan.status === 'Acordo' ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
-      const remainingInstallments = loan.interestType === 'SIMPLE' ? 999 : (loan.installments || 1);
-      
-      while (tempDue < today) {
-          const dateStr = tempDue.toISOString().split('T')[0];
-          totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
-          missedCount++;
-          
-          if (loan.status === 'Acordo') break; 
-          
-          count++;
-          if (count >= remainingInstallments) break; 
-          if (count > 60) break; 
-          
-          if (loan.frequency === 'SEMANAL') tempDue.setDate(tempDue.getDate() + 7);
-          else if (loan.frequency === 'DIARIO') tempDue.setDate(tempDue.getDate() + 1);
-          else tempDue.setMonth(tempDue.getMonth() + 1);
-      }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let tempDue = parseLocalDate(loan.nextDue);
+    let totalOverdue = 0;
+    let missedCount = 0;
+    let count = 0;
 
-      if (missedCount === 0 && loan.status === 'Atrasado') {
-           const dateStr = loan.nextDue.split('T')[0];
-           totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
-           missedCount = 1;
-      }
+    const baseAmount =
+      loan.status === "Acordo"
+        ? loan.installmentValue + (loan.agreementValue || 0)
+        : loan.installmentValue;
+    const remainingInstallments =
+      loan.interestType === "SIMPLE" ? 999 : loan.installments || 1;
 
-      return { totalOverdue, missedCount };
+    while (tempDue < today) {
+      const dateStr = tempDue.toISOString().split("T")[0];
+      totalOverdue += calculateOverdueValue(
+        baseAmount,
+        dateStr,
+        "Atrasado",
+        loan.fineRate ?? 2,
+        loan.moraInterestRate ?? 1,
+        loan.amount,
+      );
+      missedCount++;
+
+      if (loan.status === "Acordo") break;
+
+      count++;
+      if (count >= remainingInstallments) break;
+      if (count > 60) break;
+
+      if (loan.frequency === "SEMANAL") tempDue.setDate(tempDue.getDate() + 7);
+      else if (loan.frequency === "DIARIO")
+        tempDue.setDate(tempDue.getDate() + 1);
+      else tempDue.setMonth(tempDue.getMonth() + 1);
+    }
+
+    if (missedCount === 0 && loan.status === "Atrasado") {
+      const dateStr = loan.nextDue.split("T")[0];
+      totalOverdue += calculateOverdueValue(
+        baseAmount,
+        dateStr,
+        "Atrasado",
+        loan.fineRate ?? 2,
+        loan.moraInterestRate ?? 1,
+        loan.amount,
+      );
+      missedCount = 1;
+    }
+
+    return { totalOverdue, missedCount };
   };
 
   // --- MOTOR CENTRAL DE FILTRAGEM E PROJEÇÃO ---
   const fetchAndCalculate = async () => {
     setLoading(true);
     try {
-      const [loans, clients] = await Promise.all([ loanService.getAll(), clientService.getAll() ]);
-      
-      const safeLoans = (loans || []).map(l => ({
-          ...l,
-          amount: Number(l.amount) || 0,
-          installmentValue: Number(l.installmentValue) || 0,
-          installments: Number(l.installments) || 0,
-          totalPaidCapital: Number(l.totalPaidCapital) || 0,
-          totalPaidInterest: Number(l.totalPaidInterest) || 0,
-          projectedProfit: Number(l.projectedProfit) || 0
+      const [loans, clients] = await Promise.all([
+        loanService.getAll(),
+        clientService.getAll(),
+      ]);
+
+      const safeLoans = (loans || []).map((l) => ({
+        ...l,
+        amount: Number(l.amount) || 0,
+        installmentValue: Number(l.installmentValue) || 0,
+        installments: Number(l.installments) || 0,
+        totalPaidCapital: Number(l.totalPaidCapital) || 0,
+        totalPaidInterest: Number(l.totalPaidInterest) || 0,
+        projectedProfit: Number(l.projectedProfit) || 0,
       }));
 
-      setAllLoans(safeLoans); 
+      setAllLoans(safeLoans);
       setAllClients(clients || []);
-      
+
       const today = new Date();
-      today.setHours(0,0,0,0);
-      
+      today.setHours(0, 0, 0, 0);
+
       let startFilter: Date | null = null;
       let endFilter: Date | null = null;
 
-      if (period === 'hoje') {
-          startFilter = new Date(today);
-          endFilter = new Date(today);
-      } else if (period === 'semana') {
-          startFilter = new Date(today);
-          endFilter = new Date(today);
-          endFilter.setDate(today.getDate() + 7);
-      } else if (period === 'mes') {
-          startFilter = new Date(today.getFullYear(), today.getMonth(), 1);
-          endFilter = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-      } else if (period === 'proximo_mes') {
-          startFilter = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-          endFilter = new Date(today.getFullYear(), today.getMonth() + 2, 0);
-      } else if (period === 'personalizado' && customStart && customEnd) {
-          startFilter = parseLocalDate(customStart);
-          endFilter = parseLocalDate(customEnd);
+      if (period === "hoje") {
+        startFilter = new Date(today);
+        endFilter = new Date(today);
+      } else if (period === "semana") {
+        startFilter = new Date(today);
+        endFilter = new Date(today);
+        endFilter.setDate(today.getDate() + 7);
+      } else if (period === "mes") {
+        startFilter = new Date(today.getFullYear(), today.getMonth(), 1);
+        endFilter = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+      } else if (period === "proximo_mes") {
+        startFilter = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+        endFilter = new Date(today.getFullYear(), today.getMonth() + 2, 0);
+      } else if (period === "personalizado" && customStart && customEnd) {
+        startFilter = parseLocalDate(customStart);
+        endFilter = parseLocalDate(customEnd);
       }
 
       if (endFilter) endFilter.setHours(23, 59, 59, 999);
 
       const activeDebtors = new Set();
       const uniqueMatchedContracts = new Set();
-      
+
       let capAcc = { all: 0, low: 0, mid: 0, high: 0 };
       let profAcc = { all: 0, low: 0, mid: 0, high: 0 };
       let overAcc = { all: 0, low: 0, mid: 0, high: 0 };
 
-      let rLowCap = 0, rMidCap = 0, rHighCap = 0;
-      let rLowProf = 0, rMidProf = 0, rHighProf = 0;
+      let rLowCap = 0,
+        rMidCap = 0,
+        rHighCap = 0;
+      let rLowProf = 0,
+        rMidProf = 0,
+        rHighProf = 0;
       let totalGloballyActive = 0;
-      
+
       const filteredContext: any[] = [];
-      const isFluxo = viewMode === 'fluxo' && period !== 'todos';
-      const pad = (n: number) => n.toString().padStart(2, '0');
+      const isFluxo = viewMode === "fluxo" && period !== "todos";
+      const pad = (n: number) => n.toString().padStart(2, "0");
 
       safeLoans.forEach((loan: any) => {
-        const isPaid = loan.status === 'Pago' || loan.status === 'Quitado';
-        
+        const isPaid = loan.status === "Pago" || loan.status === "Quitado";
+
         if (!isPaid) {
-            totalGloballyActive++;
-            activeDebtors.add(loan.client);
+          totalGloballyActive++;
+          activeDebtors.add(loan.client);
         }
-        
+
         if (isPaid) return;
 
         const breakdown = calculateInstallmentBreakdown(loan);
         const { totalOverdue, missedCount } = getLoanDetails(loan);
-        
+
         // Lucro real restante = Todo o lucro - (lucro das parcelas que já estão em atraso)
         const remProfit = calculateRemainingProfit(loan);
-        const futureProfitTotal = Math.max(0, remProfit - (missedCount * breakdown.interest));
+        const futureProfitTotal = Math.max(
+          0,
+          remProfit - missedCount * breakdown.interest,
+        );
         const capBalance = calculateCapitalBalance(loan);
 
         let currentDue = parseLocalDate(loan.nextDue);
-        
+
         let hasMatch = false;
         let capToAdd = 0;
         let profToAdd = 0;
         let overToAdd = 0;
-        let slices: any[] = []; 
+        let slices: any[] = [];
 
         if (!startFilter || !endFilter) {
-            hasMatch = true;
-            capToAdd = capBalance;          // TODO o capital fica
-            profToAdd = futureProfitTotal;  // Somente lucro futuro
-            overToAdd = totalOverdue;       // Bola de neve das atrasadas
+          hasMatch = true;
+          capToAdd = capBalance; // TODO o capital fica
+          profToAdd = futureProfitTotal; // Somente lucro futuro
+          overToAdd = totalOverdue; // Bola de neve das atrasadas
         } else {
-            const limit = loan.interestType === 'SIMPLE' ? 60 : (loan.installments || 1);
-            for (let i = 0; i < limit; i++) {
-                if (currentDue >= startFilter && currentDue <= endFilter) {
-                    hasMatch = true;
-                    capToAdd += breakdown.capital;
-                    
-                    // Separando o que é lucro futuro do que é atraso dentro deste período
-                    if (currentDue < today || (i === 0 && loan.status === 'Atrasado')) {
-                        const baseAmount = (i === 0 && loan.status === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
-                        overToAdd += calculateOverdueValue(baseAmount, currentDue.toISOString().split('T')[0], 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
-                    } else {
-                        profToAdd += breakdown.interest;
-                    }
-                    
-                    slices.push({
-                        date: `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`,
-                        capital: breakdown.capital,
-                        interest: breakdown.interest,
-                        index: i
-                    });
-                }
-                if (currentDue > endFilter) break;
+          const limit =
+            loan.interestType === "SIMPLE" ? 60 : loan.installments || 1;
+          for (let i = 0; i < limit; i++) {
+            if (currentDue >= startFilter && currentDue <= endFilter) {
+              hasMatch = true;
+              capToAdd += breakdown.capital;
 
-                if (loan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
-                else if (loan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
-                else currentDue.setMonth(currentDue.getMonth() + 1);
+              // Separando o que é lucro futuro do que é atraso dentro deste período
+              if (
+                currentDue < today ||
+                (i === 0 && loan.status === "Atrasado")
+              ) {
+                const baseAmount =
+                  i === 0 && loan.status === "Acordo"
+                    ? loan.installmentValue + (loan.agreementValue || 0)
+                    : loan.installmentValue;
+                overToAdd += calculateOverdueValue(
+                  baseAmount,
+                  currentDue.toISOString().split("T")[0],
+                  "Atrasado",
+                  loan.fineRate ?? 2,
+                  loan.moraInterestRate ?? 1,
+                  loan.amount,
+                );
+              } else {
+                profToAdd += breakdown.interest;
+              }
+
+              slices.push({
+                date: `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`,
+                capital: breakdown.capital,
+                interest: breakdown.interest,
+                index: i,
+              });
             }
+            if (currentDue > endFilter) break;
+
+            if (loan.frequency === "SEMANAL")
+              currentDue.setDate(currentDue.getDate() + 7);
+            else if (loan.frequency === "DIARIO")
+              currentDue.setDate(currentDue.getDate() + 1);
+            else currentDue.setMonth(currentDue.getMonth() + 1);
+          }
         }
 
         if (hasMatch) {
-            uniqueMatchedContracts.add(loan.id);
+          uniqueMatchedContracts.add(loan.id);
 
-            const tier = loan.interestRate < 10 ? 'low' : loan.interestRate <= 15 ? 'mid' : 'high';
+          const tier =
+            loan.interestRate < 10
+              ? "low"
+              : loan.interestRate <= 15
+                ? "mid"
+                : "high";
 
-            // Alimentando os acumuladores dos Cards
-            capAcc.all += capToAdd;
-            capAcc[tier] += capToAdd;
+          // Alimentando os acumuladores dos Cards
+          capAcc.all += capToAdd;
+          capAcc[tier] += capToAdd;
 
-            profAcc.all += profToAdd;
-            profAcc[tier] += profToAdd;
+          profAcc.all += profToAdd;
+          profAcc[tier] += profToAdd;
 
-            overAcc.all += overToAdd;
-            overAcc[tier] += overToAdd;
+          overAcc.all += overToAdd;
+          overAcc[tier] += overToAdd;
 
-            // Alimentando o gráfico de pizza (Tiers Globais)
-            let capGraph = isFluxo ? capToAdd : capBalance;
-            let profGraph = isFluxo ? profToAdd : calculateRemainingProfit(loan);
+          // Alimentando o gráfico de pizza (Tiers Globais)
+          let capGraph = isFluxo ? capToAdd : capBalance;
+          let profGraph = isFluxo ? profToAdd : calculateRemainingProfit(loan);
 
-            if (tier === 'low') { rLowCap += capGraph; rLowProf += profGraph; } 
-            else if (tier === 'mid') { rMidCap += capGraph; rMidProf += profGraph; } 
-            else { rHighCap += capGraph; rHighProf += profGraph; }
+          if (tier === "low") {
+            rLowCap += capGraph;
+            rLowProf += profGraph;
+          } else if (tier === "mid") {
+            rMidCap += capGraph;
+            rMidProf += profGraph;
+          } else {
+            rHighCap += capGraph;
+            rHighProf += profGraph;
+          }
 
-            // Alimentando a Tabela de Detalhes
-            if (period !== 'todos' && slices.length > 0) {
-                slices.forEach(slice => {
-                    filteredContext.push({ 
-                        ...loan, 
-                        uniqueSliceId: `${loan.id}-slice-${slice.index}`,
-                        projectedDate: slice.date,
-                        projectedCapitalForPeriod: slice.capital, 
-                        projectedInterestForPeriod: slice.interest
-                    });
-                });
-            } else {
-                filteredContext.push({ 
-                    ...loan, 
-                    uniqueSliceId: loan.id,
-                    projectedDate: loan.nextDue,
-                    projectedCapitalForPeriod: capToAdd, 
-                    projectedInterestForPeriod: profToAdd
-                });
-            }
+          // Alimentando a Tabela de Detalhes
+          if (period !== "todos" && slices.length > 0) {
+            slices.forEach((slice) => {
+              filteredContext.push({
+                ...loan,
+                uniqueSliceId: `${loan.id}-slice-${slice.index}`,
+                projectedDate: slice.date,
+                projectedCapitalForPeriod: slice.capital,
+                projectedInterestForPeriod: slice.interest,
+              });
+            });
+          } else {
+            filteredContext.push({
+              ...loan,
+              uniqueSliceId: loan.id,
+              projectedDate: loan.nextDue,
+              projectedCapitalForPeriod: capToAdd,
+              projectedInterestForPeriod: profToAdd,
+            });
+          }
         }
       });
 
@@ -341,125 +379,170 @@ const Dashboard = () => {
         totalContratosLancados: safeLoans.length,
         totalClientesCadastrados: clients ? clients.length : 0,
         clientesComDivida: activeDebtors.size,
-        taxas: { lowCap: rLowCap, midCap: rMidCap, highCap: rHighCap, lowProf: rLowProf, midProf: rMidProf, highProf: rHighProf }
+        taxas: {
+          lowCap: rLowCap,
+          midCap: rMidCap,
+          highCap: rHighCap,
+          lowProf: rLowProf,
+          midProf: rMidProf,
+          highProf: rHighProf,
+        },
       });
 
-      const activities = [...safeLoans].sort((a, b) => new Date(b.nextDue).getTime() - new Date(a.nextDue).getTime()).slice(0, 6).map((loan: any) => {
-        const dueDate = parseLocalDate(loan.nextDue);
-        const isOverdue = dueDate < today && loan.status !== 'Pago' && loan.status !== 'Quitado';
-        return {
-          id: loan.id,
-          type: isOverdue ? 'atraso' : 'novo_contrato',
-          text: isOverdue ? `Atraso: ${loan.client}` : `Pendente: ${loan.client}`,
-          time: dueDate.toLocaleDateString('pt-BR'), 
-          value: isOverdue ? 'Cobrar' : `R$ ${formatMoney(loan.installmentValue)}`
-        };
-      });
+      const activities = [...safeLoans]
+        .sort(
+          (a, b) =>
+            new Date(b.nextDue).getTime() - new Date(a.nextDue).getTime(),
+        )
+        .slice(0, 6)
+        .map((loan: any) => {
+          const dueDate = parseLocalDate(loan.nextDue);
+          const isOverdue =
+            dueDate < today &&
+            loan.status !== "Pago" &&
+            loan.status !== "Quitado";
+          return {
+            id: loan.id,
+            type: isOverdue ? "atraso" : "novo_contrato",
+            text: isOverdue
+              ? `Atraso: ${loan.client}`
+              : `Pendente: ${loan.client}`,
+            time: dueDate.toLocaleDateString("pt-BR"),
+            value: isOverdue
+              ? "Cobrar"
+              : `R$ ${formatMoney(loan.installmentValue)}`,
+          };
+        });
       setRecentActivities(activities);
-
-    } catch (error) { console.error(error); } finally { setLoading(false); }
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
   };
-
-  useEffect(() => { 
-      if (period !== 'personalizado') fetchAndCalculate();
+  
+  useEffect(() => {
+    if (period !== "personalizado") fetchAndCalculate();
   }, [period, viewMode]);
 
   useEffect(() => {
-      if (period === 'personalizado' && customStart && customEnd) {
-          const timeout = setTimeout(() => fetchAndCalculate(), 500);
-          return () => clearTimeout(timeout);
-      }
+    if (period === "personalizado" && customStart && customEnd) {
+      const timeout = setTimeout(() => fetchAndCalculate(), 500);
+      return () => clearTimeout(timeout);
+    }
   }, [customStart, customEnd, period, viewMode]);
 
   const handlePeriodChange = (val: string) => {
-      setPeriod(val as any);
-      if (val !== 'todos') setViewMode('fluxo');
-      else setViewMode('saldo');
+    setPeriod(val as any);
+    if (val !== "todos") setViewMode("fluxo");
+    else setViewMode("saldo");
   };
 
   const loansOnMaturityDate = useMemo(() => {
-      if (!maturityDate) return [];
-      return allLoans.filter(l => {
-          if (l.status === 'Pago' || l.status === 'Quitado') return false;
-          return l.nextDue.split('T')[0] === maturityDate;
-      });
+    if (!maturityDate) return [];
+    return allLoans.filter((l) => {
+      if (l.status === "Pago" || l.status === "Quitado") return false;
+      return l.nextDue.split("T")[0] === maturityDate;
+    });
   }, [allLoans, maturityDate]);
 
   const detailedLoans = useMemo(() => {
-      if (!selectedRange || selectedRange === 'clients_contracts') return [];
-      const today = new Date();
-      today.setHours(0,0,0,0);
+    if (!selectedRange || selectedRange === "clients_contracts") return [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-      if (selectedRange === 'overdue') {
-          const contextIds = new Set(filteredLoansContext.map(l => l.id));
-          return allLoans.filter(l => {
-              const dueDate = parseLocalDate(l.nextDue);
-              const isOverdue = l.status !== 'Pago' && l.status !== 'Quitado' && (dueDate < today || l.status === 'Atrasado');
-              
-              // Filtro de Faixa Aplicado na Tabela
-              let passTier = true;
-              if (tierFilters.overdue === 'low') passTier = l.interestRate < 10;
-              if (tierFilters.overdue === 'mid') passTier = l.interestRate >= 10 && l.interestRate <= 15;
-              if (tierFilters.overdue === 'high') passTier = l.interestRate > 15;
+    if (selectedRange === "overdue") {
+      const contextIds = new Set(filteredLoansContext.map((l) => l.id));
+      return allLoans.filter((l) => {
+        const dueDate = parseLocalDate(l.nextDue);
+        const isOverdue =
+          l.status !== "Pago" &&
+          l.status !== "Quitado" &&
+          (dueDate < today || l.status === "Atrasado");
 
-              return isOverdue && contextIds.has(l.id) && passTier;
-          });
+        // Filtro de Faixa Aplicado na Tabela
+        let passTier = true;
+        if (tierFilters.overdue === "low") passTier = l.interestRate < 10;
+        if (tierFilters.overdue === "mid")
+          passTier = l.interestRate >= 10 && l.interestRate <= 15;
+        if (tierFilters.overdue === "high") passTier = l.interestRate > 15;
+
+        return isOverdue && contextIds.has(l.id) && passTier;
+      });
+    }
+
+    return filteredLoansContext.filter((l) => {
+      if (selectedRange === "active")
+        return l.status !== "Pago" && l.status !== "Quitado";
+      if (l.status === "Pago" || l.status === "Quitado") return false;
+
+      // Filtros de Faixa Aplicados na Tabela
+      let passTier = true;
+      if (selectedRange === "capital" && tierFilters.capital !== "all") {
+        if (tierFilters.capital === "low") passTier = l.interestRate < 10;
+        if (tierFilters.capital === "mid")
+          passTier = l.interestRate >= 10 && l.interestRate <= 15;
+        if (tierFilters.capital === "high") passTier = l.interestRate > 15;
+      }
+      if (selectedRange === "profit" && tierFilters.profit !== "all") {
+        if (tierFilters.profit === "low") passTier = l.interestRate < 10;
+        if (tierFilters.profit === "mid")
+          passTier = l.interestRate >= 10 && l.interestRate <= 15;
+        if (tierFilters.profit === "high") passTier = l.interestRate > 15;
       }
 
-      return filteredLoansContext.filter(l => {
-          if (selectedRange === 'active') return l.status !== 'Pago' && l.status !== 'Quitado';
-          if (l.status === 'Pago' || l.status === 'Quitado') return false; 
-          
-          // Filtros de Faixa Aplicados na Tabela
-          let passTier = true;
-          if (selectedRange === 'capital' && tierFilters.capital !== 'all') {
-              if (tierFilters.capital === 'low') passTier = l.interestRate < 10;
-              if (tierFilters.capital === 'mid') passTier = l.interestRate >= 10 && l.interestRate <= 15;
-              if (tierFilters.capital === 'high') passTier = l.interestRate > 15;
-          }
-          if (selectedRange === 'profit' && tierFilters.profit !== 'all') {
-              if (tierFilters.profit === 'low') passTier = l.interestRate < 10;
-              if (tierFilters.profit === 'mid') passTier = l.interestRate >= 10 && l.interestRate <= 15;
-              if (tierFilters.profit === 'high') passTier = l.interestRate > 15;
-          }
-          
-          if (!passTier) return false;
+      if (!passTier) return false;
 
-          if (selectedRange === 'capital' || selectedRange === 'profit') return true; 
-          if (selectedRange === 'low') return l.interestRate < 10;
-          if (selectedRange === 'mid') return l.interestRate >= 10 && l.interestRate <= 15;
-          if (selectedRange === 'high') return l.interestRate > 15;
-          return false;
-      });
+      if (selectedRange === "capital" || selectedRange === "profit")
+        return true;
+      if (selectedRange === "low") return l.interestRate < 10;
+      if (selectedRange === "mid")
+        return l.interestRate >= 10 && l.interestRate <= 15;
+      if (selectedRange === "high") return l.interestRate > 15;
+      return false;
+    });
   }, [filteredLoansContext, allLoans, selectedRange, tierFilters]);
 
   // Agrupamento para a visão de Clientes vs Contratos
   const activeContractsByClient = useMemo(() => {
-      if (selectedRange !== 'clients_contracts') return [];
-      const map = new Map();
-      allLoans.forEach(l => {
-          if (l.status === 'Pago' || l.status === 'Quitado') return;
-          if (!map.has(l.client)) map.set(l.client, { name: l.client, contracts: [], totalCapital: 0, totalProfit: 0 });
-          const c = map.get(l.client);
-          c.contracts.push(l);
-          c.totalCapital += calculateCapitalBalance(l);
-          c.totalProfit += calculateRemainingProfit(l);
-      });
-      return Array.from(map.values()).sort((a,b) => b.contracts.length - a.contracts.length);
+    if (selectedRange !== "clients_contracts") return [];
+    const map = new Map();
+    allLoans.forEach((l) => {
+      if (l.status === "Pago" || l.status === "Quitado") return;
+      if (!map.has(l.client))
+        map.set(l.client, {
+          name: l.client,
+          contracts: [],
+          totalCapital: 0,
+          totalProfit: 0,
+        });
+      const c = map.get(l.client);
+      c.contracts.push(l);
+      c.totalCapital += calculateCapitalBalance(l);
+      c.totalProfit += calculateRemainingProfit(l);
+    });
+    return Array.from(map.values()).sort(
+      (a, b) => b.contracts.length - a.contracts.length,
+    );
   }, [allLoans, selectedRange]);
 
   const rangeTitles = {
-      low: 'Taxa Baixa (< 10%)', mid: 'Taxa Média (10% - 15%)', high: 'Taxa Alta (> 15%)',
-      capital: 'Detalhamento de Capital', profit: 'Detalhamento de Lucro', overdue: 'Contratos em Atraso (Bola de Neve)', active: 'Carteira de Contratos no Filtro',
-      clients_contracts: 'Relação de Clientes e Contratos Ativos'
+    low: "Taxa Baixa (< 10%)",
+    mid: "Taxa Média (10% - 15%)",
+    high: "Taxa Alta (> 15%)",
+    capital: "Detalhamento de Capital",
+    profit: "Detalhamento de Lucro",
+    overdue: "Contratos em Atraso (Bola de Neve)",
+    active: "Carteira de Contratos no Filtro",
+    clients_contracts: "Relação de Clientes e Contratos Ativos",
   };
 
   const goToBillingWithSearch = (clientName: string) => {
-       sessionStorage.setItem('searchClient', clientName);
-       navigate('/billing');
-  }
+    sessionStorage.setItem("searchClient", clientName);
+    navigate("/billing");
+  };
 
-  const isFluxoAtivo = viewMode === 'fluxo' && period !== 'todos';
+  const isFluxoAtivo = viewMode === "fluxo" && period !== "todos";
 
   return (
     <Layout>
@@ -1162,59 +1245,11 @@ const Dashboard = () => {
               </div>
             </div>
 
-            {/* Botão Conectar com o WhatsApp */}
-            <button
-              onClick={handleConnectWhatsApp}
-              disabled={isConnecting}
-              className="w-full px-6 py-4 bg-[#25D366] text-white rounded-xl font-bold flex justify-between items-center hover:bg-[#128C7E] transition-all shadow-lg mb-5 disabled:opacity-50"
-            >
-              <div className="flex items-center gap-2">
-                <span>
-                  {isConnecting ? "Gerando QR Code..." : "Conectar o WhatsApp"}
-                </span>
-              </div>
-              {!isConnecting && <ArrowRight size={20} />}
-            </button>
-
-            {/* Modal do QR Code */}
-            {showQRModal && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-                <div className="bg-white p-8 rounded-3xl w-full max-w-sm flex flex-col items-center shadow-2xl">
-                  <h3 className="text-xl font-bold mb-6 text-gray-800">
-                    Escaneie o QR Code
-                  </h3>
-
-                  {qrCodeBase64 ? (
-                    <div className="bg-white p-2 border-2 border-gray-100 rounded-xl">
-                      <img
-                        src={qrCodeBase64}
-                        alt="WhatsApp QR Code"
-                        className="w-64 h-64"
-                      />
-                    </div>
-                  ) : (
-                    <div className="h-64 flex items-center justify-center">
-                      <RefreshCw
-                        className="animate-spin text-[#25D366]"
-                        size={48}
-                      />
-                    </div>
-                  )}
-
-                  <button
-                    onClick={() => setShowQRModal(false)}
-                    className="mt-8 w-full bg-gray-100 text-gray-700 font-bold py-3 rounded-xl hover:bg-gray-200 transition-colors"
-                  >
-                    Fechar
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         </>
       )}
     </Layout>
   );
-};
+};;
 
 export default Dashboard;

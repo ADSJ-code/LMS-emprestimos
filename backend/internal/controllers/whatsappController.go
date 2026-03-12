@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/Rara05/ProjetoEmprestimo-back/backend/internal/models"
@@ -87,7 +86,6 @@ func (ctrl *WhatsappController) CriarInstanciaMsg(c *gin.Context) {
 func (ctrl *WhatsappController) ConectarInstancia(c *gin.Context) {
 	var body models.CreateInstance
 
-	log.Println("AQUI")
     if err := c.ShouldBindJSON(&body); err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": "Nome e Número de telefone são obrigatórios"})
         return

@@ -224,10 +224,19 @@ func (s *whatsappService) CreateInstance(ctx context.Context, name string, phone
 	return result, nil
 }
 
-func (s *whatsappService) ConnectInstance(ctx context.Context, instanceName, number string) (interface{}, error) {
-	url := fmt.Sprintf("%s/instance/connect/%s?number=%s", s.ApiURL, instanceName, number)
+func (s *whatsappService) ConnectInstance(ctx context.Context, instanceName, phone string) (interface{}, error) {
+	// Tirar caracteres não numéricos do telefone
+	re := regexp.MustCompile(`\D`)
+    phoneLimpo := re.ReplaceAllString(phone, "")
 
-	log.Printf("\n\n\nConectando instância '%s' com número '%s'", instanceName, number)
+	phone = phoneLimpo
+	if len(phone) < 13 && len(phone) >= 10 {
+		phone = "55" + phone
+	}
+	
+	url := fmt.Sprintf("%s/instance/connect/%s?number=%s", s.ApiURL, instanceName, phone)
+
+	log.Printf("\n\n\nConectando instância '%s' com número '%s'", instanceName, phone)
     req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
     if err != nil {
         return nil, err
@@ -250,53 +259,3 @@ func (s *whatsappService) ConnectInstance(ctx context.Context, instanceName, num
 
     return result, nil
 }
-
-//	curl --location 'http://localhost:8080/message/sendText/teste' \
-//	--header 'Accept: application/json, text/plain, */*' \
-//	--header 'Accept-Language: pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' \
-//	--header 'Cache-Control: no-cache' \
-//	--header 'Connection: keep-alive' \
-//	--header 'Content-Type: application/json' \
-//	--header 'Origin: http://localhost:8080' \
-//	--header 'Pragma: no-cache' \
-//	--header 'Referer: http://localhost:8080/manager/teste' \
-//	--header 'Sec-Fetch-Dest: empty' \
-//	--header 'Sec-Fetch-Mode: cors' \
-//	--header 'Sec-Fetch-Site: same-origin' \
-//	--header 'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36' \
-//	--header 'apikey: 96CF28F9329F-44A3-80DB-5190D7B27185' \
-//	--header 'sec-ch-ua: "Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"' \
-//	--header 'sec-ch-ua-mobile: ?0' \
-//	--header 'sec-ch-ua-platform: "Linux"' \
-//	--header 'Cookie: g_state={"i_l":0,"i_ll":1764275182449}' \
-//	--data '{
-//	    "number": "5511990277630",
-//	    "options": {
-//	        "delay": 1000,
-//	        "presence": "composing"
-//	    },
-//	    "textMessage": {
-//	        "text": "Hellow k7t"
-//	    }
-//	}'
-
-
-// S C:\Users\Rara jogo\Desktop\Trabalho\Emprestimos\Nova pasta\ProjetoEmprestimo-back> 
-// curl.exe --location "http://34.69.98.196:8080/instance/fetchInstances" 
-// --header "apikey: VIDSFZs6I3FlZtnsbUoK"
-
-
-// [{"instance":{
-// "instanceName":"teste",
-// "instanceId":"99bace57-99f2-4205-aba3-ab03a547ff80",
-// "owner":"5511990277630@s.whatsapp.net",
-// "profileName":"Raiany",
-// "profilePictureUrl":"https://pps.whatsapp.net/v/t61.24694-24/518562817_1810536239675389_5763342067236340886_n.jpg?ccb=11-4&oh=01_Q5Aa4AHt8z6TDgL0hmKDc0gneM2t7XWMXGUS1lVssfAZP-1Tmw&oe=69BE77BC&_nc_sid=5e03e0&_nc_cat=107",
-// "profileStatus":{"status":"-_-",
-// "setAt":"2026-02-20T05:42:19.000Z"},
-// "status":"open",
-// "serverUrl":"http://localhost:8080",
-// "apikey":"96CF28F9329F-44A3-80DB-5190D7B27185",
-// "integration":{"integration":"WHATSAPP-BAILEYS",
-// "token":"96CF28F9329F-44A3-80DB-5190D7B27185",
-// "webhook_wa_business":"http://localhost:8080/webhook/whatsapp/teste"}}}]
