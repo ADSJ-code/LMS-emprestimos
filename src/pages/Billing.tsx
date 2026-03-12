@@ -93,6 +93,7 @@ const sendWhatsappApi = async (
   lateDays: number,
   updatedAmount: number,
   dateVencimento: string,
+  companyName: string,
   token: string,
 ) => {
   // Busca o token
@@ -100,7 +101,7 @@ const sendWhatsappApi = async (
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      userconectado: "teste",
+      userconectado: companyName,
       phone: phone,
       delay: 2,
       name: name,
@@ -209,6 +210,7 @@ const Billing = () => {
       diffDays,
       loan.installmentValue, // Valor seguro
       formattedDate, // Data formatada
+      companyName,
       token,
     );
     alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
