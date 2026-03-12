@@ -8,7 +8,7 @@ export interface PaymentRecord {
   capitalPaid?: number;
   interestPaid?: number;
   registeredAt?: string;
-  originalDueDate?: string; // <-- ADICIONADO AQUI PARA CORRIGIR OS ERROS
+  originalDueDate?: string; 
 }
 
 export interface Loan {
@@ -234,9 +234,12 @@ export const loanService = {
     await registerSystemLog('CONTRATO CRIADO', `Valor de R$ ${loan.amount} para o cliente ${loan.client}`);
     return response.data;
   },
-  update: async (id: string, loan: Loan): Promise<Loan> => {
+  // ATUALIZADO: Aceita os parâmetros dinâmicos de log
+  update: async (id: string, loan: Loan, logAction?: string, logDetails?: string): Promise<Loan> => {
     const response = await api.put(`/loans/${id}`, loan);
-    await registerSystemLog('ATUALIZAÇÃO FINANCEIRA', `Baixa, edição ou acordo realizado no contrato de ${loan.client}`);
+    const action = logAction || 'ATUALIZAÇÃO GERAL';
+    const details = logDetails || `Alteração nos dados do contrato de ${loan.client}`;
+    await registerSystemLog(action, details);
     return response.data;
   },
   delete: async (id: string): Promise<void> => {

@@ -22,6 +22,8 @@ const Overdue = () => {
   const [metrics, setMetrics] = useState({
     totalOverdue: 0,
     recoveredToday: 0,
+    recoveredCapital: 0, // NOVO: Separação de Capital
+    recoveredInterest: 0, // NOVO: Separação de Juros
     efficiency: 0,
     count: 0
   });
@@ -138,11 +140,13 @@ const Overdue = () => {
 
     let sumOverdue = 0;
     let sumRecoveredToday = 0;
+    let sumRecoveredCapital = 0; // NOVO
+    let sumRecoveredInterest = 0; // NOVO
     let overdueCount = 0;
     let payingCount = 0;
 
     loans.forEach(loan => {
-      // 1. Calcula o Recuperado Hoje (Mesmo se já estiver pago, tem que contar se pagou hoje)
+      // 1. Calcula o Recuperado Hoje com Separação
       if (loan.history && loan.history.length > 0) {
         loan.history.forEach(record => {
             const payDate = new Date(record.date);
@@ -157,6 +161,8 @@ const Overdue = () => {
                 payDate.getFullYear() === today.getFullYear()
             ) {
                 sumRecoveredToday += record.amount;
+                sumRecoveredCapital += (record.capitalPaid || 0); // Soma separada
+                sumRecoveredInterest += (record.interestPaid || 0); // Soma separada
                 payingCount++; 
             }
         });
@@ -182,6 +188,8 @@ const Overdue = () => {
     setMetrics({
         totalOverdue: sumOverdue,
         recoveredToday: sumRecoveredToday,
+        recoveredCapital: sumRecoveredCapital,
+        recoveredInterest: sumRecoveredInterest,
         efficiency: eff,
         count: overdueCount
     });
@@ -248,13 +256,19 @@ const Overdue = () => {
             <p className="text-xs text-red-500 font-medium mt-1">Soma de todas as parcelas perdidas com multas</p>
         </div>
 
-        <div className="bg-green-50 p-6 rounded-2xl border border-green-100 shadow-sm">
-            <div className="flex justify-between items-start mb-2">
-                <span className="text-green-700 font-bold text-sm uppercase tracking-wider">Recuperado Hoje</span>
-                <DollarSign className="text-green-600" size={24} />
+        {/* CARD MODIFICADO: RECUPERADO HOJE COM DETALHAMENTO */}
+        <div className="bg-green-50 p-6 rounded-2xl border border-green-100 shadow-sm flex flex-col justify-between">
+            <div>
+                <div className="flex justify-between items-start mb-2">
+                    <span className="text-green-700 font-bold text-sm uppercase tracking-wider">Recuperado Hoje</span>
+                    <DollarSign className="text-green-600" size={24} />
+                </div>
+                <h3 className="text-3xl font-black text-slate-800">R$ {formatMoney(metrics.recoveredToday)}</h3>
             </div>
-            <h3 className="text-3xl font-black text-slate-800">R$ {formatMoney(metrics.recoveredToday)}</h3>
-            <p className="text-xs text-green-600 mt-1">Baixas realizadas em {new Date().toLocaleDateString('pt-BR')}</p>
+            <div className="flex flex-wrap gap-2 mt-3 text-[11px] font-bold">
+                <span className="bg-white px-2 py-1 rounded shadow-sm text-slate-600 border border-green-200">Capital: R$ {formatMoney(metrics.recoveredCapital)}</span>
+                <span className="bg-green-100 px-2 py-1 rounded shadow-sm text-green-800 border border-green-200">Lucro (Juros): R$ {formatMoney(metrics.recoveredInterest)}</span>
+            </div>
         </div>
 
         <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 shadow-sm">
@@ -266,6 +280,7 @@ const Overdue = () => {
             <div className="w-full bg-blue-200 rounded-full h-1.5 mt-3">
                 <div className="bg-blue-600 h-1.5 rounded-full transition-all" style={{ width: `${metrics.efficiency}%` }}></div>
             </div>
+            <p className="text-[10px] text-blue-500 font-medium mt-2">Pagamentos vs. Acionamentos de cobrança</p>
         </div>
       </div>
 

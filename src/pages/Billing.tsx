@@ -623,7 +623,13 @@ const Billing = () => {
     updatedLoan.history = [...(selectedLoan.history || []), newRecord];
 
     try {
-        await loanService.update(selectedLoan.id, updatedLoan);
+        // AQUI FOI CORRIGIDO: ENVIANDO O TEXTO CORRETO PARA A API SALVAR NO HISTÓRICO
+        await loanService.update(
+            selectedLoan.id, 
+            updatedLoan, 
+            'BAIXA DE PAGAMENTO', 
+            `Recebeu R$ ${valTotal.toFixed(2)} (Capital: R$ ${valCapital.toFixed(2)}, Juros: R$ ${valInterest.toFixed(2)}) do cliente ${selectedLoan.client}`
+        );
         setLoans(prev => prev.map(l => l.id === updatedLoan.id ? updatedLoan : l));
         setIsPaymentModalOpen(false);
         setSelectedLoan(updatedLoan);
@@ -669,7 +675,13 @@ const Billing = () => {
     updatedLoan.history = history.slice(0, -1);
 
     try {
-        await loanService.update(selectedLoan.id, updatedLoan);
+        // AQUI FOI CORRIGIDO: ENVIANDO O TEXTO CORRETO PARA A API SALVAR NO HISTÓRICO
+        await loanService.update(
+            selectedLoan.id, 
+            updatedLoan, 
+            'ESTORNO DE REGISTRO', 
+            `Desfez o último registro de ${lastEntry.type} do cliente ${selectedLoan.client}.`
+        );
         setLoans(prev => prev.map(l => l.id === updatedLoan.id ? updatedLoan : l));
         setSelectedLoan(updatedLoan);
         alert("✅ Reversão concluída no servidor!");
@@ -704,7 +716,13 @@ const Billing = () => {
       }];
       
       try {
-          await loanService.update(selectedLoan.id, updatedLoan);
+          // AQUI FOI CORRIGIDO: ENVIANDO O TEXTO CORRETO PARA A API SALVAR NO HISTÓRICO
+          await loanService.update(
+              selectedLoan.id, 
+              updatedLoan, 
+              'NOVO ACORDO', 
+              `Negociou com ${selectedLoan.client}. Vencimento alterado para ${formatDisplayDate(agreementDate)} com valor extra de R$ ${formatMoney(parseFloat(agreementValue))}.`
+          );
           setLoans(prev => prev.map(l => l.id === updatedLoan.id ? updatedLoan : l));
           setIsAgreementModalOpen(false);
           alert("✅ Acordo registrado!");
