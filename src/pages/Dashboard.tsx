@@ -10,6 +10,7 @@ import Layout from '../components/Layout';
 import { calculateOverdueValue, formatMoney, calculateCapitalBalance, calculateInstallmentBreakdown } from '../utils/finance';
 import { loanService, clientService, settingsService, Loan, Client } from '../services/api';
 
+
 const Dashboard = () => {
   const navigate = useNavigate();
   
@@ -30,6 +31,55 @@ const Dashboard = () => {
   const [allClients, setAllClients] = useState<Client[]>([]);
   
   const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
+
+  // Whatsapp
+  const [showQRModal, setShowQRModal] = useState(false);
+  const [qrCodeBase64, setQrCodeBase64] = useState("");
+  const [isConnecting, setIsConnecting] = useState(false);
+
+  const handleConnectWhatsApp = async () => {
+    console.log("Botão clicado!"); // Debug 1
+    setIsConnecting(true);
+
+    try {
+      const response = await fetch(
+        "http://localhost:8080/api/instances/connect",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            name: "teste2", // Nome da instância no Go
+            phone: "5511990277630", // Seu número
+          }),
+        },
+      );
+
+      console.log("Resposta do servidor recebida:", response.status); // Debug 2
+
+      const data = await response.json();
+      console.log("Dados da API:", data); // Debug 3
+
+      // Verifique aqui como o seu Go está devolvendo o QR Code.
+      // Se você seguiu o código anterior, ele está em data.details.base64
+      if (data.details && data.details.base64) {
+        setQrCodeBase64(data.details.base64);
+        setShowQRModal(true);
+      } else if (data.base64) {
+        // Caso o Go devolva direto na raiz
+        setQrCodeBase64(data.base64);
+        setShowQRModal(true);
+      } else {
+        alert("QR Code não encontrado na resposta do servidor.");
+      }
+    } catch (error) {
+      console.error("Erro na conexão:", error);
+      alert("Erro ao conectar com o servidor Go.");
+    } finally {
+      setIsConnecting(false);
+    }
+  };
 
   // --- ESTADOS DO MODAL VENCIMENTOS ---
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
@@ -414,327 +464,754 @@ const Dashboard = () => {
   return (
     <Layout>
       {showWelcomeModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
-              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95">
-                  <div className="bg-slate-900 p-6 flex justify-between items-center">
-                      <div>
-                          <h3 className="text-xl font-bold text-white flex items-center gap-2"><CalendarDays size={22} className="text-yellow-400"/> Vencimentos</h3>
-                          <p className="text-slate-400 text-xs">Consulte o que vence em cada data.</p>
-                      </div>
-                      <button onClick={() => setShowWelcomeModal(false)} className="text-white/50 hover:text-white"><X size={24}/></button>
-                  </div>
-                  
-                  <div className="p-4 bg-slate-50 border-b border-slate-200">
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Data de Referência</label>
-                      <input type="date" value={maturityDate} onChange={(e) => setMaturityDate(e.target.value)} className="w-full p-3 border border-slate-300 rounded-xl font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"/>
-                  </div>
-
-                  <div className="p-6">
-                      <h4 className="text-sm font-bold text-slate-500 uppercase mb-3 flex items-center gap-2"><Bell size={16}/> Lista de Contratos ({loansOnMaturityDate.length})</h4>
-                      <div className="space-y-2 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
-                          {loansOnMaturityDate.length === 0 ? (
-                              <div className="text-center py-6">
-                                  <CheckCircle size={40} className="mx-auto text-slate-300 mb-2"/>
-                                  <p className="text-sm text-slate-400 italic">Nada consta para esta data.</p>
-                              </div>
-                          ) : (
-                              loansOnMaturityDate.map(l => (
-                                  <div key={l.id} className="flex justify-between items-center p-3 bg-blue-50 rounded-xl border border-blue-100 hover:bg-blue-100 transition-colors cursor-pointer" onClick={() => goToBillingWithSearch(l.client)}>
-                                      <div>
-                                          <span className="font-bold text-blue-900 block">{l.client}</span>
-                                          <span className="text-[10px] text-blue-500 font-mono">{l.id}</span>
-                                      </div>
-                                      <span className="text-blue-700 font-bold">R$ {formatMoney(l.installmentValue)}</span>
-                                  </div>
-                              ))
-                          )}
-                      </div>
-                      <div className="mt-6 pt-4 border-t border-slate-100">
-                          <button onClick={() => setShowWelcomeModal(false)} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all">Fechar</button>
-                      </div>
-                  </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95">
+            <div className="bg-slate-900 p-6 flex justify-between items-center">
+              <div>
+                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                  <CalendarDays size={22} className="text-yellow-400" />{" "}
+                  Vencimentos
+                </h3>
+                <p className="text-slate-400 text-xs">
+                  Consulte o que vence em cada data.
+                </p>
               </div>
+              <button
+                onClick={() => setShowWelcomeModal(false)}
+                className="text-white/50 hover:text-white"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="p-4 bg-slate-50 border-b border-slate-200">
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                Data de Referência
+              </label>
+              <input
+                type="date"
+                value={maturityDate}
+                onChange={(e) => setMaturityDate(e.target.value)}
+                className="w-full p-3 border border-slate-300 rounded-xl font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div className="p-6">
+              <h4 className="text-sm font-bold text-slate-500 uppercase mb-3 flex items-center gap-2">
+                <Bell size={16} /> Lista de Contratos (
+                {loansOnMaturityDate.length})
+              </h4>
+              <div className="space-y-2 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
+                {loansOnMaturityDate.length === 0 ? (
+                  <div className="text-center py-6">
+                    <CheckCircle
+                      size={40}
+                      className="mx-auto text-slate-300 mb-2"
+                    />
+                    <p className="text-sm text-slate-400 italic">
+                      Nada consta para esta data.
+                    </p>
+                  </div>
+                ) : (
+                  loansOnMaturityDate.map((l) => (
+                    <div
+                      key={l.id}
+                      className="flex justify-between items-center p-3 bg-blue-50 rounded-xl border border-blue-100 hover:bg-blue-100 transition-colors cursor-pointer"
+                      onClick={() => goToBillingWithSearch(l.client)}
+                    >
+                      <div>
+                        <span className="font-bold text-blue-900 block">
+                          {l.client}
+                        </span>
+                        <span className="text-[10px] text-blue-500 font-mono">
+                          {l.id}
+                        </span>
+                      </div>
+                      <span className="text-blue-700 font-bold">
+                        R$ {formatMoney(l.installmentValue)}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="mt-6 pt-4 border-t border-slate-100">
+                <button
+                  onClick={() => setShowWelcomeModal(false)}
+                  className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
           </div>
+        </div>
       )}
 
       {selectedRange ? (
-          <div className="animate-in slide-in-from-right-10 duration-300">
-              <header className="mb-6 flex items-center gap-4">
-                  <button onClick={() => setSelectedRange(null)} className="p-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors shadow-sm"><ArrowLeft size={20}/></button>
-                  <div><h2 className="text-2xl font-bold text-slate-800">{rangeTitles[selectedRange]}</h2><p className="text-slate-500">Detalhamento dos valores baseados na sua seleção.</p></div>
-              </header>
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                  
-                  {selectedRange === 'clients_contracts' ? (
-                      <table className="w-full text-left">
-                          <thead>
-                              <tr className="bg-slate-50/50 text-[11px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-100">
-                                  <th className="p-4">Cliente / Devedor</th>
-                                  <th className="p-4 text-center">Contratos Ativos</th>
-                                  <th className="p-4 text-center">IDs de Referência</th>
-                                  <th className="p-4 text-right">Risco Capital (R$)</th>
-                                  <th className="p-4 text-right text-green-600">Lucro Esperado (R$)</th>
-                              </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-50">
-                              {activeContractsByClient.map(c => (
-                                  <tr key={c.name} className="hover:bg-blue-50 transition-colors cursor-pointer" onClick={() => goToBillingWithSearch(c.name)}>
-                                      <td className="p-4 font-bold text-slate-800">{c.name}</td>
-                                      <td className="p-4 text-center">
-                                          <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold">{c.contracts.length} ativos</span>
-                                      </td>
-                                      <td className="p-4 text-center text-[10px] text-slate-400 font-mono tracking-widest">
-                                          {c.contracts.map((cnt: any) => cnt.id.substring(0,6)).join(', ')}
-                                      </td>
-                                      <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(c.totalCapital)}</td>
-                                      <td className="p-4 text-right font-bold text-green-600">R$ {formatMoney(c.totalProfit)}</td>
-                                  </tr>
-                              ))}
-                          </tbody>
-                      </table>
-                  ) : (
-                      <table className="w-full text-left">
-                          <thead>
-                              <tr className="bg-slate-50/50 text-[11px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-100">
-                                  <th className="p-4">Cliente</th>
-                                  <th className="p-4 text-center">
-                                      {selectedRange === 'overdue' ? 'Atrasado Desde' : period === 'todos' ? 'Venc. Original' : 'Data Projetada'}
-                                  </th>
-                                  <th className="p-4 text-center">Taxa (%)</th>
-                                  <th className="p-4 text-right">
-                                      {selectedRange === 'overdue' ? 'Valor Original (Atrasado)' : period !== 'todos' ? 'Capital da Parcela' : 'Saldo Devedor (Total)'}
-                                  </th>
-                                  <th className="p-4 text-right text-green-600">
-                                      {selectedRange === 'overdue' ? '-' : period !== 'todos' ? 'Juros da Parcela' : 'Lucro Restante (Total)'}
-                                  </th>
-                                  {selectedRange === 'overdue' && <th className="p-4 text-right text-red-600">Bola de Neve (Atualizado)</th>}
-                                  <th className="p-4 text-center">Status</th>
-                              </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-50">
-                              {detailedLoans.map(loan => {
-                                  const capBalance = calculateCapitalBalance(loan);
-                                  const remProfit = calculateRemainingProfit(loan);
-                                  const overdueVal = getLoanDetails(loan).totalOverdue;
-                                  
-                                  return (
-                                      <tr key={loan.uniqueSliceId || loan.id} className="hover:bg-blue-50 transition-colors cursor-pointer" onClick={() => goToBillingWithSearch(loan.client)}>
-                                          <td className="p-4 font-bold text-slate-800">
-                                              {loan.client}
-                                              <div className="text-[10px] font-mono text-slate-400 font-normal">{loan.id}</div>
-                                          </td>
-                                          
-                                          <td className="p-4 text-center text-sm font-medium">
-                                              {selectedRange === 'overdue' ? (
-                                                  <>
-                                                      <div className="flex items-center justify-center gap-1 text-red-600 font-bold">
-                                                          <Calendar size={12}/>
-                                                          {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
-                                                      </div>
-                                                      <div className="text-[9px] text-red-400 font-bold uppercase tracking-wider mt-0.5">Pendente</div>
-                                                  </>
-                                              ) : period === 'todos' ? (
-                                                  <>
-                                                      {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
-                                                      <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Atual</div>
-                                                  </>
-                                              ) : (
-                                                  <>
-                                                      {parseLocalDate(loan.projectedDate).toLocaleDateString('pt-BR')}
-                                                      <div className="text-[9px] text-blue-500 font-bold uppercase tracking-wider mt-0.5">Projetada</div>
-                                                  </>
-                                              )}
-                                          </td>
+        <div className="animate-in slide-in-from-right-10 duration-300">
+          <header className="mb-6 flex items-center gap-4">
+            <button
+              onClick={() => setSelectedRange(null)}
+              className="p-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors shadow-sm"
+            >
+              <ArrowLeft size={20} />
+            </button>
+            <div>
+              <h2 className="text-2xl font-bold text-slate-800">
+                {rangeTitles[selectedRange]}
+              </h2>
+              <p className="text-slate-500">
+                Detalhamento dos valores baseados na sua seleção.
+              </p>
+            </div>
+          </header>
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+            {selectedRange === "clients_contracts" ? (
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-slate-50/50 text-[11px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-100">
+                    <th className="p-4">Cliente / Devedor</th>
+                    <th className="p-4 text-center">Contratos Ativos</th>
+                    <th className="p-4 text-center">IDs de Referência</th>
+                    <th className="p-4 text-right">Risco Capital (R$)</th>
+                    <th className="p-4 text-right text-green-600">
+                      Lucro Esperado (R$)
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {activeContractsByClient.map((c) => (
+                    <tr
+                      key={c.name}
+                      className="hover:bg-blue-50 transition-colors cursor-pointer"
+                      onClick={() => goToBillingWithSearch(c.name)}
+                    >
+                      <td className="p-4 font-bold text-slate-800">{c.name}</td>
+                      <td className="p-4 text-center">
+                        <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold">
+                          {c.contracts.length} ativos
+                        </span>
+                      </td>
+                      <td className="p-4 text-center text-[10px] text-slate-400 font-mono tracking-widest">
+                        {c.contracts
+                          .map((cnt: any) => cnt.id.substring(0, 6))
+                          .join(", ")}
+                      </td>
+                      <td className="p-4 text-right font-bold text-slate-700">
+                        R$ {formatMoney(c.totalCapital)}
+                      </td>
+                      <td className="p-4 text-right font-bold text-green-600">
+                        R$ {formatMoney(c.totalProfit)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-slate-50/50 text-[11px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-100">
+                    <th className="p-4">Cliente</th>
+                    <th className="p-4 text-center">
+                      {selectedRange === "overdue"
+                        ? "Atrasado Desde"
+                        : period === "todos"
+                          ? "Venc. Original"
+                          : "Data Projetada"}
+                    </th>
+                    <th className="p-4 text-center">Taxa (%)</th>
+                    <th className="p-4 text-right">
+                      {selectedRange === "overdue"
+                        ? "Valor Original (Atrasado)"
+                        : period !== "todos"
+                          ? "Capital da Parcela"
+                          : "Saldo Devedor (Total)"}
+                    </th>
+                    <th className="p-4 text-right text-green-600">
+                      {selectedRange === "overdue"
+                        ? "-"
+                        : period !== "todos"
+                          ? "Juros da Parcela"
+                          : "Lucro Restante (Total)"}
+                    </th>
+                    {selectedRange === "overdue" && (
+                      <th className="p-4 text-right text-red-600">
+                        Bola de Neve (Atualizado)
+                      </th>
+                    )}
+                    <th className="p-4 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {detailedLoans.map((loan) => {
+                    const capBalance = calculateCapitalBalance(loan);
+                    const remProfit = calculateRemainingProfit(loan);
+                    const overdueVal = getLoanDetails(loan).totalOverdue;
 
-                                          <td className="p-4 text-center font-bold text-slate-600">{loan.interestRate}%</td>
-                                          
-                                          <td className="p-4 text-right font-bold text-slate-700">
-                                              R$ {formatMoney(selectedRange === 'overdue' ? loan.installmentValue : period !== 'todos' ? loan.projectedCapitalForPeriod : capBalance)}
-                                          </td>
-                                          <td className="p-4 text-right font-bold text-green-600">
-                                              {selectedRange === 'overdue' ? '-' : `R$ ${formatMoney(period !== 'todos' ? loan.projectedInterestForPeriod : remProfit)}`}
-                                          </td>
-                                          
-                                          {selectedRange === 'overdue' && <td className="p-4 text-right font-black text-red-600">R$ {formatMoney(overdueVal)}</td>}
-                                          <td className="p-4 text-center">
-                                              <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${loan.status === 'Atrasado' ? 'bg-red-50 text-red-600' : loan.status === 'Acordo' ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>
-                                                  {loan.status}
-                                              </span>
-                                          </td>
-                                      </tr>
-                                  )
-                              })}
-                          </tbody>
-                      </table>
-                  )}
-              </div>
+                    return (
+                      <tr
+                        key={loan.uniqueSliceId || loan.id}
+                        className="hover:bg-blue-50 transition-colors cursor-pointer"
+                        onClick={() => goToBillingWithSearch(loan.client)}
+                      >
+                        <td className="p-4 font-bold text-slate-800">
+                          {loan.client}
+                          <div className="text-[10px] font-mono text-slate-400 font-normal">
+                            {loan.id}
+                          </div>
+                        </td>
+
+                        <td className="p-4 text-center text-sm font-medium">
+                          {selectedRange === "overdue" ? (
+                            <>
+                              <div className="flex items-center justify-center gap-1 text-red-600 font-bold">
+                                <Calendar size={12} />
+                                {parseLocalDate(
+                                  loan.nextDue,
+                                ).toLocaleDateString("pt-BR")}
+                              </div>
+                              <div className="text-[9px] text-red-400 font-bold uppercase tracking-wider mt-0.5">
+                                Pendente
+                              </div>
+                            </>
+                          ) : period === "todos" ? (
+                            <>
+                              {parseLocalDate(loan.nextDue).toLocaleDateString(
+                                "pt-BR",
+                              )}
+                              <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
+                                Atual
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              {parseLocalDate(
+                                loan.projectedDate,
+                              ).toLocaleDateString("pt-BR")}
+                              <div className="text-[9px] text-blue-500 font-bold uppercase tracking-wider mt-0.5">
+                                Projetada
+                              </div>
+                            </>
+                          )}
+                        </td>
+
+                        <td className="p-4 text-center font-bold text-slate-600">
+                          {loan.interestRate}%
+                        </td>
+
+                        <td className="p-4 text-right font-bold text-slate-700">
+                          R${" "}
+                          {formatMoney(
+                            selectedRange === "overdue"
+                              ? loan.installmentValue
+                              : period !== "todos"
+                                ? loan.projectedCapitalForPeriod
+                                : capBalance,
+                          )}
+                        </td>
+                        <td className="p-4 text-right font-bold text-green-600">
+                          {selectedRange === "overdue"
+                            ? "-"
+                            : `R$ ${formatMoney(period !== "todos" ? loan.projectedInterestForPeriod : remProfit)}`}
+                        </td>
+
+                        {selectedRange === "overdue" && (
+                          <td className="p-4 text-right font-black text-red-600">
+                            R$ {formatMoney(overdueVal)}
+                          </td>
+                        )}
+                        <td className="p-4 text-center">
+                          <span
+                            className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${loan.status === "Atrasado" ? "bg-red-50 text-red-600" : loan.status === "Acordo" ? "bg-orange-50 text-orange-600" : "bg-blue-50 text-blue-600"}`}
+                          >
+                            {loan.status}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
+        </div>
       ) : (
-          <>
-            <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-8 gap-4">
+        <>
+          <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-8 gap-4">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-800">Dashboard</h2>
+              <p className="text-slate-500">
+                Visão geral e projeções do sistema.
+              </p>
+            </div>
+
+            <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center w-full xl:w-auto">
+              {period !== "todos" && (
+                <div className="flex bg-slate-100 p-1 rounded-xl shadow-inner border border-slate-200">
+                  <button
+                    onClick={() => setViewMode("saldo")}
+                    className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 ${viewMode === "saldo" ? "bg-white text-slate-800 shadow-sm border border-slate-200" : "text-slate-400 hover:text-slate-700"}`}
+                  >
+                    <Briefcase size={14} /> Saldo Global
+                  </button>
+                  <button
+                    onClick={() => setViewMode("fluxo")}
+                    className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 ${viewMode === "fluxo" ? "bg-white text-slate-800 shadow-sm border border-slate-200" : "text-slate-400 hover:text-slate-700"}`}
+                  >
+                    <TrendingUp size={14} /> Fluxo do Período
+                  </button>
+                </div>
+              )}
+
+              <button
+                onClick={fetchAndCalculate}
+                className="p-2.5 bg-white border border-gray-200 rounded-xl text-slate-500 hover:text-slate-900 transition-colors shadow-sm"
+              >
+                <RefreshCw
+                  size={18}
+                  className={loading ? "animate-spin" : ""}
+                />
+              </button>
+              <div className="relative">
+                <select
+                  value={period === "personalizado" ? "personalizado" : period}
+                  onChange={(e) => handlePeriodChange(e.target.value)}
+                  className="appearance-none bg-white pl-4 pr-10 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-slate-900/10 cursor-pointer"
+                >
+                  <option value="todos">Todos os Períodos</option>
+                  <option value="hoje">Vencendo Hoje</option>
+                  <option value="semana">Esta Semana</option>
+                  <option value="mes">Este Mês</option>
+                  <option value="proximo_mes">Próximo Mês</option>
+                  <option value="personalizado">Datas Personalizadas</option>
+                </select>
+                <ChevronDown
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+                  size={16}
+                />
+              </div>
+              {(period === "personalizado" || (customStart && customEnd)) && (
+                <div className="flex items-center gap-2 bg-white p-1.5 rounded-xl border border-gray-200 shadow-sm animate-in fade-in slide-in-from-left-2">
+                  <div className="flex items-center gap-2 px-2">
+                    <input
+                      type="date"
+                      value={customStart}
+                      onChange={(e) => setCustomStart(e.target.value)}
+                      className="text-xs font-bold text-slate-600 bg-transparent outline-none w-28 border border-slate-100 rounded p-1"
+                    />
+                    <span className="text-slate-300">até</span>
+                    <input
+                      type="date"
+                      value={customEnd}
+                      onChange={(e) => setCustomEnd(e.target.value)}
+                      className="text-xs font-bold text-slate-600 bg-transparent outline-none w-28 border border-slate-100 rounded p-1"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </header>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            {/* CARD CAPITAL */}
+            <div
+              onClick={() => setSelectedRange("capital")}
+              className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-300 transition-all cursor-pointer group"
+            >
+              <div className="flex justify-between items-start mb-4">
+                <div className="p-3 bg-blue-50 text-blue-600 rounded-lg">
+                  <Briefcase size={24} />
+                </div>
+                <select
+                  onClick={(e) => e.stopPropagation()}
+                  value={tierFilters.capital}
+                  onChange={(e) =>
+                    setTierFilters({ ...tierFilters, capital: e.target.value })
+                  }
+                  className="text-[10px] bg-slate-50 border border-slate-200 rounded p-1 outline-none text-slate-600 font-bold cursor-pointer hover:bg-slate-100"
+                >
+                  <option value="all">Todas as Faixas</option>
+                  <option value="low">1% a 9%</option>
+                  <option value="mid">10% a 15%</option>
+                  <option value="high">+ 15%</option>
+                </select>
+              </div>
+              <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
+                {viewMode === "fluxo" && period !== "todos"
+                  ? "Entrada Prevista (Capital)"
+                  : "Capital a Receber (Global)"}
+              </h3>
+              <p className="text-2xl font-black text-slate-800">
+                {formatMoney(
+                  metrics.capitalNaRua[
+                    tierFilters.capital as keyof typeof defaultTiers
+                  ],
+                )}
+              </p>
+            </div>
+
+            {/* CARD LUCRO */}
+            <div
+              onClick={() => setSelectedRange("profit")}
+              className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-green-300 transition-all cursor-pointer group"
+            >
+              <div className="flex justify-between items-start mb-4">
+                <div className="p-3 bg-green-50 text-green-600 rounded-lg">
+                  <TrendingUp size={24} />
+                </div>
+                <select
+                  onClick={(e) => e.stopPropagation()}
+                  value={tierFilters.profit}
+                  onChange={(e) =>
+                    setTierFilters({ ...tierFilters, profit: e.target.value })
+                  }
+                  className="text-[10px] bg-slate-50 border border-slate-200 rounded p-1 outline-none text-slate-600 font-bold cursor-pointer hover:bg-slate-100"
+                >
+                  <option value="all">Todas as Faixas</option>
+                  <option value="low">1% a 9%</option>
+                  <option value="mid">10% a 15%</option>
+                  <option value="high">+ 15%</option>
+                </select>
+              </div>
+              <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
+                {viewMode === "fluxo" && period !== "todos"
+                  ? "Lucro Previsto no Filtro"
+                  : "Lucro Restante a Receber"}
+              </h3>
+              <p className="text-2xl font-black text-green-600">
+                +
+                {formatMoney(
+                  metrics.lucroProjetado[
+                    tierFilters.profit as keyof typeof defaultTiers
+                  ],
+                )}
+              </p>
+            </div>
+
+            {/* CARD ATRASO */}
+            <div
+              onClick={() => setSelectedRange("overdue")}
+              className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-red-500 hover:shadow-md hover:bg-red-50/10 transition-all cursor-pointer group"
+            >
+              <div className="flex justify-between items-start mb-2">
+                <div className="p-3 bg-red-50 text-red-600 rounded-lg">
+                  <AlertTriangle size={24} />
+                </div>
+                <select
+                  onClick={(e) => e.stopPropagation()}
+                  value={tierFilters.overdue}
+                  onChange={(e) =>
+                    setTierFilters({ ...tierFilters, overdue: e.target.value })
+                  }
+                  className="text-[10px] bg-red-50/50 border border-red-200 rounded p-1 outline-none text-red-700 font-bold cursor-pointer hover:bg-red-100"
+                >
+                  <option value="all">Todas as Faixas</option>
+                  <option value="low">1% a 9%</option>
+                  <option value="mid">10% a 15%</option>
+                  <option value="high">+ 15%</option>
+                </select>
+              </div>
+              <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
+                {period === "todos"
+                  ? "Total em Atraso (Global)"
+                  : "Total em Atraso (No Filtro)"}
+              </h3>
+              <p className="text-2xl font-black text-slate-800 mb-3">
+                {formatMoney(
+                  metrics.atrasoGeral[
+                    tierFilters.overdue as keyof typeof defaultTiers
+                  ],
+                )}
+              </p>
+            </div>
+
+            {/* Novo Card Global de Clientes e Contratos */}
+            <div
+              onClick={() => setSelectedRange("clients_contracts")}
+              className="bg-slate-900 p-6 rounded-xl shadow-lg text-white relative overflow-hidden cursor-pointer hover:bg-slate-800 transition-all group"
+            >
+              <div className="absolute right-0 top-0 opacity-10 p-2 group-hover:scale-110 transition-transform">
+                <Users size={64} />
+              </div>
+              <h3 className="text-slate-300 text-xs font-bold uppercase mb-1 flex items-center gap-1">
+                <Briefcase size={12} /> Clientes & Contratos
+              </h3>
+              <div className="flex justify-between items-end mt-2">
                 <div>
-                    <h2 className="text-2xl font-bold text-slate-800">Dashboard</h2>
-                    <p className="text-slate-500">Visão geral e projeções do sistema.</p>
+                  <p className="text-3xl font-black text-white">
+                    {metrics.clientesComDivida}
+                  </p>
+                  <p className="text-[10px] text-slate-400">Clientes Ativos</p>
                 </div>
-                
-                <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center w-full xl:w-auto">
-                    {period !== 'todos' && (
-                        <div className="flex bg-slate-100 p-1 rounded-xl shadow-inner border border-slate-200">
-                            <button
-                                onClick={() => setViewMode('saldo')}
-                                className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 ${viewMode === 'saldo' ? 'bg-white text-slate-800 shadow-sm border border-slate-200' : 'text-slate-400 hover:text-slate-700'}`}
-                            >
-                                <Briefcase size={14}/> Saldo Global
-                            </button>
-                            <button
-                                onClick={() => setViewMode('fluxo')}
-                                className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 ${viewMode === 'fluxo' ? 'bg-white text-slate-800 shadow-sm border border-slate-200' : 'text-slate-400 hover:text-slate-700'}`}
-                            >
-                                <TrendingUp size={14}/> Fluxo do Período
-                            </button>
-                        </div>
-                    )}
-
-                    <button onClick={fetchAndCalculate} className="p-2.5 bg-white border border-gray-200 rounded-xl text-slate-500 hover:text-slate-900 transition-colors shadow-sm"><RefreshCw size={18} className={loading ? "animate-spin" : ""} /></button>
-                    <div className="relative">
-                        <select value={period === 'personalizado' ? 'personalizado' : period} onChange={(e) => handlePeriodChange(e.target.value)} className="appearance-none bg-white pl-4 pr-10 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-slate-900/10 cursor-pointer">
-                            <option value="todos">Todos os Períodos</option><option value="hoje">Vencendo Hoje</option><option value="semana">Esta Semana</option><option value="mes">Este Mês</option><option value="proximo_mes">Próximo Mês</option><option value="personalizado">Datas Personalizadas</option>
-                        </select>
-                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16}/>
-                    </div>
-                    {(period === 'personalizado' || (customStart && customEnd)) && (
-                        <div className="flex items-center gap-2 bg-white p-1.5 rounded-xl border border-gray-200 shadow-sm animate-in fade-in slide-in-from-left-2">
-                            <div className="flex items-center gap-2 px-2"><input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="text-xs font-bold text-slate-600 bg-transparent outline-none w-28 border border-slate-100 rounded p-1"/><span className="text-slate-300">até</span><input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="text-xs font-bold text-slate-600 bg-transparent outline-none w-28 border border-slate-100 rounded p-1"/></div>
-                        </div>
-                    )}
+                <div className="text-right">
+                  <p className="text-xl font-bold text-white">
+                    {metrics.contratosAtivosGlobais}
+                  </p>
+                  <p className="text-[10px] text-slate-400">Contratos Ativos</p>
                 </div>
-            </header>
+              </div>
+              <div className="mt-4 pt-3 border-t border-slate-700/50 flex justify-between text-[10px] text-slate-400 font-medium">
+                <span>Cadastros: {metrics.totalClientesCadastrados}</span>
+                <span>Lançados: {metrics.totalContratosLancados}</span>
+              </div>
+            </div>
+          </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                
-                {/* CARD CAPITAL */}
-                <div onClick={() => setSelectedRange('capital')} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-300 transition-all cursor-pointer group">
-                    <div className="flex justify-between items-start mb-4">
-                        <div className="p-3 bg-blue-50 text-blue-600 rounded-lg"><Briefcase size={24} /></div>
-                        <select onClick={e => e.stopPropagation()} value={tierFilters.capital} onChange={e => setTierFilters({...tierFilters, capital: e.target.value})} className="text-[10px] bg-slate-50 border border-slate-200 rounded p-1 outline-none text-slate-600 font-bold cursor-pointer hover:bg-slate-100">
-                            <option value="all">Todas as Faixas</option>
-                            <option value="low">1% a 9%</option>
-                            <option value="mid">10% a 15%</option>
-                            <option value="high">+ 15%</option>
-                        </select>
-                    </div>
-                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
-                        {viewMode === 'fluxo' && period !== 'todos' ? 'Entrada Prevista (Capital)' : 'Capital a Receber (Global)'}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="lg:col-span-2 space-y-6">
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                  <div className="flex items-center gap-2">
+                    <PieChart className="text-slate-400" size={20} />
+                    <h3 className="font-bold text-lg text-slate-800">
+                      Distribuição por Taxa
                     </h3>
-                    <p className="text-2xl font-black text-slate-800">{formatMoney(metrics.capitalNaRua[tierFilters.capital as keyof typeof defaultTiers])}</p>
+                  </div>
+                  <div className="flex bg-slate-100 p-1 rounded-lg w-fit">
+                    <button
+                      onClick={() => setTaxasViewMode("capital")}
+                      className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${taxasViewMode === "capital" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                    >
+                      Capital
+                    </button>
+                    <button
+                      onClick={() => setTaxasViewMode("lucro")}
+                      className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${taxasViewMode === "lucro" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                    >
+                      Lucro
+                    </button>
+                  </div>
                 </div>
 
-                {/* CARD LUCRO */}
-                <div onClick={() => setSelectedRange('profit')} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-green-300 transition-all cursor-pointer group">
-                    <div className="flex justify-between items-start mb-4">
-                        <div className="p-3 bg-green-50 text-green-600 rounded-lg"><TrendingUp size={24} /></div>
-                        <select onClick={e => e.stopPropagation()} value={tierFilters.profit} onChange={e => setTierFilters({...tierFilters, profit: e.target.value})} className="text-[10px] bg-slate-50 border border-slate-200 rounded p-1 outline-none text-slate-600 font-bold cursor-pointer hover:bg-slate-100">
-                            <option value="all">Todas as Faixas</option>
-                            <option value="low">1% a 9%</option>
-                            <option value="mid">10% a 15%</option>
-                            <option value="high">+ 15%</option>
-                        </select>
-                    </div>
-                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
-                        {viewMode === 'fluxo' && period !== 'todos' ? 'Lucro Previsto no Filtro' : 'Lucro Restante a Receber'}
-                    </h3>
-                    <p className="text-2xl font-black text-green-600">+{formatMoney(metrics.lucroProjetado[tierFilters.profit as keyof typeof defaultTiers])}</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div
+                    onClick={() => {
+                      setTierFilters({
+                        ...tierFilters,
+                        capital: "low",
+                        profit: "low",
+                      });
+                      setSelectedRange(
+                        taxasViewMode === "capital" ? "capital" : "profit",
+                      );
+                    }}
+                    className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center cursor-pointer hover:bg-slate-100 transition-colors group"
+                  >
+                    <p className="text-xs font-bold text-slate-500 uppercase mb-1 group-hover:text-blue-600 transition-colors">
+                      1% a 9% (Baixa)
+                    </p>
+                    <p className="text-2xl font-black text-slate-700">
+                      R${" "}
+                      {formatMoney(
+                        taxasViewMode === "capital"
+                          ? metrics.taxas.lowCap
+                          : metrics.taxas.lowProf,
+                      )}
+                    </p>
+                  </div>
+                  <div
+                    onClick={() => {
+                      setTierFilters({
+                        ...tierFilters,
+                        capital: "mid",
+                        profit: "mid",
+                      });
+                      setSelectedRange(
+                        taxasViewMode === "capital" ? "capital" : "profit",
+                      );
+                    }}
+                    className="p-4 bg-blue-50 rounded-lg border border-blue-100 text-center cursor-pointer hover:bg-blue-100 transition-colors group"
+                  >
+                    <p className="text-xs font-bold text-blue-500 uppercase mb-1 group-hover:text-blue-700 transition-colors">
+                      10% a 15% (Média)
+                    </p>
+                    <p className="text-2xl font-black text-blue-700">
+                      R${" "}
+                      {formatMoney(
+                        taxasViewMode === "capital"
+                          ? metrics.taxas.midCap
+                          : metrics.taxas.midProf,
+                      )}
+                    </p>
+                  </div>
+                  <div
+                    onClick={() => {
+                      setTierFilters({
+                        ...tierFilters,
+                        capital: "high",
+                        profit: "high",
+                      });
+                      setSelectedRange(
+                        taxasViewMode === "capital" ? "capital" : "profit",
+                      );
+                    }}
+                    className="p-4 bg-indigo-50 rounded-lg border border-indigo-100 text-center cursor-pointer hover:bg-indigo-100 transition-colors group"
+                  >
+                    <p className="text-xs font-bold text-indigo-500 uppercase mb-1 group-hover:text-indigo-700 transition-colors">
+                      Acima de 15% (Alta)
+                    </p>
+                    <p className="text-2xl font-black text-indigo-700">
+                      R${" "}
+                      {formatMoney(
+                        taxasViewMode === "capital"
+                          ? metrics.taxas.highCap
+                          : metrics.taxas.highProf,
+                      )}
+                    </p>
+                  </div>
                 </div>
+              </div>
 
-                {/* CARD ATRASO */}
-                <div onClick={() => setSelectedRange('overdue')} className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-red-500 hover:shadow-md hover:bg-red-50/10 transition-all cursor-pointer group">
-                    <div className="flex justify-between items-start mb-2">
-                        <div className="p-3 bg-red-50 text-red-600 rounded-lg"><AlertTriangle size={24} /></div>
-                        <select onClick={e => e.stopPropagation()} value={tierFilters.overdue} onChange={e => setTierFilters({...tierFilters, overdue: e.target.value})} className="text-[10px] bg-red-50/50 border border-red-200 rounded p-1 outline-none text-red-700 font-bold cursor-pointer hover:bg-red-100">
-                            <option value="all">Todas as Faixas</option>
-                            <option value="low">1% a 9%</option>
-                            <option value="mid">10% a 15%</option>
-                            <option value="high">+ 15%</option>
-                        </select>
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="font-bold text-lg text-slate-800 mb-4">
+                  Acesso Rápido
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <button
+                    onClick={() => navigate("/billing")}
+                    className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-blue-500 hover:bg-blue-50 transition-all group"
+                  >
+                    <div className="p-3 bg-blue-100 text-blue-600 rounded-full mb-2 group-hover:scale-110 transition-transform">
+                      <Plus size={20} />
                     </div>
-                    <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
-                        {period === 'todos' ? 'Total em Atraso (Global)' : 'Total em Atraso (No Filtro)'}
-                    </h3>
-                    <p className="text-2xl font-black text-slate-800 mb-3">{formatMoney(metrics.atrasoGeral[tierFilters.overdue as keyof typeof defaultTiers])}</p>
+                    <span className="text-sm font-medium text-slate-700">
+                      Novo Empréstimo
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => navigate("/clients")}
+                    className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all group"
+                  >
+                    <div className="p-3 bg-purple-100 text-purple-600 rounded-full mb-2 group-hover:scale-110 transition-transform">
+                      <Users size={20} />
+                    </div>
+                    <span className="text-sm font-medium text-slate-700">
+                      Novo Cliente
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowWelcomeModal(true)}
+                    className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-orange-500 hover:bg-orange-50 transition-all group"
+                  >
+                    <div className="p-3 bg-orange-100 text-orange-600 rounded-full mb-2 group-hover:scale-110 transition-transform">
+                      <CalendarDays size={20} />
+                    </div>
+                    <span className="text-sm font-medium text-slate-700">
+                      Vencimentos
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => navigate("/overdue")}
+                    className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all group"
+                  >
+                    <div className="p-3 bg-yellow-100 text-yellow-600 rounded-full mb-2 group-hover:scale-110 transition-transform">
+                      <FileText size={20} />
+                    </div>
+                    <span className="text-sm font-medium text-slate-700">
+                      Relatórios
+                    </span>
+                  </button>
                 </div>
-                
-                {/* Novo Card Global de Clientes e Contratos */}
-                <div onClick={() => setSelectedRange('clients_contracts')} className="bg-slate-900 p-6 rounded-xl shadow-lg text-white relative overflow-hidden cursor-pointer hover:bg-slate-800 transition-all group">
-                    <div className="absolute right-0 top-0 opacity-10 p-2 group-hover:scale-110 transition-transform"><Users size={64} /></div>
-                    <h3 className="text-slate-300 text-xs font-bold uppercase mb-1 flex items-center gap-1"><Briefcase size={12}/> Clientes & Contratos</h3>
-                    <div className="flex justify-between items-end mt-2">
-                        <div>
-                            <p className="text-3xl font-black text-white">{metrics.clientesComDivida}</p>
-                            <p className="text-[10px] text-slate-400">Clientes Ativos</p>
-                        </div>
-                        <div className="text-right">
-                            <p className="text-xl font-bold text-white">{metrics.contratosAtivosGlobais}</p>
-                            <p className="text-[10px] text-slate-400">Contratos Ativos</p>
-                        </div>
-                    </div>
-                    <div className="mt-4 pt-3 border-t border-slate-700/50 flex justify-between text-[10px] text-slate-400 font-medium">
-                        <span>Cadastros: {metrics.totalClientesCadastrados}</span>
-                        <span>Lançados: {metrics.totalContratosLancados}</span>
-                    </div>
-                </div>
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <div className="lg:col-span-2 space-y-6">
-                    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
-                            <div className="flex items-center gap-2">
-                                <PieChart className="text-slate-400" size={20}/>
-                                <h3 className="font-bold text-lg text-slate-800">Distribuição por Taxa</h3>
-                            </div>
-                            <div className="flex bg-slate-100 p-1 rounded-lg w-fit">
-                                <button onClick={() => setTaxasViewMode('capital')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${taxasViewMode === 'capital' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Capital</button>
-                                <button onClick={() => setTaxasViewMode('lucro')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${taxasViewMode === 'lucro' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Lucro</button>
-                            </div>
-                        </div>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div onClick={() => { setTierFilters({...tierFilters, capital: 'low', profit: 'low'}); setSelectedRange(taxasViewMode === 'capital' ? 'capital' : 'profit'); }} className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center cursor-pointer hover:bg-slate-100 transition-colors group">
-                                <p className="text-xs font-bold text-slate-500 uppercase mb-1 group-hover:text-blue-600 transition-colors">1% a 9% (Baixa)</p>
-                                <p className="text-2xl font-black text-slate-700">R$ {formatMoney(taxasViewMode === 'capital' ? metrics.taxas.lowCap : metrics.taxas.lowProf)}</p>
-                            </div>
-                            <div onClick={() => { setTierFilters({...tierFilters, capital: 'mid', profit: 'mid'}); setSelectedRange(taxasViewMode === 'capital' ? 'capital' : 'profit'); }} className="p-4 bg-blue-50 rounded-lg border border-blue-100 text-center cursor-pointer hover:bg-blue-100 transition-colors group">
-                                <p className="text-xs font-bold text-blue-500 uppercase mb-1 group-hover:text-blue-700 transition-colors">10% a 15% (Média)</p>
-                                <p className="text-2xl font-black text-blue-700">R$ {formatMoney(taxasViewMode === 'capital' ? metrics.taxas.midCap : metrics.taxas.midProf)}</p>
-                            </div>
-                            <div onClick={() => { setTierFilters({...tierFilters, capital: 'high', profit: 'high'}); setSelectedRange(taxasViewMode === 'capital' ? 'capital' : 'profit'); }} className="p-4 bg-indigo-50 rounded-lg border border-indigo-100 text-center cursor-pointer hover:bg-indigo-100 transition-colors group">
-                                <p className="text-xs font-bold text-indigo-500 uppercase mb-1 group-hover:text-indigo-700 transition-colors">Acima de 15% (Alta)</p>
-                                <p className="text-2xl font-black text-indigo-700">R$ {formatMoney(taxasViewMode === 'capital' ? metrics.taxas.highCap : metrics.taxas.highProf)}</p>
-                            </div>
-                        </div>
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 h-fit">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="font-bold text-lg text-slate-800">
+                  Atividade Global
+                </h3>
+                <button
+                  onClick={() => navigate("/history")}
+                  className="text-blue-600 text-xs font-medium hover:underline flex items-center gap-1"
+                >
+                  Ver tudo <ArrowRight size={12} />
+                </button>
+              </div>
+              <div className="space-y-6">
+                {recentActivities.length > 0 ? (
+                  recentActivities.map((activity) => (
+                    <div key={activity.id} className="flex gap-4 items-start">
+                      <div
+                        className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${activity.type === "atraso" ? "bg-red-500" : "bg-slate-300"}`}
+                      />
+                      <div>
+                        <p className="text-sm font-medium text-slate-800 leading-tight">
+                          {activity.text}
+                        </p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {activity.time}
+                        </p>
+                      </div>
+                      {activity.value !== "-" && (
+                        <span
+                          className={`ml-auto text-xs font-bold whitespace-nowrap ${activity.type === "atraso" ? "text-red-600 bg-red-50 px-2 py-1 rounded" : "text-slate-600"}`}
+                        >
+                          {activity.value}
+                        </span>
+                      )}
                     </div>
-
-                    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                        <h3 className="font-bold text-lg text-slate-800 mb-4">Acesso Rápido</h3>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            <button onClick={() => navigate('/billing')} className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-blue-500 hover:bg-blue-50 transition-all group"><div className="p-3 bg-blue-100 text-blue-600 rounded-full mb-2 group-hover:scale-110 transition-transform"><Plus size={20} /></div><span className="text-sm font-medium text-slate-700">Novo Empréstimo</span></button>
-                            <button onClick={() => navigate('/clients')} className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all group"><div className="p-3 bg-purple-100 text-purple-600 rounded-full mb-2 group-hover:scale-110 transition-transform"><Users size={20} /></div><span className="text-sm font-medium text-slate-700">Novo Cliente</span></button>
-                            
-                            <button onClick={() => setShowWelcomeModal(true)} className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-orange-500 hover:bg-orange-50 transition-all group"><div className="p-3 bg-orange-100 text-orange-600 rounded-full mb-2 group-hover:scale-110 transition-transform"><CalendarDays size={20} /></div><span className="text-sm font-medium text-slate-700">Vencimentos</span></button>
-                            
-                            <button onClick={() => navigate('/overdue')} className="flex flex-col items-center justify-center p-4 rounded-lg border border-gray-200 hover:border-yellow-500 hover:bg-yellow-50 transition-all group"><div className="p-3 bg-yellow-100 text-yellow-600 rounded-full mb-2 group-hover:scale-110 transition-transform"><FileText size={20} /></div><span className="text-sm font-medium text-slate-700">Relatórios</span></button>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 h-fit">
-                    <div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg text-slate-800">Atividade Global</h3><button onClick={() => navigate('/history')} className="text-blue-600 text-xs font-medium hover:underline flex items-center gap-1">Ver tudo <ArrowRight size={12} /></button></div>
-                    <div className="space-y-6">
-                        {recentActivities.length > 0 ? (recentActivities.map((activity) => (<div key={activity.id} className="flex gap-4 items-start"><div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${activity.type === 'atraso' ? 'bg-red-500' : 'bg-slate-300'}`} /><div><p className="text-sm font-medium text-slate-800 leading-tight">{activity.text}</p><p className="text-xs text-slate-400 mt-1">{activity.time}</p></div>{activity.value !== '-' && (<span className={`ml-auto text-xs font-bold whitespace-nowrap ${activity.type === 'atraso' ? 'text-red-600 bg-red-50 px-2 py-1 rounded' : 'text-slate-600'}`}>{activity.value}</span>)}</div>))) : (<div className="text-center py-8 text-slate-400 text-sm"><Activity size={24} className="mx-auto mb-2 opacity-50"/>Nenhuma atividade no momento.</div>)}
-                    </div>
-                </div>
+                  ))
+                ) : (
+                  <div className="text-center py-8 text-slate-400 text-sm">
+                    <Activity size={24} className="mx-auto mb-2 opacity-50" />
+                    Nenhuma atividade no momento.
+                  </div>
+                )}
+              </div>
             </div>
-          </>
+
+            {/* Botão Conectar com o WhatsApp */}
+            <button
+              onClick={handleConnectWhatsApp}
+              disabled={isConnecting}
+              className="w-full px-6 py-4 bg-[#25D366] text-white rounded-xl font-bold flex justify-between items-center hover:bg-[#128C7E] transition-all shadow-lg mb-5 disabled:opacity-50"
+            >
+              <div className="flex items-center gap-2">
+                <span>
+                  {isConnecting ? "Gerando QR Code..." : "Conectar o WhatsApp"}
+                </span>
+              </div>
+              {!isConnecting && <ArrowRight size={20} />}
+            </button>
+
+            {/* Modal do QR Code */}
+            {showQRModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                <div className="bg-white p-8 rounded-3xl w-full max-w-sm flex flex-col items-center shadow-2xl">
+                  <h3 className="text-xl font-bold mb-6 text-gray-800">
+                    Escaneie o QR Code
+                  </h3>
+
+                  {qrCodeBase64 ? (
+                    <div className="bg-white p-2 border-2 border-gray-100 rounded-xl">
+                      <img
+                        src={qrCodeBase64}
+                        alt="WhatsApp QR Code"
+                        className="w-64 h-64"
+                      />
+                    </div>
+                  ) : (
+                    <div className="h-64 flex items-center justify-center">
+                      <RefreshCw
+                        className="animate-spin text-[#25D366]"
+                        size={48}
+                      />
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => setShowQRModal(false)}
+                    className="mt-8 w-full bg-gray-100 text-gray-700 font-bold py-3 rounded-xl hover:bg-gray-200 transition-colors"
+                  >
+                    Fechar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
       )}
     </Layout>
   );

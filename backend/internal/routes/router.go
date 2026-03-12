@@ -88,7 +88,7 @@ func SetupRoutes(router *gin.Engine, logger *slog.Logger) {
 		protected.POST("/message", msgController.EnviarMensagem)
 		protected.GET("/instances", msgController.VerInstancias)
 		protected.POST("/instances", msgController.CriarInstanciaMsg)	
-		protected.GET("/instances/connect", msgController.ConectarInstancia)
+		protected.POST("/instances/connect", msgController.ConectarInstancia)
 
 	} // Rotas da documentação
 	api.GET("/doc", func(c *gin.Context) {

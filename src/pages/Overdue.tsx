@@ -27,6 +27,7 @@ interface LoanExtended extends Loan {
   };
 }
 
+
 const sendWhatsappApi = async (
   name: string,
   phone: string,
