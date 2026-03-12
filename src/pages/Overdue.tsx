@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import Layout from "../components/Layout";
 import Modal from "../components/Modal";
-import { loanService, clientService, Loan, Client } from "../services/api";
+import api, { loanService, clientService, Loan, Client } from "../services/api";
 import { calculateOverdueValue, formatMoney } from "../utils/finance";
 
 interface LoanExtended extends Loan {
@@ -34,17 +34,19 @@ const sendWhatsappApi = async (
   contract: string,
   lateDays: number,
   updatedAmount: number,
+  companyName: string,
 ) => {
   const response = await fetch("http://localhost:8080/api/message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      userconectado: "teste",
+      userconectado: companyName,
       phone: phone,
       delay: 1,
       name: name,
       lateDays: lateDays,
       updatedAmount: updatedAmount,
+      apiKey: "96CF28F9329F-44A3-80DB-5190D7B27185",
     }),
   });
 
@@ -177,7 +179,44 @@ const Overdue = () => {
   }, []);
 
   // --- FUNÇÃO DO WHATSAPP COM BOLA DE NEVE ---
+  interface WhatsAppInstance {
+    instanceName: string;
+    token: string;
+    status?: string;
+  }
+  const getInstanceToken = async (
+    targetName: string,
+    targetPhone: string
+  ): Promise<string | null> => {
+    try {
+      const response = await fetch(
+        "http://localhost:8080/api/instances/ver",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: targetName, phone: targetPhone }),
+        },
+      );
+
+      console.log("parametros: ", targetName, response)
+      // Tipamos o array de instâncias aqui também
+      const instances: WhatsAppInstance[] = await response.json();
+
+      // O TypeScript agora sabe que 'inst' tem a propriedade 'instanceName'
+      const targetInstance = instances.find(
+        (inst) => inst.instanceName === targetName,
+      );
+
+      return targetInstance ? targetInstance.token : null;
+    } catch (error) {
+      console.error("Erro ao buscar instâncias:", error);
+      return null;
+    }
+  };
+
   const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
+    const companyName = localStorage.getItem("companyName") || "";
+    const companyPhone = localStorage.getItem("companyPhone") || "";
     const client = clients.find((c) => c.name === loan.client);
 
     if (!client || !client.phone) {
@@ -197,13 +236,25 @@ const Overdue = () => {
     const diffDays = loan.diffDays || 0;
 
     try {
-      // 1. Tenta enviar pelo servidor (Evolution API/Golang)
+      // Busca o token
+      console.log(`Buscando token para a instância: ${companyName}...`);
+      const token = await getInstanceToken(companyName, companyPhone);
+
+      console.log(`Token recebido para "${companyName}":`, token);
+
+      if (!token) {
+        throw new Error(
+          `Token não encontrado para a instância "${companyName}"`,
+        );
+      }
+      // Tenta enviar pelo servidor (Evolution API/Golang)
       await sendWhatsappApi(
         loan.client,
         client.phone,
         contractCode,
         diffDays,
         snowball.totalUpdated,
+        companyName,
       );
       alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
     } catch (error) {

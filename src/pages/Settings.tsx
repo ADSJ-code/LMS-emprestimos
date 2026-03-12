@@ -223,6 +223,11 @@ const Settings = () => {
 
   // --- HANDLERS: EMPRESA ---
   const handleSave = async (e: React.FormEvent) => {
+    localStorage.setItem("companyName", settings.company.name);
+    localStorage.setItem(
+      "companyPhone",
+      settings.company.phone.replace(/\D/g, "") || "",
+    );
     e.preventDefault();
     setIsLoading(true);
     try {

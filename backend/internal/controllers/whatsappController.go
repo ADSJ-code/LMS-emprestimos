@@ -20,7 +20,7 @@ func NewWhatsappController(s services.WhatsappService) *WhatsappController {
 // Enviar msg de texto
 func (ctrl *WhatsappController) EnviarMensagem(c *gin.Context) {
 	var body struct {
-		UserConectado string `json:"user_conectado"`
+		UserConectado string `json:"userConectado" binding:"required"`
 		Phone      string `json:"phone" binding:"required"`
 		Message    string `json:"message"`
 		Delay	  int    `json:"delay"`
@@ -28,6 +28,7 @@ func (ctrl *WhatsappController) EnviarMensagem(c *gin.Context) {
 		LateDays  int    `json:"lateDays"`
 		UpdatedAmount float64 `json:"updatedAmount"`
 		DateVencimento string `json:"dateVencimento"`
+		ApiKey string `json:"apiKey" binding:"required"`
 	}
 
 
@@ -36,7 +37,7 @@ func (ctrl *WhatsappController) EnviarMensagem(c *gin.Context) {
 		return
 	}
 
-	err := ctrl.svc.SendMessage(c.Request.Context(), body.UserConectado, body.Phone, body.Message, body.Delay, body.Name, body.LateDays, body.UpdatedAmount, body.DateVencimento)
+	err := ctrl.svc.SendMessage(c.Request.Context(), body.UserConectado, body.Phone, body.Message, body.Delay, body.Name, body.LateDays, body.UpdatedAmount, body.DateVencimento, body.ApiKey)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

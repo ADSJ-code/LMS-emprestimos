@@ -86,7 +86,7 @@ func SetupRoutes(router *gin.Engine, logger *slog.Logger) {
 
 		// Mensagens WhatsApp
 		protected.POST("/message", msgController.EnviarMensagem)
-		protected.GET("/instances", msgController.VerInstancias)
+		protected.POST("/instances/ver", msgController.VerInstancias)
 		protected.POST("/instances", msgController.CriarInstanciaMsg)	
 		protected.POST("/instances/connect", msgController.ConectarInstancia)
 

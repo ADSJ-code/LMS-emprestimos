@@ -15,7 +15,7 @@ import (
 )
 
 type WhatsappService interface {
-	SendMessage(ctx context.Context, userConectado string, phone string, message string, delay int, name string, lateDays int, updatedAmount float64, dateVencimento string) error
+	SendMessage(ctx context.Context, userConectado string, phone string, message string, delay int, name string, lateDays int, updatedAmount float64, dateVencimento string, apiKey string) error
 	ViewInstances(ctx context.Context) ([]models.InstanceResponse, error)
 	CreateInstance(ctx context.Context, name string, phone string) (interface{}, error)
 	ConnectInstance(ctx context.Context, instanceName, number string) (interface{}, error)
@@ -24,7 +24,6 @@ type WhatsappService interface {
 type whatsappService struct {
 	ApiURL   string
 	ApiToken string
-	ApiKey   string
 	ApiGlobalKey string
 }
 
@@ -32,7 +31,6 @@ func NewWhatsappService() WhatsappService {
 	return &whatsappService{
 		ApiURL: "http://34.69.98.196:8080",
 		ApiToken: "5E603D2122C0-42C5-AFAD-FE1E8C0A3791",
-		ApiKey: "96CF28F9329F-44A3-80DB-5190D7B27185",
 		ApiGlobalKey: "VIDSFZs6I3FlZtnsbUoK",
 	}
 }
@@ -54,7 +52,7 @@ type MessagePayload struct {
 }
 
 
-func (s *whatsappService) SendMessage(ctx context.Context, userConectado string, phone string, message string, delayLevel int, name string, lateDays int, updatedAmount float64, dateVencimento string) error {
+func (s *whatsappService) SendMessage(ctx context.Context, userConectado string, phone string, message string, delayLevel int, name string, lateDays int, updatedAmount float64, dateVencimento string, apiKey string) error {
 	endPoint := "/message/sendText"
 	if userConectado == "" {
 		userConectado = "teste"
@@ -102,7 +100,7 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 
 	// Adiciona os Headers do seu curl
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.ApiKey)
+	req.Header.Set("apikey", apiKey)
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36")
 
