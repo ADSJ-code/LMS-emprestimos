@@ -35,50 +35,40 @@ const getApiUrl = localStorage.getItem("getApiUrl") || "";
 const getInstanceToken = async (
    targetName: string,
    targetPhone: string,
- ): Promise<string | null> => {
+ ): Promise<{ instanceName: string; apikey: string } | null> => {
    try {
      const response = await fetch(getApiUrl+ "/api/instances/ver", {
        method: "POST",
        headers: { "Content-Type": "application/json" },
-       body: JSON.stringify({
-         name: targetName, // Verifique se no Go o campo é 'name' ou 'instanceName'
-         phone: targetPhone,
-       }),
+       body: JSON.stringify({ name: targetName, phone: targetPhone }),
      });
 
-     // Se o status não for 200, ele já lança erro para o catch
      if (!response.ok) {
        const errorText = await response.text();
        throw new Error(`Erro HTTP ${response.status}: ${errorText}`);
      }
 
      const data = await response.json();
-
-     // Garantimos que 'list' seja um array, não importa o que venha
-     const list = Array.isArray(data)
-       ? data
-       : data.data || data.instances || [];
+     const list = Array.isArray(data) ? data : data.data || data.instances || [];
 
      if (list.length === 0) {
        console.warn("A lista de instâncias veio vazia.");
        return null;
      }
 
-     // Buscamos a instância pelo nome
-     // Dica: use toUpperCase() ou trim() se houver risco de espaços extras
      const targetInstance = list.find((inst: any) =>
        inst.instance?.instanceName?.toString().trim().toLowerCase() ===
        targetName.trim().toLowerCase()
      );
 
-     if (targetInstance?.instance?.apikey) {
-       return targetInstance.instance.apikey;
+     if (targetInstance?.instance?.instanceName && targetInstance?.instance?.apikey) {
+       return { instanceName: targetInstance.instance.instanceName, apikey: targetInstance.instance.apikey };
      }
 
      // Fallback: primeira instância aberta
      const fallback = list.find((inst: any) => inst.instance?.status === "open");
-     if (fallback?.instance?.apikey) {
-       return fallback.instance.apikey;
+     if (fallback?.instance?.instanceName && fallback?.instance?.apikey) {
+       return { instanceName: fallback.instance.instanceName, apikey: fallback.instance.apikey };
      }
 
      console.warn(`❌ Nenhuma instância aberta encontrada.`);
@@ -199,21 +189,20 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
 
   const formattedDate = formatDisplayDate(loan.nextDue);
   try {
-    const token = await getInstanceToken(companyName, companyPhone);
+    const instance = await getInstanceToken(companyName, companyPhone);
 
-    if (!token) {
-      throw new Error(`Token não encontrado para a instância "${client.name}"`);
+    if (!instance) {
+      throw new Error(`Instância WhatsApp não encontrada.`);
     }
-    console.log("Token obtido:", token);
     await sendWhatsappApi(
       client.name,
       cleanPhone,
       contractCode,
       diffDays,
-      loan.installmentValue, // Valor seguro
-      formattedDate, // Data formatada
-      companyName,
-      token,
+      loan.installmentValue,
+      formattedDate,
+      instance.instanceName,
+      instance.apikey,
     );
     alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
   } catch (error) {

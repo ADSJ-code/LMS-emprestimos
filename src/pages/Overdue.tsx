@@ -172,7 +172,7 @@ const Overdue = () => {
   }, []);
 
   // --- FUNÇÃO DO WHATSAPP COM BOLA DE NEVE ---
-  const getInstanceToken = async (targetName: string, targetPhone: string): Promise<string | null> => {
+  const getInstanceToken = async (targetName: string, targetPhone: string): Promise<{ instanceName: string; apikey: string } | null> => {
     try {
       const response = await fetch(getApiUrl + "/api/instances/ver", {
         method: "POST",
@@ -182,23 +182,23 @@ const Overdue = () => {
       if (!response.ok) return null;
 
       const data = await response.json();
-      const list = Array.isArray(data)
-        ? data
-        : data.data || data.instances || [];
+      const list = Array.isArray(data) ? data : data.data || data.instances || [];
 
       if (list.length === 0) return null;
 
       const targetInstance = list.find(
         (inst: any) =>
-          inst.instance.instanceName?.toString().trim().toLowerCase() ===
+          inst.instance?.instanceName?.toString().trim().toLowerCase() ===
           targetName.trim().toLowerCase(),
       );
 
-      if (targetInstance?.instance?.apikey) return targetInstance.instance.apikey;
+      if (targetInstance?.instance?.instanceName && targetInstance?.instance?.apikey)
+        return { instanceName: targetInstance.instance.instanceName, apikey: targetInstance.instance.apikey };
 
       // Fallback: primeira instância aberta
-      const fallback = list.find((inst: any) => inst.instance.status === "open");
-      if (fallback?.instance?.apikey) return fallback.instance.apikey;
+      const fallback = list.find((inst: any) => inst.instance?.status === "open");
+      if (fallback?.instance?.instanceName && fallback?.instance?.apikey)
+        return { instanceName: fallback.instance.instanceName, apikey: fallback.instance.apikey };
 
       return null;
     } catch (error) {
@@ -230,9 +230,9 @@ const Overdue = () => {
     const companyPhone = localStorage.getItem("companyPhone") || "";
 
     try {
-      const token = await getInstanceToken(companyName, companyPhone);
+      const instance = await getInstanceToken(companyName, companyPhone);
 
-      if (!token) {
+      if (!instance) {
         throw new Error("Instância WhatsApp não encontrada.");
       }
       // Tenta enviar pelo servidor (Evolution API/Golang)
@@ -242,8 +242,8 @@ const Overdue = () => {
         contractCode,
         diffDays,
         snowball.totalUpdated,
-        companyName,
-        token,
+        instance.instanceName,
+        instance.apikey,
       );
       alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
     } catch (error) {
