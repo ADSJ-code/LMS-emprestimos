@@ -205,6 +205,7 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
     if (!token) {
       throw new Error(`Token não encontrado para a instância "${client.name}"`);
     }
+    console.log("Token obtido:", token);
     await sendWhatsappApi(
       client.name,
       cleanPhone,
