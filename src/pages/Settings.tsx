@@ -123,6 +123,33 @@ const Settings = () => {
   const [showQRModal, setShowQRModal] = useState(false);
   const [qrCodeBase64, setQrCodeBase64] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+  const [whatsappStatus, setWhatsappStatus] = useState<"unknown" | "open" | "close">("unknown");
+
+  const handleCheckWhatsAppStatus = async () => {
+    if (!settings.company.name) return;
+    setIsCheckingStatus(true);
+    try {
+      const response = await fetch(`${getApiUrl()}/api/instances/ver`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: settings.company.name, phone: settings.company.phone }),
+      });
+      const data = await response.json();
+      const list: any[] = Array.isArray(data) ? data : data.data || data.instances || [];
+      const instance = list.find(
+        (inst: any) =>
+          inst.instance?.instanceName?.toString().trim().toLowerCase() ===
+          settings.company.name.trim().toLowerCase()
+      ) || list[0];
+      const status = instance?.instance?.status || "close";
+      setWhatsappStatus(status === "open" ? "open" : "close");
+    } catch {
+      setWhatsappStatus("close");
+    } finally {
+      setIsCheckingStatus(false);
+    }
+  };
 
   // FUNÇÃO DE CONEXÃO INTEGRADA COM BACKEND GO
   const handleConnectWhatsApp = async (nome: string, phone: string) => {
@@ -692,15 +719,36 @@ const Settings = () => {
                       </p>
                     )}
                   </div>
-                  <div className="flex flex-col items-center justify-center p-8 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
+                  <div className="flex flex-col items-center justify-center p-8 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 gap-3">
                     <Activity
-                      className={qrCodeBase64 ? "text-green-600" : "text-slate-400"}
+                      className={
+                        whatsappStatus === "open" ? "text-green-500" :
+                        whatsappStatus === "close" ? "text-red-400" :
+                        "text-slate-400"
+                      }
                       size={32}
                     />
-                    <span className="text-sm font-bold mt-2 text-slate-700">Status</span>
-                    <span className={`text-xs font-bold mt-1 ${qrCodeBase64 ? "text-green-600" : "text-slate-400"}`}>
-                      {qrCodeBase64 ? "Pronto para Escanear" : "Desconectado"}
-                    </span>
+                    <div className="text-center">
+                      <span className="text-sm font-bold text-slate-700 block">Status da Conexão</span>
+                      <span className={`text-xs font-bold mt-1 block ${
+                        whatsappStatus === "open" ? "text-green-600" :
+                        whatsappStatus === "close" ? "text-red-500" :
+                        "text-slate-400"
+                      }`}>
+                        {whatsappStatus === "open" ? "✅ Conectado" :
+                         whatsappStatus === "close" ? "❌ Desconectado" :
+                         "— Não verificado"}
+                      </span>
+                    </div>
+                    <button
+                      onClick={handleCheckWhatsAppStatus}
+                      disabled={isCheckingStatus || !settings.company.name}
+                      className="mt-1 px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-100 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                    >
+                      {isCheckingStatus
+                        ? <><Loader2 size={13} className="animate-spin" /> Verificando...</>
+                        : <><RefreshCw size={13} /> Verificar Status</>}
+                    </button>
                   </div>
                 </div>
               </div>
