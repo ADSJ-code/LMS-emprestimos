@@ -222,8 +222,11 @@ const Settings = () => {
         }
       }
 
+      console.log("Resposta conexão WhatsApp:", JSON.stringify(data, null, 2));
       const qrCode = data.details?.base64 || data.base64;
-      const code = data.details?.code || data.code || "";
+      const rawCode = data.details?.pairingCode || data.pairingCode || data.details?.code || data.code || "";
+      // Pairing code válido tem 8 caracteres alfanuméricos (ex: "A1B2C3D4" ou "ABCD-EFGH")
+      const code = /^[A-Z0-9\-]{4,8}$/i.test(rawCode) ? rawCode : "";
 
       if (qrCode) {
         setQrCodeBase64(qrCode);
