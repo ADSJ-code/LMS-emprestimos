@@ -172,23 +172,13 @@ const Overdue = () => {
   }, []);
 
   // --- FUNÇÃO DO WHATSAPP COM BOLA DE NEVE ---
-  const getInstanceToken = async (): Promise<{ name: string; key: string } | null> => {
+  const getInstanceToken = async (targetName: string, targetPhone: string): Promise<string | null> => {
     try {
-      let companyPhone = "";
-      try {
-        const authToken = localStorage.getItem("token");
-        const settingsRes = await fetch(getApiUrl + `/api/settings`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
-        if (settingsRes.ok) {
-          const settingsData = await settingsRes.json();
-          companyPhone = settingsData?.company?.phone || "";
-        }
-      } catch {
-        companyPhone = localStorage.getItem("companyPhone") || "";
-      }
-
-      const response = await fetch(getApiUrl + "/api/instances/ver");
+      const response = await fetch(getApiUrl + "/api/instances/ver", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: targetName, phone: targetPhone }),
+      });
       if (!response.ok) return null;
 
       const data = await response.json();
@@ -198,25 +188,17 @@ const Overdue = () => {
 
       if (list.length === 0) return null;
 
-      // Tenta encontrar pelo telefone primeiro (igual ao Billing.tsx)
-      let targetPhone = companyPhone.replace(/\D/g, "");
-      if (targetPhone.length >= 10 && !targetPhone.startsWith("55")) {
-        targetPhone = "55" + targetPhone;
-      }
+      const targetInstance = list.find(
+        (inst: any) =>
+          inst.instance.instanceName?.toString().trim().toLowerCase() ===
+          targetName.trim().toLowerCase(),
+      );
 
-      if (targetPhone) {
-        const phoneMatch = list.find(
-          (inst: any) =>
-            inst.instance.status === "open" &&
-            inst.instance.owner &&
-            inst.instance.owner.includes(targetPhone),
-        );
-        if (phoneMatch) return { name: phoneMatch.instance.instanceName, key: phoneMatch.instance.apikey };
-      }
+      if (targetInstance?.instance?.apikey) return targetInstance.instance.apikey;
 
       // Fallback: primeira instância aberta
       const fallback = list.find((inst: any) => inst.instance.status === "open");
-      if (fallback) return { name: fallback.instance.instanceName, key: fallback.instance.apikey };
+      if (fallback?.instance?.apikey) return fallback.instance.apikey;
 
       return null;
     } catch (error) {
@@ -244,10 +226,13 @@ const Overdue = () => {
     const contractCode = `CTR-${loan.id?.substring(0, 6).toUpperCase()}`;
     const diffDays = loan.diffDays || 0;
 
-    try {
-      const instance = await getInstanceToken();
+    const companyName = localStorage.getItem("companyName") || "";
+    const companyPhone = localStorage.getItem("companyPhone") || "";
 
-      if (!instance) {
+    try {
+      const token = await getInstanceToken(companyName, companyPhone);
+
+      if (!token) {
         throw new Error("Instância WhatsApp não encontrada.");
       }
       // Tenta enviar pelo servidor (Evolution API/Golang)
@@ -257,8 +242,8 @@ const Overdue = () => {
         contractCode,
         diffDays,
         snowball.totalUpdated,
-        instance.name,
-        instance.key,
+        companyName,
+        token,
       );
       alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
     } catch (error) {

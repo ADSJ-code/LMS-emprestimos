@@ -66,23 +66,22 @@ const getInstanceToken = async (
 
      // Buscamos a instância pelo nome
      // Dica: use toUpperCase() ou trim() se houver risco de espaços extras
-     const targetInstance = list.find((inst: any) => {
-       const nameInApi = inst.instance.instanceName;
+     const targetInstance = list.find((inst: any) =>
+       inst.instance?.instanceName?.toString().trim().toLowerCase() ===
+       targetName.trim().toLowerCase()
+     );
 
-       return (
-         nameInApi?.toString().trim().toLowerCase() ===
-         targetName.trim().toLowerCase()
-       );
-     });
-     var instance = targetInstance.instance;
-
-     if (instance.instanceName && instance.apikey) {
-       return instance.apikey;
+     if (targetInstance?.instance?.apikey) {
+       return targetInstance.instance.apikey;
      }
 
-     console.warn(
-       `❌ Instância "${targetName}" não encontrada na lista de ${targetInstance.length} itens.`,
-     );
+     // Fallback: primeira instância aberta
+     const fallback = list.find((inst: any) => inst.instance?.status === "open");
+     if (fallback?.instance?.apikey) {
+       return fallback.instance.apikey;
+     }
+
+     console.warn(`❌ Nenhuma instância aberta encontrada.`);
      return null;
    } catch (error) {
      console.error("❌ Erro fatal no getInstanceToken:", error);
@@ -106,7 +105,7 @@ const sendWhatsappApi = async (
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      userconectado: companyName,
+      userConectado: companyName,
       phone: phone,
       delay: 2,
       name: name,
