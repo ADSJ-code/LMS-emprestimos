@@ -53,7 +53,6 @@ const sendWhatsappApi = async (
   });
 
   if (!response.ok) throw new Error("Falha ao enviar via API");
-  return response.json();
 };
 
 const Overdue = () => {
@@ -229,7 +228,6 @@ const Overdue = () => {
   const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
     const client = clients.find((c) => c.name === loan.client);
 
-    console.log("Cliente encontrado:", loan);
     if (!client || !client.phone) {
       alert("❌ Erro: Telefone do cliente não encontrado.");
       return;
@@ -269,6 +267,8 @@ const Overdue = () => {
 
       const message = `Olá ${firstName}, identificamos ${parcelasText} totalizando R$ ${formatMoney(snowball.totalUpdated)} (valor atualizado) referente ao seu contrato ${contractCode}.\n\nPodemos agendar um pagamento para regularizar?`;
 
+
+      console.log("Mensagem de erro:", error);
       const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
       window.open(url, "_blank");
     }

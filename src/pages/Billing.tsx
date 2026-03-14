@@ -20,9 +20,75 @@ interface ChecklistItem {
   id: string; label: string; weight: number; checked: boolean; stage: 1 | 2;
 }
 
+interface LoanExtended extends Loan {
+  diffDays: number;
+  snowball: {
+    totalOriginal: number;
+    totalUpdated: number;
+    missedInstallments: any[];
+  };
+}
 type LoanFlowStep = 'closed' | 'form' | 'checklist';
 
 const getApiUrl = localStorage.getItem("getApiUrl") || "";
+
+const getInstanceToken = async (
+   targetName: string,
+   targetPhone: string,
+ ): Promise<string | null> => {
+   try {
+     const response = await fetch(getApiUrl+ "/api/instances/ver", {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({
+         name: targetName, // Verifique se no Go o campo é 'name' ou 'instanceName'
+         phone: targetPhone,
+       }),
+     });
+
+     // Se o status não for 200, ele já lança erro para o catch
+     if (!response.ok) {
+       const errorText = await response.text();
+       throw new Error(`Erro HTTP ${response.status}: ${errorText}`);
+     }
+
+     const data = await response.json();
+
+     // Garantimos que 'list' seja um array, não importa o que venha
+     const list = Array.isArray(data)
+       ? data
+       : data.data || data.instances || [];
+
+     if (list.length === 0) {
+       console.warn("A lista de instâncias veio vazia.");
+       return null;
+     }
+
+     // Buscamos a instância pelo nome
+     // Dica: use toUpperCase() ou trim() se houver risco de espaços extras
+     const targetInstance = list.find((inst: any) => {
+       const nameInApi = inst.instance.instanceName;
+
+       return (
+         nameInApi?.toString().trim().toLowerCase() ===
+         targetName.trim().toLowerCase()
+       );
+     });
+     var instance = targetInstance.instance;
+
+     if (instance.instanceName && instance.apikey) {
+       return instance.apikey;
+     }
+
+     console.warn(
+       `❌ Instância "${targetName}" não encontrada na lista de ${targetInstance.length} itens.`,
+     );
+     return null;
+   } catch (error) {
+     console.error("❌ Erro fatal no getInstanceToken:", error);
+     return null;
+   }
+ };
 
 const sendWhatsappApi = async (
   name: string,
@@ -30,73 +96,29 @@ const sendWhatsappApi = async (
   contract: string,
   lateDays: number,
   updatedAmount: number,
-  instanceName: string,
+  dateVencimento: string,
+  companyName: string,
   token: string,
 ) => {
-  const response = await fetch(getApiUrl+`/api/message`, {
+
+  // Enviar via API
+  const response = await fetch(getApiUrl+"/api/message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      userConectado: instanceName,
+      userconectado: companyName,
       phone: phone,
-      delay: 2, 
+      delay: 2,
       name: name,
       lateDays: lateDays,
       updatedAmount: updatedAmount,
       apiKey: token,
+      dateVencimento: dateVencimento,
     }),
   });
 
   if (!response.ok) throw new Error("Falha ao enviar via API");
-  return response.json();
-};
-
-const getInstanceToken = async (): Promise<{name: string, key: string} | null> => {
-  try {
-    let companyPhone = "";
-    try {
-      const token = localStorage.getItem("token");
-      const settingsRes = await fetch(getApiUrl+`/api/settings`, {
-        headers: { "Authorization": `Bearer ${token}` }
-      });
-      if (settingsRes.ok) {
-        const settingsData = await settingsRes.json();
-        companyPhone = settingsData?.company?.phone || "";
-      }
-    } catch (e) {
-      companyPhone = localStorage.getItem("companyPhone") || "";
-    }
-
-    const response = await fetch(getApiUrl+`/api/instances/ver`);
-    if (!response.ok) return null;
-    const data = await response.json();
-    const list = Array.isArray(data) ? data : data.data || data.instances || [];
-    
-    let targetPhone = companyPhone.replace(/\D/g, "");
-    if (targetPhone.length >= 10 && !targetPhone.startsWith("55")) {
-      targetPhone = "55" + targetPhone;
-    }
-
-    if (targetPhone) {
-      const exactPhoneMatch = list.find((inst: any) => 
-        inst.instance.status === "open" && 
-        inst.instance.owner && 
-        inst.instance.owner.includes(targetPhone)
-      );
-      if (exactPhoneMatch) return { name: exactPhoneMatch.instance.instanceName, key: exactPhoneMatch.instance.apikey };
-    }
-    
-    const aaaaaMatch = list.find((inst: any) => inst.instance.status === "open" && inst.instance.instanceName === "aaaaa");
-    if (aaaaaMatch) return { name: aaaaaMatch.instance.instanceName, key: aaaaaMatch.instance.apikey };
-
-    const fallback = list.find((inst: any) => inst.instance.status === "open");
-    if (fallback) return { name: fallback.instance.instanceName, key: fallback.instance.apikey };
-    
-    return null;
-  } catch (error) { 
-    return null; 
-  }
-};
+};;
 
 const Billing = () => {
   const [loanFlowStep, setLoanFlowStep] = useState<LoanFlowStep>('closed'); 
@@ -151,6 +173,60 @@ const Billing = () => {
       hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: ''
   });
   
+const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
+  const companyName = localStorage.getItem("companyName") || "";
+  const companyPhone = localStorage.getItem("companyPhone") || "";
+  // Se snowball for undefined, usamos um fallback para não dar erro de "length"
+  const safeSnowball = snowball || { missedInstallments: [], totalUpdated: 0 };
+
+  const client = availableClients.find((c) => c.name === loan.client);
+
+  if (!client || !client.phone) {
+    alert("❌ Erro: Telefone do cliente não encontrado.");
+    return;
+  }
+
+  const cleanPhone = client.phone.replace(/\D/g, "");
+  const firstName = loan.client.split(" ")[0];
+
+  // Usamos o safeSnowball aqui
+  const parcelasText =
+    safeSnowball.missedInstallments.length > 1
+      ? `${safeSnowball.missedInstallments.length} parcelas pendentes`
+      : `uma pendência`;
+
+  const contractCode = `CTR-${loan.id?.substring(0, 6).toUpperCase()}`;
+  const diffDays = loan.diffDays || 0;
+
+  const formattedDate = formatDisplayDate(loan.nextDue);
+  try {
+    const token = await getInstanceToken(companyName, companyPhone);
+
+    if (!token) {
+      throw new Error(`Token não encontrado para a instância "${client.name}"`);
+    }
+    await sendWhatsappApi(
+      client.name,
+      cleanPhone,
+      contractCode,
+      diffDays,
+      loan.installmentValue, // Valor seguro
+      formattedDate, // Data formatada
+      companyName,
+      token,
+    );
+    alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
+  } catch (error) {
+    // 2. Fallback: Se a API falhar, abre o link direto do WhatsApp Web
+    console.warn("API Offline, usando link direto...");
+
+    const message = `Olá, ${client.name}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loan.installmentValue)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
+
+    const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
+    window.open(url, "_blank");
+  }
+};
+
   const [simulation, setSimulation] = useState({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
 
   const formatDisplayDate = (dateString: string) => {
@@ -281,68 +357,61 @@ const Billing = () => {
       return dateObj.toLocaleDateString('pt-BR');
   }
 
-  const handleMassMessage = async () => {
-      if (selectedIds.length === 0) return;
-      
-      const confirmMass = window.confirm(`Você está prestes a enviar mensagens para ${selectedIds.length} cliente(s) via API.\n\nDeseja continuar?`);
-      if (!confirmMass) return;
+ const handleMassMessage = async () => {
+   if (selectedIds.length === 0) return;
 
-      const instance = await getInstanceToken();
+   const confirmMass = window.confirm(
+     `Você está prestes a abrir o WhatsApp para ${selectedIds.length} cliente(s).\n\nDeseja continuar? (O navegador pode bloquear se forem muitas abas, você precisará permitir pop-ups)`,
+   );
+   if (!confirmMass) return;
 
-      const selectedLoansData = loans.filter(l => selectedIds.includes(l.id));
+   const selectedLoansData = loans.filter((l) => selectedIds.includes(l.id));
 
-      for (let i = 0; i < selectedLoansData.length; i++) {
-          const loan = selectedLoansData[i];
-          const client = availableClients.find(c => c.name === loan.client);
-          
-          if (client && client.phone) {
-              if (instance) {
-                try {
-                  await sendWhatsappApi(client.name, client.phone, loan.id, 0, loan.installmentValue, instance.name, instance.key);
-                  await new Promise(resolve => setTimeout(resolve, 800));
-                } catch (e) { console.error(e); }
-              } else {
-                const cleanPhone = client.phone.replace(/\D/g, '');
-                const formattedDate = formatDisplayDate(loan.nextDue);
-                const status = getLoanRealStatus(loan);
-                let message = `Olá, ${client.name}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loan.installmentValue)} no dia ${formattedDate}.`;
-                if (status === 'Atrasado') {
-                     message = `Olá, ${client.name}! Consta em nosso sistema uma parcela em atraso referente ao dia ${formattedDate}. Por favor, entre em contato.`;
-                }
-                const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
-                window.open(url, '_blank');
-                await new Promise(resolve => setTimeout(resolve, 800));
-              }
-          }
-      }
-      alert("✅ Disparos concluídos!");
-      setSelectedIds([]); 
-  };
+   for (let i = 0; i < selectedLoansData.length; i++) {
+     const loan = selectedLoansData[i];
+     const client = availableClients.find((c) => c.name === loan.client);
 
-  const handleOpenWhatsApp = async (clientName: string, loanAmount: number, dueDate: string, e?: React.MouseEvent) => {
-      if (e) e.stopPropagation();
-      setOpenMenuId(null);
+     if (client && client.phone) {
+       const cleanPhone = client.phone.replace(/\D/g, "");
+       const formattedDate = formatDisplayDate(loan.nextDue);
+       const status = getLoanRealStatus(loan);
 
-      const client = availableClients.find(c => c.name === clientName);
+       let message = `Olá, ${client.name}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loan.installmentValue)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
 
-      if (!client || !client.phone) {
-          alert("Telefone do cliente não encontrado no cadastro.");
-          return;
-      }
-      
-      const cleanPhone = client.phone.replace(/\D/g, '');
-      const formattedDate = formatDisplayDate(dueDate);
-      const message = `Olá, ${clientName}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loanAmount)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
-      
-      try {
-        const instance = await getInstanceToken();
-        if (!instance) throw new Error("Token não encontrado");
-        await sendWhatsappApi(clientName, client.phone, "COBRANÇA", 0, loanAmount, instance.name, instance.key);
-        alert(`✅ Mensagem de cobrança enviada com sucesso para ${clientName}!`);
-      } catch (error) {
-        const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
-        window.open(url, '_blank');
-      }
+       if (status === "Atrasado") {
+         message = `Olá, ${client.name}! Consta em nosso sistema uma parcela em atraso referente ao dia ${formattedDate}. Por favor, entre em contato para regularizarmos a situação.`;
+       }
+
+       const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
+       window.open(url, "_blank");
+
+       // Pequeno delay para evitar travamento do navegador se forem muitos clientes
+       await new Promise((resolve) => setTimeout(resolve, 800));
+     }
+   }
+   setSelectedIds([]); // Limpa a seleção após envio
+ };
+
+  const handleOpenWhatsApp = (
+    clientName: string,
+    loanAmount: number,
+    dueDate: string,
+    e?: React.MouseEvent,
+  ) => {
+    if (e) e.stopPropagation();
+    setOpenMenuId(null);
+    const client = availableClients.find((c) => c.name === clientName);
+    if (!client || !client.phone) {
+      alert("Telefone do cliente não encontrado no cadastro.");
+      return;
+    }
+
+    const cleanPhone = client.phone.replace(/\D/g, "");
+    const formattedDate = formatDisplayDate(dueDate);
+    const message = `Olá, ${clientName}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loanAmount)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
+
+    const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
+    window.open(url, "_blank");
   };
 
   const renderSchedule = (loan: Loan) => {
@@ -1097,49 +1166,189 @@ const Billing = () => {
                 {filteredLoans.length === 0 ? (<tr><td colSpan={10} className="p-8 text-center text-slate-400">Nenhum contrato encontrado.</td></tr>) : (filteredLoans.map(loan => {
                     const displayStatus = getLoanRealStatus(loan);
                     return (
-                        <tr key={loan.id} className={`transition-colors group ${selectedIds.includes(loan.id) ? 'bg-blue-50/50' : 'hover:bg-slate-50/80'}`}>
-                            <td className="p-4 text-center"><input type="checkbox" checked={selectedIds.includes(loan.id)} onChange={() => toggleSelectOne(loan.id)} className="w-4 h-4 rounded border-gray-300 text-slate-900 cursor-pointer"/></td>
-                            <td className="p-4"><div className="font-bold text-slate-800">{loan.client}</div><div className="text-[10px] font-mono text-slate-400">{loan.id}</div></td>
-                            <td className="p-4 text-center"><span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">{loan.installments}x</span></td>
-                            <td className="p-4 text-center"><span className={`font-bold text-sm ${displayStatus === 'Atrasado' ? 'text-red-600' : 'text-slate-700'}`}>{formatDisplayDate(loan.nextDue)}</span></td>
-                            
-                            <td className="p-4 text-center text-sm font-bold text-blue-600">{getLastPaymentDate(loan)}</td>
+                      <tr
+                        key={loan.id}
+                        className={`transition-colors group ${selectedIds.includes(loan.id) ? "bg-blue-50/50" : "hover:bg-slate-50/80"}`}
+                      >
+                        <td className="p-4 text-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(loan.id)}
+                            onChange={() => toggleSelectOne(loan.id)}
+                            className="w-4 h-4 rounded border-gray-300 text-slate-900 cursor-pointer"
+                          />
+                        </td>
+                        <td className="p-4">
+                          <div className="font-bold text-slate-800">
+                            {loan.client}
+                          </div>
+                          <div className="text-[10px] font-mono text-slate-400">
+                            {loan.id}
+                          </div>
+                        </td>
+                        <td className="p-4 text-center">
+                          <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">
+                            {loan.installments}x
+                          </span>
+                        </td>
+                        <td className="p-4 text-center">
+                          <span
+                            className={`font-bold text-sm ${displayStatus === "Atrasado" ? "text-red-600" : "text-slate-700"}`}
+                          >
+                            {formatDisplayDate(loan.nextDue)}
+                          </span>
+                        </td>
 
-                            <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(Math.max(0, loan.amount - (loan.totalPaidCapital || 0)))}</td>
-                            
-                            <td className="p-4 text-right font-bold text-green-600 bg-green-50/30 rounded">R$ {formatMoney(loan.totalPaidInterest || 0)}</td>
-                            <td className="p-4 text-right font-bold text-slate-500">R$ {formatMoney(loan.installmentValue)}</td>
-                            
-                            <td className="p-4 text-center">
-                                <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase shadow-sm ${
-                                    displayStatus === 'Em Dia' ? 'bg-blue-50 text-blue-700 border border-blue-100' : 
-                                    displayStatus === 'Atrasado' ? 'bg-red-50 text-red-700 border border-red-100' : 
-                                    displayStatus === 'Acordo' ? 'bg-orange-50 text-orange-700 border border-orange-100' : 
-                                    displayStatus === 'Quitado' ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-gray-100 text-gray-500'}`}>
-                                    {displayStatus}
-                                </span>
-                            </td>
-                            <td className="p-4 text-right relative">
-                                <button onClick={(e) => handleOpenWhatsApp(loan.client, loan.installmentValue, loan.nextDue, e)} className="p-2 mr-1 rounded-lg text-green-500 hover:bg-green-50 transition-colors inline-block"><MessageCircle size={18}/></button>
-                                
-                                <div className="relative inline-block text-left"><button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === loan.id ? null : loan.id); }} className={`p-2 rounded-lg transition-all ${openMenuId === loan.id ? 'bg-slate-200 text-slate-900' : 'text-slate-400 hover:text-slate-900 hover:bg-slate-100'}`}><MoreVertical size={18} /></button>
-                                {openMenuId === loan.id && (<div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right"><div className="py-1">
-                                    <button onClick={() => { setSelectedLoan(loan); setDetailTab('info'); setIsDetailsOpen(true); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><Eye size={16} className="text-blue-500" /> Ver Detalhes</button>
-                                    
-                                    {displayStatus !== 'Quitado' && (
-                                        <>
-                                            <button onClick={() => { handleOpenPayment(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><DollarSign size={16} className="text-green-600" /> Registrar Baixa</button>
-                                            <button onClick={() => { handleOpenAgreement(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-orange-700 hover:bg-orange-50 flex items-center gap-2"><FileSignature size={16} /> Registrar Acordo</button>
-                                        </>
-                                    )}
-                                    
-                                    <div className="border-t border-slate-100 my-1"></div>
-                                    <button onClick={() => { const c = availableClients.find(cl => cl.name === loan.client); generateContractPDF(loan, c); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><Printer size={16} /> Contrato PDF</button>
-                                    <button onClick={() => { const c = availableClients.find(cl => cl.name === loan.client); generatePromissoryPDF(loan, c); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><FileText size={16} /> Promissórias</button>
-                                    <div className="border-t border-slate-100 my-1"></div>
-                                    <button onClick={() => { handleDelete(loan.id); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"><Trash2 size={16} /> Excluir</button>
-                                </div></div>)}</div></td>
-                        </tr>
+                        <td className="p-4 text-center text-sm font-bold text-blue-600">
+                          {getLastPaymentDate(loan)}
+                        </td>
+
+                        <td className="p-4 text-right font-bold text-slate-700">
+                          R${" "}
+                          {formatMoney(
+                            Math.max(
+                              0,
+                              loan.amount - (loan.totalPaidCapital || 0),
+                            ),
+                          )}
+                        </td>
+
+                        <td className="p-4 text-right font-bold text-green-600 bg-green-50/30 rounded">
+                          R$ {formatMoney(loan.totalPaidInterest || 0)}
+                        </td>
+                        <td className="p-4 text-right font-bold text-slate-500">
+                          R$ {formatMoney(loan.installmentValue)}
+                        </td>
+
+                        <td className="p-4 text-center">
+                          <span
+                            className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase shadow-sm ${
+                              displayStatus === "Em Dia"
+                                ? "bg-blue-50 text-blue-700 border border-blue-100"
+                                : displayStatus === "Atrasado"
+                                  ? "bg-red-50 text-red-700 border border-red-100"
+                                  : displayStatus === "Acordo"
+                                    ? "bg-orange-50 text-orange-700 border border-orange-100"
+                                    : displayStatus === "Quitado"
+                                      ? "bg-green-50 text-green-700 border border-green-100"
+                                      : "bg-gray-100 text-gray-500"
+                            }`}
+                          >
+                            {displayStatus}
+                          </span>
+                        </td>
+                        <td className="p-4 text-right relative">
+                          <button
+                            onClick={() => {
+                              const loanExt = loan as LoanExtended;
+                              handleWhatsApp(loanExt, loanExt.snowball);
+                            }}
+                            className="p-2 bg-green-100 text-green-700 rounded-lg"
+                            title="Whatsapp"
+                          >
+                            <MessageCircle size={18} />
+                          </button>
+
+                          <div className="relative inline-block text-left">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenMenuId(
+                                  openMenuId === loan.id ? null : loan.id,
+                                );
+                              }}
+                              className={`p-2 rounded-lg transition-all ${openMenuId === loan.id ? "bg-slate-200 text-slate-900" : "text-slate-400 hover:text-slate-900 hover:bg-slate-100"}`}
+                            >
+                              <MoreVertical size={18} />
+                            </button>
+                            {openMenuId === loan.id && (
+                              <div
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right"
+                              >
+                                <div className="py-1">
+                                  <button
+                                    onClick={() => {
+                                      setSelectedLoan(loan);
+                                      setDetailTab("info");
+                                      setIsDetailsOpen(true);
+                                      setOpenMenuId(null);
+                                    }}
+                                    className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                                  >
+                                    <Eye size={16} className="text-blue-500" />{" "}
+                                    Ver Detalhes
+                                  </button>
+
+                                  {displayStatus !== "Quitado" && (
+                                    <>
+                                      <button
+                                        onClick={() => {
+                                          handleOpenPayment(loan);
+                                          setOpenMenuId(null);
+                                        }}
+                                        className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                                      >
+                                        <DollarSign
+                                          size={16}
+                                          className="text-green-600"
+                                        />{" "}
+                                        Registrar Baixa
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          handleOpenAgreement(loan);
+                                          setOpenMenuId(null);
+                                        }}
+                                        className="w-full text-left px-4 py-3 text-sm text-orange-700 hover:bg-orange-50 flex items-center gap-2"
+                                      >
+                                        <FileSignature size={16} /> Registrar
+                                        Acordo
+                                      </button>
+                                    </>
+                                  )}
+
+                                  <div className="border-t border-slate-100 my-1"></div>
+                                  <button
+                                    onClick={() => {
+                                      const c = availableClients.find(
+                                        (cl) => cl.name === loan.client,
+                                      );
+                                      generateContractPDF(loan, c);
+                                      setOpenMenuId(null);
+                                    }}
+                                    className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                                  >
+                                    <Printer size={16} /> Contrato PDF
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      const c = availableClients.find(
+                                        (cl) => cl.name === loan.client,
+                                      );
+                                      generatePromissoryPDF(loan, c);
+                                      setOpenMenuId(null);
+                                    }}
+                                    className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                                  >
+                                    <FileText size={16} /> Promissórias
+                                  </button>
+                                  <div className="border-t border-slate-100 my-1"></div>
+                                  <button
+                                    onClick={() => {
+                                      handleDelete(loan.id);
+                                      setOpenMenuId(null);
+                                    }}
+                                    className="w-full text-left px-4 py-3 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                                  >
+                                    <Trash2 size={16} /> Excluir
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
                     );
                 }))}
             </tbody>
