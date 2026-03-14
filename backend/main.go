@@ -936,16 +936,28 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 
 	// Lê a resposta
 	body, _ := io.ReadAll(resp.Body)
+	bodyStr := strings.ToLower(string(body))
 	log.Printf("Status: %s\nResposta: %s\n", resp.Status, string(body))
 
+	// Verifica erro por status HTTP
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyStr := strings.ToLower(string(body))
 		if resp.StatusCode == 401 || resp.StatusCode == 403 ||
 			strings.Contains(bodyStr, "logout") || strings.Contains(bodyStr, "close") ||
 			strings.Contains(bodyStr, "disconnected") || strings.Contains(bodyStr, "not connected") {
 			return fmt.Errorf("WHATSAPP_DISCONNECTED")
 		}
 		return fmt.Errorf("API retornou status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Verifica erro no corpo mesmo com status 200
+	disconnectKeywords := []string{
+		"logout", "disconnected", "not connected", "connection closed",
+		"instance not found", "instance not open", "bad session",
+	}
+	for _, kw := range disconnectKeywords {
+		if strings.Contains(bodyStr, kw) {
+			return fmt.Errorf("WHATSAPP_DISCONNECTED")
+		}
 	}
 
 	return nil
