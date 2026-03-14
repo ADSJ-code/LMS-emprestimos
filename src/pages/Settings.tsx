@@ -232,6 +232,12 @@ const Settings = () => {
             company: { ...defaultSettings.company, ...data.company },
             system: { ...defaultSettings.system, ...data.system },
           });
+          if (data.company?.name) {
+            localStorage.setItem("companyName", data.company.name);
+          }
+          if (data.company?.phone) {
+            localStorage.setItem("companyPhone", data.company.phone.replace(/\D/g, ""));
+          }
         }
         const userList = await authService.listUsers();
         setUsers(userList || []);

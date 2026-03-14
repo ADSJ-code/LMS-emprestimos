@@ -14,7 +14,7 @@ import { generateContractPDF, generatePromissoryPDF } from '../utils/generatePDF
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
 import { calculateOverdueValue, formatMoney, calculateRealBalance, calculateInstallmentBreakdown, calculateCapitalBalance } from '../utils/finance';
-import { loanService, clientService, affiliateService, Loan, Client, PaymentRecord, Affiliate } from '../services/api';
+import { loanService, clientService, affiliateService, settingsService, Loan, Client, PaymentRecord, Affiliate } from '../services/api';
 
 interface ChecklistItem {
   id: string; label: string; weight: number; checked: boolean; stage: 1 | 2;
@@ -30,7 +30,7 @@ interface LoanExtended extends Loan {
 }
 type LoanFlowStep = 'closed' | 'form' | 'checklist';
 
-const getApiUrl = localStorage.getItem("getApiUrl") || "";
+const getApiUrl = localStorage.getItem("getApiUrl") || "https://creditnow-prod-266321031136.us-central1.run.app";
 
 const getInstanceToken = async (
    targetName: string,
@@ -164,8 +164,21 @@ const Billing = () => {
   });
   
 const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
-  const companyName = localStorage.getItem("companyName") || "";
-  const companyPhone = localStorage.getItem("companyPhone") || "";
+  let companyName = localStorage.getItem("companyName") || "";
+  let companyPhone = localStorage.getItem("companyPhone") || "";
+  if (!companyName || !companyPhone) {
+    try {
+      const s = await settingsService.get();
+      if (s?.company?.name) {
+        companyName = s.company.name;
+        localStorage.setItem("companyName", companyName);
+      }
+      if (s?.company?.phone) {
+        companyPhone = s.company.phone.replace(/\D/g, "");
+        localStorage.setItem("companyPhone", companyPhone);
+      }
+    } catch (_) {}
+  }
   // Se snowball for undefined, usamos um fallback para não dar erro de "length"
   const safeSnowball = snowball || { missedInstallments: [], totalUpdated: 0 };
 

@@ -27,7 +27,7 @@ interface LoanExtended extends Loan {
   };
 }
 
-const getApiUrl = localStorage.getItem("getApiUrl") || "";
+const getApiUrl = localStorage.getItem("getApiUrl") || "https://creditnow-prod-266321031136.us-central1.run.app";
 
 const sendWhatsappApi = async (
   name: string,
