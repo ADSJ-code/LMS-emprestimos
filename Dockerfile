@@ -1,40 +1,26 @@
-# Use the official Golang image to create a build artifact.
-# This is based on Debian and sets the GOPATH to /go.
-# https://hub.docker.com/_/golang
-FROM golang:1.25.6-alpine as builder
-
-# Create and change to the app directory.
+FROM node:22-alpine AS frontend-builder
 WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
 
-# Retrieve application dependencies using go modules.
-# Allows container builds to reuse downloaded dependencies.
-COPY go.mod ./
-COPY go.sum ./
-
+FROM golang:1.24-alpine AS backend-builder
+WORKDIR /app-api
+COPY backend/go.mod backend/go.sum ./
 RUN go mod download
-
-# Copy local code to the container image.
-COPY backend ./backend
-
-# Build the binary.
-# -mod=readonly ensures immutable go.mod and go.sum in container builds.
-# Use the official Alpine image for a lean production container.
-# https://hub.docker.com/_/alpine
-# https://docs.docker.com/develop/develop-images/multistage-build/#use-multi-stage-builds
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags='-w -s -extldflags "-static"' \
-    -mod=readonly -v -o webapp ./backend/cmd/main.go
+COPY backend/*.go ./
+COPY --from=frontend-builder /app/backend/dist ./dist
+RUN CGO_ENABLED=0 GOOS=linux go build -o server .
 
 FROM alpine:latest
-
-# Instala ca-certificates e tzdata para timezone
+WORKDIR /root/
 RUN apk --no-cache add ca-certificates tzdata
-
-# Define timezone para America/Sao_Paulo
 ENV TZ=America/Sao_Paulo
 
-WORKDIR /app
-COPY --from=builder /app/webapp /webapp
+COPY --from=backend-builder /app-api/server .
+
+COPY --from=backend-builder /app-api/dist ./dist
+
 EXPOSE 8080
-USER 65534:65534
-ENTRYPOINT ["/webapp"]
+CMD ["./server"]

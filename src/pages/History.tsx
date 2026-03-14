@@ -1,5 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Search, Calendar, Filter, FileText, User, Shield, AlertCircle, ChevronDown, RefreshCw, X, Database } from 'lucide-react';
+import { 
+  Search, Calendar, Filter, FileText, User, Shield, AlertCircle, 
+  ChevronDown, RefreshCw, X, Database, ArrowLeftRight, Trash2, 
+  UserPlus, LogIn, Settings, BadgePercent 
+} from 'lucide-react';
 import Layout from '../components/Layout';
 import { historyService } from '../services/api';
 
@@ -10,12 +14,12 @@ interface Log {
   target: string;
   date: string; 
   rawDate: string;
-  type: 'critical' | 'financial' | 'system' | 'client';
+  type: 'critical' | 'financial' | 'system' | 'client' | 'agreement' | 'undo';
 }
 
 const History = () => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [typeFilter, setTypeFilter] = useState<'Todos' | 'critical' | 'financial' | 'system' | 'client'>('Todos');
+  const [typeFilter, setTypeFilter] = useState<'Todos' | 'critical' | 'financial' | 'system' | 'client' | 'agreement' | 'undo'>('Todos');
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | '7days' | '30days'>('all'); 
   
   const [showTypeMenu, setShowTypeMenu] = useState(false);
@@ -23,29 +27,16 @@ const History = () => {
   const [logs, setLogs] = useState<Log[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const getCurrentUser = () => {
-      try {
-          const sessionStr = localStorage.getItem('lms_active_session');
-          if (sessionStr) {
-              const user = JSON.parse(sessionStr).user;
-              if (user?.name) return user.name;
-              if (user?.email) return user.email;
-              if (user?.username) return user.username;
-          }
-          const userStr = localStorage.getItem('user');
-          if (userStr) {
-              const userObj = JSON.parse(userStr);
-              if (userObj?.name) return userObj.name;
-          }
-          return 'Administrador Mestre'; 
-      } catch (e) { return 'Administrador Mestre'; }
-  };
-
+  // Determina a categoria exata com base no texto da ação e detalhes
   const determineLogType = (action: string, details: string): Log['type'] => {
     const text = (action + ' ' + details).toLowerCase();
-    if (text.includes('erro') || text.includes('exclusão') || text.includes('deletado') || text.includes('crítica') || text.includes('bloqueio')) return 'critical';
-    if (text.includes('pagamento') || text.includes('empréstimo') || text.includes('financeiro') || text.includes('contrato') || text.includes('baixa') || text.includes('acordo')) return 'financial';
-    if (text.includes('cliente') || text.includes('cadastro') || text.includes('perfil')) return 'client';
+    
+    if (text.includes('exclusão') || text.includes('deletado') || text.includes('crítica') || text.includes('bloqueio')) return 'critical';
+    if (text.includes('acordo')) return 'agreement';
+    if (text.includes('desfazer') || text.includes('estorno') || text.includes('reversão')) return 'undo';
+    if (text.includes('baixa') || text.includes('pagamento') || text.includes('parcela') || text.includes('juros')) return 'financial';
+    if (text.includes('cliente') || text.includes('cadastro')) return 'client';
+    
     return 'system';
   };
 
@@ -59,36 +50,19 @@ const History = () => {
   const fetchAndGenerateLogs = async () => {
     setIsLoading(true);
     try {
-      const currentUser = getCurrentUser();
-
       let backendLogs: any[] = [];
       try { backendLogs = await historyService.getLogs(); } catch (e) {}
       
       let localLogs: any[] = [];
       try { localLogs = JSON.parse(localStorage.getItem('lms_blackbox_logs') || '[]'); } catch (e) {}
 
-      const mapLog = (l: any, isLocal: boolean): Log => {
-          let actionName = l.action || 'Ação Desconhecida';
-          let details = l.details || l.target || '';
-          let userName = l.user;
-
-          const text = (actionName + ' ' + details).toUpperCase();
-          const isHumanAction = text.includes('NOVO') || text.includes('EMPRÉSTIMO') || 
-                                text.includes('EXCLUSÃO') || text.includes('BAIXA') || 
-                                text.includes('CLIENTE') || text.includes('ACORDO') || 
-                                text.includes('EDIÇÃO') || text.includes('CONFIGURAÇÕES');
-
-          if (!userName || userName === 'Sistema' || userName === '') {
-              if (isHumanAction || isLocal) {
-                  userName = currentUser; 
-              } else {
-                  userName = 'Sistema'; 
-              }
-          }
-
+      const mapLog = (l: any): Log => {
+          const actionName = l.action || 'Ação Desconhecida';
+          const details = l.details || l.target || '';
+          
           return {
             id: l.id || Math.random().toString(),
-            user: userName,
+            user: l.user || 'Sistema',
             action: actionName,
             target: details,
             date: formatDate(l.timestamp || new Date().toISOString()),
@@ -97,27 +71,21 @@ const History = () => {
           };
       };
 
-      const mappedLocal = localLogs.map((l: any) => mapLog(l, true));
-      const mappedBackend = backendLogs.map((l: any) => mapLog(l, false));
+      const mappedLocal = localLogs.map((l: any) => mapLog(l));
+      const mappedBackend = backendLogs.map((l: any) => mapLog(l));
 
       const uniqueLogs: Log[] = [];
-      const localSignatures = new Set();
+      const signatures = new Set();
       
-      for (const log of mappedLocal) {
-          uniqueLogs.push(log);
-          localSignatures.add(`${log.date}-${log.type}`);
-      }
-
-      for (const log of mappedBackend) {
-          const sig = `${log.date}-${log.type}`;
-          if (!localSignatures.has(sig)) {
+      [...mappedLocal, ...mappedBackend].forEach(log => {
+          const sig = `${log.rawDate}-${log.action}-${log.target}`;
+          if (!signatures.has(sig)) {
               uniqueLogs.push(log);
-              localSignatures.add(sig);
+              signatures.add(sig);
           }
-      }
+      });
 
       uniqueLogs.sort((a, b) => new Date(b.rawDate).getTime() - new Date(a.rawDate).getTime());
-
       setLogs(uniqueLogs);
     } catch (err) {
       console.error(err);
@@ -130,19 +98,24 @@ const History = () => {
 
   const getIcon = (type: string) => {
     switch (type) {
-      case 'critical': return <Shield size={16} className="text-red-500" />;
+      case 'critical': return <Trash2 size={16} className="text-red-500" />;
       case 'financial': return <FileText size={16} className="text-green-500" />;
-      case 'client': return <User size={16} className="text-blue-500" />;
+      case 'agreement': return <BadgePercent size={16} className="text-orange-500" />;
+      case 'undo': return <ArrowLeftRight size={16} className="text-purple-500" />;
+      case 'client': return <UserPlus size={16} className="text-blue-500" />;
+      case 'system': return <Settings size={16} className="text-slate-500" />;
       default: return <Database size={16} className="text-slate-500" />;
     }
   };
 
   const getTypeLabel = (type: string) => {
     switch (type) {
-      case 'critical': return 'Segurança';
-      case 'financial': return 'Financeiro';
-      case 'system': return 'Sistema';
-      case 'client': return 'Clientes';
+      case 'critical': return 'Exclusão/Segurança';
+      case 'financial': return 'Baixas/Financeiro';
+      case 'agreement': return 'Acordos';
+      case 'undo': return 'Estornos/Reversão';
+      case 'system': return 'Sistema/Acesso';
+      case 'client': return 'Cadastros';
       default: return type;
     }
   };
@@ -166,20 +139,20 @@ const History = () => {
 
     let matchesDate = true;
     if (dateFilter !== 'all') {
-        const logDate = new Date(log.date.split(' às ')[0].split('/').reverse().join('-')); 
+        const logDate = new Date(log.rawDate);
         const today = new Date();
         today.setHours(0,0,0,0);
         
         if (dateFilter === 'today') {
-            matchesDate = logDate.getTime() === today.getTime() || log.date.includes('Hoje');
+            matchesDate = logDate.getTime() >= today.getTime();
         } else if (dateFilter === '7days') {
-            const sevenDaysAgo = new Date();
-            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-            matchesDate = logDate >= sevenDaysAgo;
+            const limit = new Date();
+            limit.setDate(limit.getDate() - 7);
+            matchesDate = logDate >= limit;
         } else if (dateFilter === '30days') {
-             const thirtyDaysAgo = new Date();
-             thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-             matchesDate = logDate >= thirtyDaysAgo;
+             const limit = new Date();
+             limit.setDate(limit.getDate() - 30);
+             matchesDate = logDate >= limit;
         }
     }
 
@@ -190,19 +163,19 @@ const History = () => {
     <Layout>
       <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">Histórico de Atividades</h2>
-          <p className="text-slate-500">Logs de auditoria, exclusões e rastreabilidade.</p>
+          <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Histórico de Atividades</h2>
+          <p className="text-slate-500">Rastreabilidade total: quem fez, o que fez e quando fez.</p>
         </div>
         
         <div className="flex gap-2">
-            <button onClick={fetchAndGenerateLogs} className="p-2.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 text-slate-600 transition-all shadow-sm" title="Atualizar">
-                <RefreshCw size={20} className={isLoading ? "animate-spin text-blue-600" : ""} />
+            <button onClick={fetchAndGenerateLogs} className="p-2.5 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 text-slate-600 transition-all shadow-sm group" title="Atualizar">
+                <RefreshCw size={20} className={`${isLoading ? "animate-spin text-blue-600" : "group-hover:rotate-180"} transition-all duration-500`} />
             </button>
 
             <div className="relative">
             <button 
                 onClick={() => setShowDateMenu(!showDateMenu)}
-                className={`flex items-center gap-2 border px-4 py-2.5 rounded-lg text-sm font-bold transition-colors shadow-sm h-full
+                className={`flex items-center gap-2 border px-4 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-sm h-full
                 ${showDateMenu || dateFilter !== 'all' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white border-gray-200 text-slate-600 hover:bg-gray-50'}`}
             >
                 <Calendar size={16} />
@@ -229,41 +202,41 @@ const History = () => {
         </div>
       </header>
 
-      <div className="bg-white p-4 rounded-xl shadow-sm mb-6 flex flex-col md:flex-row gap-4">
+      <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-6 flex flex-col md:flex-row gap-4">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
           <input 
             type="text" 
-            placeholder="Buscar por usuário, exclusões ou contratos..." 
+            placeholder="Buscar por usuário, cliente ou tipo de ação..." 
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-slate-900/10 font-bold text-slate-700 transition-all shadow-inner"
+            className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-slate-900/10 font-bold text-slate-700 transition-all shadow-inner bg-slate-50/30"
           />
         </div>
         
         <div className="relative">
           <button 
             onClick={() => setShowTypeMenu(!showTypeMenu)}
-            className={`flex items-center gap-2 px-4 py-2.5 border rounded-xl text-sm font-bold transition-colors w-full md:w-48 justify-between shadow-sm
+            className={`flex items-center gap-2 px-4 py-2.5 border rounded-xl text-sm font-bold transition-colors w-full md:w-56 justify-between shadow-sm
               ${showTypeMenu || typeFilter !== 'Todos' ? 'border-slate-900 text-slate-900 bg-slate-50' : 'border-gray-200 text-slate-600 hover:bg-gray-50'}`}
           >
             <div className="flex items-center gap-2">
               <Filter size={16} />
-              {typeFilter === 'Todos' ? 'Filtrar Tipo' : getTypeLabel(typeFilter)}
+              {typeFilter === 'Todos' ? 'Todas as Categorias' : getTypeLabel(typeFilter)}
             </div>
             <ChevronDown size={14} />
           </button>
 
           {showTypeMenu && (
-            <div className="absolute right-0 top-12 w-48 bg-white border border-gray-100 rounded-xl shadow-xl z-10 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
-              {['Todos', 'critical', 'financial', 'system', 'client'].map((type) => (
+            <div className="absolute right-0 top-12 w-56 bg-white border border-gray-100 rounded-xl shadow-xl z-10 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+              {['Todos', 'critical', 'financial', 'agreement', 'undo', 'client', 'system'].map((type) => (
                 <button
                   key={type}
                   onClick={() => { setTypeFilter(type as any); setShowTypeMenu(false); }}
                   className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 font-bold text-slate-600 flex items-center gap-2 border-b border-gray-50 last:border-0"
                 >
                   {type !== 'Todos' && getIcon(type)}
-                  {type === 'Todos' ? 'Todos os Tipos' : getTypeLabel(type)}
+                  {type === 'Todos' ? 'Todas as Categorias' : getTypeLabel(type)}
                 </button>
               ))}
             </div>
@@ -275,20 +248,20 @@ const History = () => {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="bg-slate-50 border-b border-gray-200 text-xs uppercase text-slate-500 font-black tracking-wider">
-                <th className="p-4 w-16 text-center">Tipo</th>
-                <th className="p-4 w-48">Data e Hora</th>
-                <th className="p-4 w-48">Usuário Responsável</th>
-                <th className="p-4 w-56">Ação Realizada</th>
-                <th className="p-4">Alvo / Detalhes</th>
+              <tr className="bg-slate-50/80 border-b border-gray-200 text-[10px] uppercase text-slate-500 font-black tracking-widest">
+                <th className="p-4 w-16 text-center">Cat.</th>
+                <th className="p-4 w-44">Data e Hora</th>
+                <th className="p-4 w-56">Responsável</th>
+                <th className="p-4 w-60">Operação</th>
+                <th className="p-4">Alvo / Detalhes do Registro</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filteredLogs.length > 0 ? (
                 filteredLogs.map((log) => (
-                  <tr key={log.id} className={`hover:bg-slate-50 transition-colors text-sm group ${log.type === 'critical' ? 'bg-red-50/20' : ''}`}>
+                  <tr key={log.id} className={`hover:bg-slate-50/80 transition-colors text-sm group ${log.type === 'critical' ? 'bg-red-50/10' : log.type === 'undo' ? 'bg-purple-50/10' : ''}`}>
                     <td className="p-4 text-center">
-                      <div className="bg-white p-2 rounded-lg inline-flex items-center justify-center border border-gray-200 shadow-sm group-hover:scale-110 transition-transform">
+                      <div className="bg-white p-2 rounded-xl inline-flex items-center justify-center border border-slate-100 shadow-sm group-hover:scale-110 transition-transform">
                         {getIcon(log.type)}
                       </div>
                     </td>
@@ -297,26 +270,36 @@ const History = () => {
                     </td>
                     <td className="p-4">
                       <div className="flex items-center gap-2">
-                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shadow-sm border ${log.user === 'Sistema' ? 'bg-slate-200 text-slate-500 border-slate-300' : 'bg-blue-100 text-blue-700 border-blue-200'}`}>
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-black shadow-sm border ${log.user === 'Sistema' ? 'bg-slate-200 text-slate-500 border-slate-300' : 'bg-blue-600 text-white border-blue-700'}`}>
                             {log.user.charAt(0).toUpperCase()}
                         </div>
-                        <span className={`font-bold ${log.user === 'Sistema' ? 'text-slate-500' : 'text-blue-900'}`}>{log.user}</span>
+                        <span className={`font-bold ${log.user === 'Sistema' ? 'text-slate-400 italic' : 'text-slate-700'}`}>{log.user}</span>
                       </div>
                     </td>
-                    <td className={`p-4 font-black text-xs uppercase tracking-wider ${log.type === 'critical' ? 'text-red-700' : 'text-slate-800'}`}>
-                      {log.action}
+                    <td className="p-4">
+                        <span className={`px-2 py-1 rounded text-[10px] font-black uppercase tracking-tighter border ${
+                            log.type === 'critical' ? 'bg-red-100 text-red-700 border-red-200' :
+                            log.type === 'undo' ? 'bg-purple-100 text-purple-700 border-purple-200' :
+                            log.type === 'agreement' ? 'bg-orange-100 text-orange-700 border-orange-200' :
+                            log.type === 'financial' ? 'bg-green-100 text-green-700 border-green-200' :
+                            'bg-slate-100 text-slate-600 border-slate-200'
+                        }`}>
+                            {log.action}
+                        </span>
                     </td>
-                    <td className="p-4 text-slate-600 font-medium">
-                      {log.target}
+                    <td className="p-4">
+                      <p className="text-slate-600 font-medium leading-relaxed max-w-2xl">
+                          {log.target}
+                      </p>
                     </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={5} className="p-16 text-center text-slate-400">
+                  <td colSpan={5} className="p-20 text-center text-slate-400">
                     <div className="flex flex-col items-center justify-center gap-3">
-                        <Search size={40} className="opacity-20" />
-                        <p className="font-medium text-lg">Nenhuma atividade detectada.</p>
+                        <Search size={48} className="opacity-10" />
+                        <p className="font-bold text-lg text-slate-300">Nenhum log encontrado para este filtro.</p>
                     </div>
                   </td>
                 </tr>
