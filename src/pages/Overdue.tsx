@@ -175,27 +175,31 @@ const Overdue = () => {
   // --- FUNÇÃO DO WHATSAPP COM BOLA DE NEVE ---
   const getInstanceToken = async (
     targetName: string,
-    targetPhone: string,
   ): Promise<string | null> => {
     try {
-      const response = await fetch(getApiUrl+"/api/instances/ver", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: targetName, // Verifique se no Go o campo é 'name' ou 'instanceName'
-          phone: targetPhone,
-        }),
-      });
+      // Busca o telefone da empresa via API (igual ao Billing.tsx)
+      let companyPhone = "";
+      try {
+        const authToken = localStorage.getItem("token");
+        const settingsRes = await fetch(getApiUrl + `/api/settings`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (settingsRes.ok) {
+          const settingsData = await settingsRes.json();
+          companyPhone = settingsData?.company?.phone || "";
+        }
+      } catch {
+        companyPhone = localStorage.getItem("companyPhone") || "";
+      }
 
-      // Se o status não for 200, ele já lança erro para o catch
+      const response = await fetch(getApiUrl + "/api/instances/ver");
+
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Erro HTTP ${response.status}: ${errorText}`);
       }
 
       const data = await response.json();
-
-      // Garantimos que 'list' seja um array, não importa o que venha
       const list = Array.isArray(data)
         ? data
         : data.data || data.instances || [];
@@ -205,25 +209,32 @@ const Overdue = () => {
         return null;
       }
 
-      // Buscamos a instância pelo nome
-      // Dica: use toUpperCase() ou trim() se houver risco de espaços extras
-      const targetInstance = list.find((inst: any) => {
-        const nameInApi = inst.instance.instanceName;
-
-        return (
-          nameInApi?.toString().trim().toLowerCase() ===
-          targetName.trim().toLowerCase()
-        );
-      });
-      var instance = targetInstance.instance;
-
-      if (instance.instanceName && instance.apikey) {
-        return instance.apikey;
+      // Tenta encontrar pelo telefone primeiro (igual ao Billing.tsx)
+      let targetPhone = companyPhone.replace(/\D/g, "");
+      if (targetPhone.length >= 10 && !targetPhone.startsWith("55")) {
+        targetPhone = "55" + targetPhone;
       }
 
-      console.warn(
-        `❌ Instância "${targetName}" não encontrada na lista de ${instance.length} itens.`,
+      if (targetPhone) {
+        const phoneMatch = list.find(
+          (inst: any) =>
+            inst.instance.status === "open" &&
+            inst.instance.owner &&
+            inst.instance.owner.includes(targetPhone),
+        );
+        if (phoneMatch) return phoneMatch.instance.apikey;
+      }
+
+      // Fallback: busca pelo nome da instância
+      const nameMatch = list.find(
+        (inst: any) =>
+          inst.instance.instanceName?.toString().trim().toLowerCase() ===
+          targetName.trim().toLowerCase(),
       );
+
+      if (nameMatch?.instance?.apikey) return nameMatch.instance.apikey;
+
+      console.warn(`❌ Instância "${targetName}" não encontrada.`);
       return null;
     } catch (error) {
       console.error("❌ Erro fatal no getInstanceToken:", error);
@@ -233,7 +244,6 @@ const Overdue = () => {
 
   const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
     const companyName = localStorage.getItem("companyName") || "";
-    const companyPhone = localStorage.getItem("companyPhone") || "";
     const client = clients.find((c) => c.name === loan.client);
 
     console.log("Cliente encontrado:", loan);
@@ -255,7 +265,7 @@ const Overdue = () => {
 
     try {
       // Busca o token
-      const token = await getInstanceToken(companyName, companyPhone);
+      const token = await getInstanceToken(companyName);
 
       if (!token) {
         throw new Error(
