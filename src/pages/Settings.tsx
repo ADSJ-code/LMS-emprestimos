@@ -744,14 +744,6 @@ const Settings = () => {
                         <AlertTriangle size={13} /> Preencha o nome e telefone antes de conectar.
                       </p>
                     )}
-                    <button
-                      onClick={handleDisconnectWhatsApp}
-                      disabled={isDisconnecting || !settings.company.name}
-                      className="w-full px-6 py-3 bg-red-50 text-red-600 border border-red-200 rounded-xl font-bold flex justify-between items-center hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <span>{isDisconnecting ? "Desconectando..." : "Desconectar WhatsApp"}</span>
-                      {isDisconnecting ? <Loader2 size={18} className="animate-spin" /> : <X size={18} />}
-                    </button>
                   </div>
                   <div className="flex flex-col items-center justify-center p-8 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 gap-3">
                     <Activity
@@ -777,12 +769,23 @@ const Settings = () => {
                     <button
                       onClick={handleCheckWhatsAppStatus}
                       disabled={isCheckingStatus || !settings.company.name}
-                      className="mt-1 px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-100 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                      className="px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-100 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                     >
                       {isCheckingStatus
                         ? <><Loader2 size={13} className="animate-spin" /> Verificando...</>
                         : <><RefreshCw size={13} /> Verificar Status</>}
                     </button>
+                    {whatsappStatus === "open" && (
+                      <button
+                        onClick={handleDisconnectWhatsApp}
+                        disabled={isDisconnecting}
+                        className="px-4 py-2 bg-red-50 border border-red-200 text-red-600 rounded-xl text-xs font-bold hover:bg-red-100 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                      >
+                        {isDisconnecting
+                          ? <><Loader2 size={13} className="animate-spin" /> Desconectando...</>
+                          : <><X size={13} /> Desconectar</>}
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
