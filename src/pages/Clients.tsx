@@ -3,12 +3,16 @@ import { useNavigate } from 'react-router-dom';
 import { 
   Search, Plus, MoreVertical, Edit2, Trash2, Eye, 
   MapPin, Phone, Mail, User, ShieldCheck, AlertCircle, RefreshCw, FileText, Upload, Loader2,
-  DollarSign, CheckCircle, XCircle, Clock, TrendingUp, TrendingDown, Users, Calendar, Activity, List
+  DollarSign, CheckCircle, XCircle, Clock, TrendingUp, TrendingDown, Users, Calendar, Activity, List, Check, ShieldAlert
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
 import { clientService, loanService, Client, ClientDoc, Loan } from '../services/api';
 import { formatMoney } from '../utils/finance';
+
+interface ChecklistItem {
+  id: string; label: string; weight: number; checked: boolean; stage: 1 | 2;
+}
 
 const Clients = () => {
   const navigate = useNavigate();
@@ -22,18 +26,52 @@ const Clients = () => {
   // --- Estados dos Modais ---
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | number | null>(null);
-  const [modalTab, setModalTab] = useState<'dados' | 'financeiro'>('dados');
+  const [modalTab, setModalTab] = useState<'dados' | 'financeiro' | 'analise'>('dados');
   
   const [globalMetricModal, setGlobalMetricModal] = useState<'base' | 'ativos' | 'emprestado' | 'lucro' | null>(null);
 
   const [isCepLoading, setIsCepLoading] = useState(false);
-  const [formData, setFormData] = useState<Partial<Client>>({
+  const [formData, setFormData] = useState<Partial<Client> & { justification?: string, checklist?: string[] }>({
     name: '', cpf: '', rg: '', email: '', phone: '',
     cep: '', address: '', number: '', neighborhood: '', city: '', state: '',
-    observations: '', documents: [], status: 'Ativo'
+    observations: '', documents: [], status: 'Ativo', justification: '', checklist: []
   });
 
   const [openMenuId, setOpenMenuId] = useState<string | number | null>(null);
+
+  // --- LÓGICA DA TRIAGEM (Trazida do Billing) ---
+  const [activeStage, setActiveStage] = useState<1 | 2>(1);
+
+  const initialChecklist: ChecklistItem[] = useMemo(() => [
+    { id: 'q1', label: 'Nome Completo e Cadastro Básico', weight: 1, checked: false, stage: 1 },
+    { id: 'q2', label: 'Vínculo CLT/Autônomo Validado', weight: 3, checked: false, stage: 1 },
+    { id: 'q3', label: 'Tempo de Empresa (> 6 meses)', weight: 2, checked: false, stage: 1 },
+    { id: 'q4', label: 'Salário e Benefícios Reais', weight: 3, checked: false, stage: 1 },
+    { id: 'q5', label: 'Moradia Confirmada', weight: 1, checked: false, stage: 1 },
+    { id: 'q6', label: 'Análise de Redes Sociais', weight: 1, checked: false, stage: 1 },
+    { id: 'q7', label: 'Sem Restrição Crítica', weight: 3, checked: false, stage: 1 },
+    { id: 'q8', label: 'Filtro de Apostas', weight: 3, checked: false, stage: 1 },
+    { id: 'd1', label: 'Comprovante Endereço Anexado', weight: 3, checked: false, stage: 2 },
+    { id: 'd2', label: 'Holerite ou Extratos', weight: 3, checked: false, stage: 2 },
+    { id: 'd3', label: 'Selfie do Cliente', weight: 2, checked: false, stage: 2 },
+    { id: 'd4', label: 'Contato de Referência', weight: 2, checked: false, stage: 2 },
+    { id: 'd5', label: 'RG/CNH Anexado', weight: 3, checked: false, stage: 2 },
+    { id: 'd6', label: 'Vídeo da Casa', weight: 3, checked: false, stage: 2 },
+    { id: 'd7', label: 'Vídeo do Acordo', weight: 3, checked: false, stage: 2 },
+    { id: 'd8', label: 'Dados Bancários Completos', weight: 2, checked: false, stage: 2 },
+  ], []);
+
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>(initialChecklist);
+
+  // Recalcula o progresso da triagem
+  const totalWeight = checklistItems.reduce((acc, item) => acc + item.weight, 0);
+  const currentScore = checklistItems.reduce((acc, item) => item.checked ? acc + item.weight : acc, 0);
+  const progressPercentage = Math.round((currentScore / totalWeight) * 100);
+
+  const toggleChecklistItem = (id: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      setChecklistItems(prev => prev.map(item => item.id === id ? { ...item, checked: !item.checked } : item));
+  };
 
   // --- NAVEGAÇÃO RÁPIDA ---
   const handleGoToContract = (contractId: string) => {
@@ -236,17 +274,34 @@ const Clients = () => {
   };
 
   // --- HANDLERS PRINCIPAIS ---
-  const handleOpenModal = (client?: any, defaultTab: 'dados' | 'financeiro' = 'dados') => {
+  const handleOpenModal = (client?: any, defaultTab: 'dados' | 'financeiro' | 'analise' = 'dados') => {
     setModalTab(defaultTab); 
     if (client) {
       setEditingId(client.id);
-      setFormData({ ...client, documents: client.documents || [] });
+      
+      // Recupera o checklist salvo ou reseta
+      const savedChecklist = client.checklist || [];
+      const restoredItems = initialChecklist.map(item => ({
+          ...item,
+          checked: savedChecklist.includes(item.id)
+      }));
+      setChecklistItems(restoredItems);
+
+      setFormData({ 
+          ...client, 
+          documents: client.documents || [],
+          justification: client.justification || '',
+          checklist: savedChecklist
+      });
     } else {
       setEditingId(null);
+      setChecklistItems(initialChecklist);
+      setActiveStage(1);
       setFormData({ 
           name: '', cpf: '', rg: '', email: '', phone: '', 
           cep: '', address: '', number: '', neighborhood: '', city: '', state: '', 
-          observations: '', documents: [], status: 'Ativo' 
+          observations: '', documents: [], status: 'Ativo',
+          justification: '', checklist: []
       });
     }
     setIsModalOpen(true);
@@ -257,7 +312,15 @@ const Clients = () => {
     e.preventDefault();
     setIsLoading(true);
     try {
-      const payload = { ...formData, documents: formData.documents || [] };
+      // Extrai os IDs marcados no checklist atual da tela para salvar no banco
+      const checkedIds = checklistItems.filter(i => i.checked).map(i => i.id);
+      
+      const payload = { 
+          ...formData, 
+          documents: formData.documents || [],
+          checklist: checkedIds 
+      };
+
       if (editingId) {
         await clientService.update(editingId, payload as Client);
         alert('Cliente atualizado com sucesso!');
@@ -406,6 +469,9 @@ const Clients = () => {
                                             <button onClick={() => handleOpenModal(client, 'dados')} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
                                                 <Edit2 size={16} className="text-blue-500" /> Editar Dados
                                             </button>
+                                            <button onClick={() => handleOpenModal(client, 'analise')} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                                                <ShieldAlert size={16} className="text-orange-500" /> Análise de Risco
+                                            </button>
                                             <button onClick={() => handleOpenModal(client, 'financeiro')} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
                                                 <DollarSign size={16} className="text-green-600" /> Ficha Financeira
                                             </button>
@@ -426,9 +492,11 @@ const Clients = () => {
 
       {/* --- MODAL DA FICHA DO CLIENTE --- */}
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingId ? `Ficha do Cliente #${(formData as any).displayNumber || '-'}` : "Novo Cliente"}>
+        
         {/* --- ABAS DO MODAL --- */}
         <div className="flex border-b border-slate-200 mb-6">
             <button onClick={() => setModalTab('dados')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${modalTab === 'dados' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Dados Cadastrais</button>
+            <button onClick={() => setModalTab('analise')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${modalTab === 'analise' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Análise de Risco</button>
             {editingId && <button onClick={() => setModalTab('financeiro')} className={`flex-1 pb-3 text-sm font-bold border-b-2 transition-all ${modalTab === 'financeiro' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>Ficha Financeira</button>}
         </div>
 
@@ -499,6 +567,72 @@ const Clients = () => {
                 </button>
             </div>
             </form>
+
+        ) : modalTab === 'analise' ? (
+            
+            // --- CONTEÚDO DA ANÁLISE DE RISCO (CHECKLIST) ---
+            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                    <div className="flex justify-between items-end mb-3">
+                        <div>
+                            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1">Score de Aprovação</p>
+                            <p className={`text-4xl font-black ${progressPercentage >= 70 ? 'text-green-600' : 'text-blue-600'}`}>{progressPercentage}%</p>
+                        </div>
+                        <div className="text-right">
+                            <div className="text-[10px] font-bold px-2 py-1 rounded border mb-2 inline-block bg-blue-50 border-blue-200 text-blue-600">APROVAÇÃO FLEXÍVEL</div>
+                        </div>
+                    </div>
+                    <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden shadow-inner">
+                        <div className={`h-full transition-all duration-700 ease-out ${progressPercentage >= 70 ? 'bg-green-500' : 'bg-blue-500'}`} style={{ width: `${progressPercentage}%` }}></div>
+                    </div>
+                </div>
+
+                <div className="flex border-b border-slate-100 gap-4">
+                    <button type="button" onClick={() => setActiveStage(1)} className={`pb-3 text-sm font-bold transition-all border-b-2 ${activeStage === 1 ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>1. Comportamental</button>
+                    <button type="button" onClick={() => setActiveStage(2)} className={`pb-3 text-sm font-bold transition-all border-b-2 ${activeStage === 2 ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>2. Documentos</button>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
+                    {checklistItems.filter(i => i.stage === activeStage).map((item) => (
+                        <div key={item.id} onClick={(e) => toggleChecklistItem(item.id, e)} className={`flex items-center gap-4 p-4 border rounded-2xl cursor-pointer hover:bg-slate-50 transition-all ${item.checked ? 'border-green-200 bg-green-50/40 shadow-sm' : 'border-slate-100 bg-white'}`}>
+                            <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-colors ${item.checked ? 'bg-green-500 border-green-500 text-white' : 'bg-white border-slate-200'}`}>
+                                {item.checked && <Check size={16} strokeWidth={4} />}
+                            </div>
+                            <div>
+                                <span className={`text-sm font-bold block ${item.checked ? 'text-green-900' : 'text-slate-600'}`}>{item.label}</span>
+                                <span className="text-[10px] uppercase font-bold text-slate-400">Peso: {item.weight} pts</span>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                <div className="animate-in slide-in-from-top duration-500 bg-orange-50 p-5 rounded-2xl border border-orange-100 shadow-sm">
+                    <div className="flex items-center gap-2 mb-3">
+                        <ShieldAlert size={18} className="text-orange-600" />
+                        <label className="text-sm font-bold text-orange-800">Parecer da Análise (Obrigatório)</label>
+                    </div>
+                    <textarea 
+                        value={formData.justification || ''} 
+                        onChange={(e) => setFormData({...formData, justification: e.target.value})} 
+                        className="w-full p-4 border border-orange-200 bg-white rounded-xl text-sm h-24 outline-none focus:ring-2 focus:ring-orange-400 transition-all placeholder:text-orange-200" 
+                        placeholder="Resuma a análise do cliente, o porquê de estar aprovando ou rejeitando..."
+                    />
+                </div>
+
+                <div className="flex justify-end gap-3 pt-6 border-t border-slate-100">
+                    <button type="button" onClick={() => setIsModalOpen(false)} className="px-6 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition-all">Cancelar</button>
+                    <button 
+                        type="button" 
+                        onClick={handleSave} 
+                        disabled={isLoading || (formData.justification || '').trim().length < 5} 
+                        className={`px-10 py-3 rounded-xl font-bold text-white transition-all flex items-center gap-3 shadow-lg ${((formData.justification || '').trim().length >= 5) ? 'bg-green-600 hover:bg-green-700 shadow-green-900/20' : 'bg-slate-200 cursor-not-allowed text-slate-400'}`}
+                    >
+                        {isLoading ? <Loader2 className="animate-spin" /> : <ShieldCheck size={20} />} 
+                        {isLoading ? 'Salvando...' : 'Salvar Análise'}
+                    </button>
+                </div>
+            </div>
+
         ) : (
             // --- CONTEÚDO DA FICHA FINANCEIRA ---
             <div className="space-y-4 animate-in slide-in-from-right-4 duration-300">
