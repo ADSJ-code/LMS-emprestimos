@@ -52,7 +52,13 @@ const sendWhatsappApi = async (
     }),
   });
 
-  if (!response.ok) throw new Error("Falha ao enviar via API");
+  if (!response.ok) {
+    const errorText = await response.text();
+    if (errorText.includes("WHATSAPP_DISCONNECTED")) {
+      throw new Error("WHATSAPP_DISCONNECTED");
+    }
+    throw new Error("Falha ao enviar via API");
+  }
 };
 
 const Overdue = () => {
@@ -246,14 +252,15 @@ const Overdue = () => {
         instance.apikey,
       );
       alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
-    } catch (error) {
-      // 2. Fallback: Se a API falhar, abre o link direto do WhatsApp Web
+    } catch (error: any) {
+      if (error?.message === "WHATSAPP_DISCONNECTED") {
+        alert("⚠️ WhatsApp desconectado!\n\nVá em Configurações → WhatsApp e reconecte o QR Code para voltar a enviar mensagens.");
+        return;
+      }
+
+      // Fallback: Se a API falhar, abre o link direto do WhatsApp Web
       console.warn("API Offline, usando link direto...");
-
       const message = `Olá ${firstName}, identificamos ${parcelasText} totalizando R$ ${formatMoney(snowball.totalUpdated)} (valor atualizado) referente ao seu contrato ${contractCode}.\n\nPodemos agendar um pagamento para regularizar?`;
-
-
-      console.log("Mensagem de erro:", error);
       const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
       window.open(url, "_blank");
     }

@@ -938,7 +938,17 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 	body, _ := io.ReadAll(resp.Body)
 	log.Printf("Status: %s\nResposta: %s\n", resp.Status, string(body))
 
-	return err
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bodyStr := strings.ToLower(string(body))
+		if resp.StatusCode == 401 || resp.StatusCode == 403 ||
+			strings.Contains(bodyStr, "logout") || strings.Contains(bodyStr, "close") ||
+			strings.Contains(bodyStr, "disconnected") || strings.Contains(bodyStr, "not connected") {
+			return fmt.Errorf("WHATSAPP_DISCONNECTED")
+		}
+		return fmt.Errorf("API retornou status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 func DefinirMensagemComDetalhes(delayLevel int, name string, lateDays int, updatedAmount float64, dateVencimento string) string {
 	// Formatação simples para moeda (R$)

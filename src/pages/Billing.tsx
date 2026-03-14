@@ -103,8 +103,14 @@ const sendWhatsappApi = async (
     }),
   });
 
-  if (!response.ok) throw new Error("Falha ao enviar via API");
-};;
+  if (!response.ok) {
+    const errorText = await response.text();
+    if (errorText.includes("WHATSAPP_DISCONNECTED")) {
+      throw new Error("WHATSAPP_DISCONNECTED");
+    }
+    throw new Error("Falha ao enviar via API");
+}
+};
 
 const Billing = () => {
   const [loanFlowStep, setLoanFlowStep] = useState<LoanFlowStep>('closed'); 
@@ -213,12 +219,15 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
       instance.apikey,
     );
     alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
-  } catch (error) {
-    // 2. Fallback: Se a API falhar, abre o link direto do WhatsApp Web
+  } catch (error: any) {
+    if (error?.message === "WHATSAPP_DISCONNECTED") {
+      alert("⚠️ WhatsApp desconectado!\n\nVá em Configurações → WhatsApp e reconecte o QR Code para voltar a enviar mensagens.");
+      return;
+    }
+
+    // Fallback: Se a API falhar, abre o link direto do WhatsApp Web
     console.warn("API Offline, usando link direto...");
-
     const message = `Olá, ${client.name}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loan.installmentValue)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
-
     const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
     window.open(url, "_blank");
   }
