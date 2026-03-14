@@ -28,7 +28,8 @@ import {
   loanService,
   authService,
 } from "../services/api";
-const getApiUrl = () => `http://${window.location.hostname}:8080`;
+const getApiUrl = () =>
+  `https://creditnow-prod-266321031136.us-central1.run.app`;
 localStorage.setItem("getApiUrl", getApiUrl());
 
 // --- COMPONENTE MODAL GENÉRICO ---

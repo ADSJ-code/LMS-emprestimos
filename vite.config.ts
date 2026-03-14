@@ -3,10 +3,10 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  
+
   build: {
-    outDir: 'backend/dist', 
-    emptyOutDir: true, 
+    outDir: "backend/dist",
+    emptyOutDir: true,
   },
 
   server: {
@@ -14,11 +14,11 @@ export default defineConfig({
     strictPort: true,
     port: 3000,
     proxy: {
-      '/api': {
-        target: 'http://localhost:8080',
+      "/api": {
+        target: "https://creditnow-prod-266321031136.us-central1.run.app",
         changeOrigin: true,
         secure: false,
       },
     },
-  }
-})
+  },
+});
