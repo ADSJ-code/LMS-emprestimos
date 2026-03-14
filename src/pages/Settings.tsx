@@ -32,6 +32,7 @@ const getApiUrl = () =>
   `https://creditnow-prod-266321031136.us-central1.run.app`;
 localStorage.setItem("getApiUrl", getApiUrl());
 
+
 // --- COMPONENTE MODAL GENÉRICO ---
 const Modal = ({ isOpen, onClose, title, children, color = "slate" }: any) => {
   if (!isOpen) return null;
