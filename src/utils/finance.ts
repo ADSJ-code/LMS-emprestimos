@@ -69,8 +69,16 @@ export const calculateInstallmentBreakdown = (
 
     // Modalidade 1: Pagamento Mínimo (Só Juros)
     if (loan.interestType === 'SIMPLE') {
-        const pmt = Number(loan.installmentValue) || 0;
-        return { capital: 0, interest: pmt, total: pmt };
+        let periodicRate = (loan.interestRate || 0) / 100;
+        
+        if (loan.frequency === 'SEMANAL') periodicRate = periodicRate / 4;
+        else if (loan.frequency === 'DIARIO') periodicRate = periodicRate / 30;
+        
+        // RECÁLCULO DINÂMICO: Juros em cima do capital atualizado (amortizado)
+        const dynamicInterest = currentCapitalBalance * periodicRate;
+        const roundedInterest = Math.round(dynamicInterest * 100) / 100;
+
+        return { capital: 0, interest: roundedInterest, total: roundedInterest };
     }
 
     // Chave Mestra

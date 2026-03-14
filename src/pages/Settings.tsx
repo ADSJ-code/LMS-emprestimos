@@ -28,10 +28,10 @@ import {
   loanService,
   authService,
 } from "../services/api";
+
 const getApiUrl = () =>
   `https://creditnow-prod-266321031136.us-central1.run.app`;
 localStorage.setItem("getApiUrl", getApiUrl());
-
 
 // --- COMPONENTE MODAL GENÉRICO ---
 const Modal = ({ isOpen, onClose, title, children, color = "slate" }: any) => {
@@ -137,10 +137,6 @@ const Settings = () => {
 
       const data = await response.json();
 
-      /**
-       * LÓGICA DE RECUPERAÇÃO VIA BODY (Ajustada)
-       * Convertemos para String e usamos Optional Chaining (?.) para evitar crashes
-       */
       const statusText = String(data.details?.status || data.status || "");
       const messageText = String(
         data.details?.message || data.message || "",
@@ -170,7 +166,7 @@ const Settings = () => {
         if (createRes.ok) {
           console.log("✅ Instância criada. Tentando conectar em 1.5s...");
           setTimeout(() => handleConnectWhatsApp(nome, phone), 1500);
-          return; // Sai desta execução para esperar o timeout
+          return;
         } else {
           alert("Erro ao criar instância.");
           setIsConnecting(false);
@@ -178,7 +174,6 @@ const Settings = () => {
         }
       }
 
-      // TRATAMENTO DO SUCESSO (QR Code ou Conectado)
       const qrCode = data.details?.base64 || data.base64;
 
       if (qrCode) {
@@ -242,14 +237,20 @@ const Settings = () => {
     fetchData();
   }, []);
 
-  // --- HANDLERS: EMPRESA ---
-  const handleSave = async (e: React.FormEvent) => {
+  // --- HANDLERS: EMPRESA E SISTEMA ---
+  const handleSave = async (e?: React.FormEvent) => {
+    if(e) e.preventDefault();
+    if (!isAdmin) {
+      alert("Você não tem permissão para alterar as configurações.");
+      return;
+    }
+
     localStorage.setItem("companyName", settings.company.name);
     localStorage.setItem(
       "companyPhone",
       settings.company.phone.replace(/\D/g, "") || "",
     );
-    e.preventDefault();
+    
     setIsLoading(true);
     try {
       await settingsService.save(settings);
@@ -274,8 +275,46 @@ const Settings = () => {
     setSettings((p: any) => ({ ...p, company: { ...p.company, [f]: v } }));
   };
 
+  const updateSystem = (f: string, v: any) => {
+    setSettings((p: any) => ({ ...p, system: { ...p.system, [f]: v } }));
+  };
+
+  // --- FUNÇÃO REAL DE BACKUP ---
+  const handleExportBackup = async () => {
+    try {
+      setIsLoading(true);
+      const [clientsData, loansData] = await Promise.all([
+        clientService.getAll(),
+        loanService.getAll()
+      ]);
+      
+      const backupData = {
+        exportedAt: new Date().toISOString(),
+        settings: settings,
+        clients: clientsData,
+        loans: loansData
+      };
+
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupData, null, 2));
+      const downloadAnchorNode = document.createElement('a');
+      downloadAnchorNode.setAttribute("href", dataStr);
+      downloadAnchorNode.setAttribute("download", `backup_sistema_${new Date().toISOString().split('T')[0]}.json`);
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+      
+      alert("✅ Backup gerado e baixado com sucesso!");
+    } catch (error) {
+      alert("❌ Erro ao gerar arquivo de backup.");
+      console.error(error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // --- USUÁRIOS & SEGURANÇA ---
   const handleAddUser = async () => {
+    if (!isAdmin) return;
     if (!newUser.name || !newUser.email || !newUser.password)
       return alert("Preencha tudo");
     setIsUserLoading(true);
@@ -302,7 +341,6 @@ const Settings = () => {
       fileInputRef.current?.click();
     } else if (dangerActionType === "RESET") {
       if (confirmText !== "CONFIRMAR") return;
-      // performFactoryReset logic...
       alert("Reset efetuado (simulação)");
       setDangerModalOpen(false);
     }
@@ -345,6 +383,13 @@ const Settings = () => {
               </div>
             )}
 
+            {!isAdmin && activeTab !== "whatsapp" && (
+                <div className="mb-6 bg-orange-50 border border-orange-200 text-orange-800 px-4 py-3 rounded-xl text-sm font-bold flex items-center gap-3">
+                    <Lock size={18} className="text-orange-600" />
+                    Modo Leitura: Apenas administradores podem alterar essas configurações.
+                </div>
+            )}
+
             {activeTab === "empresa" && (
               <form
                 onSubmit={handleSave}
@@ -365,7 +410,20 @@ const Settings = () => {
                       type="text"
                       value={settings.company.name}
                       onChange={(e) => updateCompany("name", e.target.value)}
-                      className="w-full p-3 border border-slate-200 rounded-xl outline-none font-bold text-slate-700"
+                      disabled={!isAdmin}
+                      className="w-full p-3 border border-slate-200 rounded-xl outline-none font-bold text-slate-700 disabled:bg-slate-50 disabled:text-slate-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                      CNPJ
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.company.cnpj}
+                      onChange={(e) => updateCompany("cnpj", e.target.value)}
+                      disabled={!isAdmin}
+                      className="w-full p-3 border border-slate-200 rounded-xl outline-none disabled:bg-slate-50 disabled:text-slate-500"
                     />
                   </div>
                   <div>
@@ -376,7 +434,20 @@ const Settings = () => {
                       type="text"
                       value={settings.company.phone}
                       onChange={(e) => updateCompany("phone", e.target.value)}
-                      className="w-full p-3 border border-slate-200 rounded-xl outline-none"
+                      disabled={!isAdmin}
+                      className="w-full p-3 border border-slate-200 rounded-xl outline-none disabled:bg-slate-50 disabled:text-slate-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                      Email de Contato
+                    </label>
+                    <input
+                      type="email"
+                      value={settings.company.email}
+                      onChange={(e) => updateCompany("email", e.target.value)}
+                      disabled={!isAdmin}
+                      className="w-full p-3 border border-slate-200 rounded-xl outline-none disabled:bg-slate-50 disabled:text-slate-500"
                     />
                   </div>
                   <div>
@@ -387,23 +458,39 @@ const Settings = () => {
                       type="text"
                       value={settings.company.pixKey}
                       onChange={(e) => updateCompany("pixKey", e.target.value)}
-                      className="w-full p-3 border border-green-200 bg-green-50/30 text-green-800 font-mono rounded-xl outline-none"
+                      disabled={!isAdmin}
+                      className="w-full p-3 border border-green-200 bg-green-50/30 text-green-800 font-mono rounded-xl outline-none disabled:bg-slate-50 disabled:text-slate-500 disabled:border-slate-200"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                      Endereço Completo
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.company.address}
+                      onChange={(e) => updateCompany("address", e.target.value)}
+                      disabled={!isAdmin}
+                      className="w-full p-3 border border-slate-200 rounded-xl outline-none disabled:bg-slate-50 disabled:text-slate-500"
                     />
                   </div>
                 </div>
-                <div className="mt-8 pt-6 border-t border-gray-100 flex justify-end">
-                  <button
-                    type="submit"
-                    disabled={isLoading}
-                    className="bg-slate-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-800 shadow-lg"
-                  >
-                    {isLoading ? (
-                      <Loader2 className="animate-spin" size={18} />
-                    ) : (
-                      "Salvar Alterações"
-                    )}
-                  </button>
-                </div>
+                
+                {isAdmin && (
+                    <div className="mt-8 pt-6 border-t border-gray-100 flex justify-end">
+                    <button
+                        type="submit"
+                        disabled={isLoading}
+                        className="bg-slate-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-800 shadow-lg"
+                    >
+                        {isLoading ? (
+                        <Loader2 className="animate-spin" size={18} />
+                        ) : (
+                        "Salvar Alterações"
+                        )}
+                    </button>
+                    </div>
+                )}
               </form>
             )}
 
@@ -438,15 +525,29 @@ const Settings = () => {
                           </td>
                           <td className="p-4 text-right">
                             {isAdmin && (
-                              <button
-                                onClick={() => {
-                                  setSelectedUserEmail(u.username || u.email);
-                                  setResetModalOpen(true);
-                                }}
-                                className="text-blue-600 p-2"
-                              >
-                                <Key size={16} />
-                              </button>
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  title="Alterar Senha"
+                                  onClick={() => {
+                                    setSelectedUserEmail(u.username || u.email);
+                                    setResetModalOpen(true);
+                                  }}
+                                  className="text-blue-600 p-2 hover:bg-blue-50 rounded-lg transition-colors"
+                                >
+                                  <Key size={16} />
+                                </button>
+                                <button
+                                  title="Excluir Usuário"
+                                  onClick={() => {
+                                    if(confirm("Deseja realmente remover este acesso?")) {
+                                       alert("A exclusão de usuários deve estar conectada à API.");
+                                    }
+                                  }}
+                                  className="text-red-600 p-2 hover:bg-red-50 rounded-lg transition-colors"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
                             )}
                           </td>
                         </tr>
@@ -490,7 +591,7 @@ const Settings = () => {
                     </div>
                     <button
                       onClick={handleAddUser}
-                      className="mt-4 w-full bg-slate-900 text-white py-3 rounded-xl font-bold"
+                      className="mt-4 w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-800"
                     >
                       Adicionar Usuário
                     </button>
@@ -553,43 +654,140 @@ const Settings = () => {
                 <div className="flex items-center gap-3 border-b border-gray-100 pb-2">
                   <Shield className="text-slate-400" />
                   <h3 className="text-lg font-bold text-slate-800">
-                    Manutenção
+                    Manutenção do Sistema
                   </h3>
                 </div>
+                
                 <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col gap-4">
-                  <h4 className="font-bold text-sm uppercase">
-                    Modo de Amortização
+                  <h4 className="font-bold text-sm uppercase flex items-center gap-2 text-slate-700">
+                    <Calculator size={18} className="text-slate-500"/>
+                    Modo de Amortização Financeira
                   </h4>
                   <div className="flex bg-slate-100 p-1 rounded-xl w-max">
                     <button
-                      onClick={() => setAmortizationMode("LINEAR")}
-                      className={`px-6 py-2 text-xs font-bold rounded-lg ${amortizationMode === "LINEAR" ? "bg-white shadow-sm" : "text-slate-500"}`}
+                      onClick={() => {
+                        if(!isAdmin) return;
+                        setAmortizationMode("LINEAR");
+                        localStorage.setItem("amortizationMode", "LINEAR");
+                      }}
+                      disabled={!isAdmin}
+                      className={`px-6 py-2 text-xs font-bold rounded-lg transition-all disabled:opacity-70 disabled:cursor-not-allowed ${amortizationMode === "LINEAR" ? "bg-white shadow-sm text-slate-900" : "text-slate-500 hover:text-slate-700"}`}
                     >
                       Linear
                     </button>
                     <button
-                      onClick={() => setAmortizationMode("PRICE")}
-                      className={`px-6 py-2 text-xs font-bold rounded-lg ${amortizationMode === "PRICE" ? "bg-white shadow-sm" : "text-slate-500"}`}
+                      onClick={() => {
+                        if(!isAdmin) return;
+                        setAmortizationMode("PRICE");
+                        localStorage.setItem("amortizationMode", "PRICE");
+                      }}
+                      disabled={!isAdmin}
+                      className={`px-6 py-2 text-xs font-bold rounded-lg transition-all disabled:opacity-70 disabled:cursor-not-allowed ${amortizationMode === "PRICE" ? "bg-white shadow-sm text-slate-900" : "text-slate-500 hover:text-slate-700"}`}
                     >
-                      Price
+                      Tabela Price
                     </button>
                   </div>
                 </div>
+
+                {/* --- CONFIGURAÇÃO DE ALERTA DE VENCIMENTO RESTAURADA --- */}
+                <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col gap-4">
+                  <h4 className="font-bold text-sm uppercase flex items-center gap-2 text-slate-700">
+                    <Bell size={18} className="text-slate-500"/>
+                    Alertas e Notificações
+                  </h4>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Dias de Antecedência para Vencimento</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={settings.system?.warningDays || 3}
+                      onChange={(e) => updateSystem("warningDays", parseInt(e.target.value))}
+                      disabled={!isAdmin}
+                      className="w-full md:w-1/3 p-3 border border-slate-200 rounded-xl outline-none font-bold text-slate-700 disabled:bg-slate-50 disabled:text-slate-500"
+                    />
+                    <p className="text-xs text-slate-400 mt-2">Os contratos serão destacados como "A Vencer" nesta quantidade de dias antes do prazo.</p>
+                  </div>
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl p-6">
+                  <h4 className="font-bold text-slate-800 mb-2 text-sm uppercase flex items-center gap-2">
+                    <Save size={16} className="text-blue-500" /> Backup e Restauração
+                  </h4>
+                  <p className="text-sm text-slate-500 mb-4">
+                    Exporte todos os dados de forma manual ou restaure um arquivo de segurança.
+                  </p>
+
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    className="hidden"
+                    accept=".json"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      alert("Para restaurar o arquivo " + file.name + " em nuvem, a integração do Cloud Run precisa estar habilitada.");
+                    }}
+                  />
+
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    {/* BOTÃO QUE GERA O JSON REAL */}
+                    <button
+                      onClick={handleExportBackup}
+                      disabled={isLoading}
+                      className="flex-1 py-3 bg-blue-50 text-blue-700 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-blue-100 transition-colors border border-blue-200 disabled:opacity-50"
+                    >
+                      {isLoading ? <Loader2 className="animate-spin" size={18}/> : <Download size={18} />} 
+                      Fazer Backup Local
+                    </button>
+
+                    {isAdmin && (
+                        <button
+                        onClick={() => {
+                            setDangerActionType("RESTORE");
+                            setDangerModalOpen(true);
+                        }}
+                        className="flex-1 py-3 bg-orange-50 text-orange-700 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-orange-100 transition-colors border border-orange-200"
+                        >
+                        <Upload size={18} /> Restaurar Backup
+                        </button>
+                    )}
+                  </div>
+                </div>
+
                 {isAdmin && (
                   <div className="bg-red-50 border border-red-200 rounded-xl p-6">
-                    <h4 className="text-red-700 font-bold mb-4">
-                      Zona de Perigo
+                    <h4 className="text-red-700 font-bold mb-4 flex items-center gap-2 uppercase text-sm">
+                       <AlertTriangle size={18} /> Zona de Perigo
                     </h4>
+                    <p className="text-xs text-red-600 mb-4">A exclusão do sistema é irreversível e apagará todos os dados armazenados.</p>
                     <button
                       onClick={() => {
                         setDangerActionType("RESET");
                         setDangerModalOpen(true);
                       }}
-                      className="w-full py-3 bg-red-600 text-white rounded-xl font-bold"
+                      className="w-full py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-colors shadow-lg shadow-red-900/20"
                     >
                       Reset de Fábrica
                     </button>
                   </div>
+                )}
+
+                {/* BOTÃO SALVAR DA ABA SISTEMA */}
+                {isAdmin && (
+                    <div className="mt-8 pt-6 border-t border-gray-100 flex justify-end">
+                      <button
+                          onClick={() => handleSave()}
+                          disabled={isLoading}
+                          className="bg-slate-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-800 shadow-lg"
+                      >
+                          {isLoading ? (
+                          <Loader2 className="animate-spin" size={18} />
+                          ) : (
+                          "Salvar Configurações do Sistema"
+                          )}
+                      </button>
+                    </div>
                 )}
               </div>
             )}
@@ -612,7 +810,7 @@ const Settings = () => {
             </p>
             <button
               onClick={() => setShowQRModal(false)}
-              className="mt-8 w-full bg-slate-900 text-white font-bold py-3 rounded-xl"
+              className="mt-8 w-full bg-slate-900 text-white font-bold py-3 rounded-xl hover:bg-slate-800 transition-colors"
             >
               Fechar
             </button>
@@ -620,7 +818,7 @@ const Settings = () => {
         </div>
       )}
 
-      {/* MODAL SEGURANÇA (RESET) */}
+      {/* MODAL SEGURANÇA (RESET / RESTORE) */}
       <Modal
         isOpen={dangerModalOpen}
         onClose={() => setDangerModalOpen(false)}
@@ -628,12 +826,13 @@ const Settings = () => {
         color="red"
       >
         <div className="space-y-4 text-center">
+          <p className="text-xs text-red-800 font-bold mb-2">Digite o código de segurança para prosseguir:</p>
           <input
             type="password"
             placeholder="Senha de Segurança"
             value={securityCode}
             onChange={(e) => setSecurityCode(e.target.value)}
-            className="w-full p-3 border rounded-xl text-center font-bold"
+            className="w-full p-3 border rounded-xl text-center font-bold bg-white"
           />
           {dangerActionType === "RESET" && (
             <input
@@ -641,19 +840,19 @@ const Settings = () => {
               placeholder='Digite "CONFIRMAR"'
               value={confirmText}
               onChange={(e) => setConfirmText(e.target.value)}
-              className="w-full p-3 border border-red-200 rounded-xl text-center text-red-600"
+              className="w-full p-3 border border-red-200 rounded-xl text-center text-red-600 bg-white"
             />
           )}
-          <div className="flex gap-3">
+          <div className="flex gap-3 pt-2">
             <button
               onClick={() => setDangerModalOpen(false)}
-              className="flex-1 py-3 bg-slate-100 rounded-xl"
+              className="flex-1 py-3 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-colors"
             >
               Cancelar
             </button>
             <button
               onClick={handleSecurityCheck}
-              className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold"
+              className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-colors"
             >
               Confirmar
             </button>
@@ -673,7 +872,7 @@ const Settings = () => {
             type="password"
             value={newPasswordReset}
             onChange={(e) => setNewPasswordReset(e.target.value)}
-            className="w-full p-3 border rounded-xl"
+            className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-100"
             placeholder="Nova Senha"
           />
           <button
@@ -684,7 +883,7 @@ const Settings = () => {
               alert("Senha alterada!");
               setResetModalOpen(false);
             }}
-            className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl"
+            className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-colors"
           >
             Salvar Senha
           </button>
