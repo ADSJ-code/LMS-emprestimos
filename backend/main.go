@@ -415,6 +415,7 @@ func main() {
 	mux.HandleFunc("/api/instances/ver", waCtrl.VerInstancias)
 	mux.HandleFunc("/api/instances/criar", waCtrl.CriarInstanciaMsg)
 	mux.HandleFunc("/api/instances/conectar", waCtrl.ConectarInstancia)
+	mux.HandleFunc("/api/instances/desconectar", waCtrl.DesconectarInstancia)
 
 	// Admin
 	mux.HandleFunc("/api/admin/reset", adminMiddleware(resetDatabaseHandler))
@@ -847,11 +848,22 @@ func (ctrl *WhatsappController) ConectarInstancia(w http.ResponseWriter, r *http
 	json.NewEncoder(w).Encode(res)
 }
 
+func (ctrl *WhatsappController) DesconectarInstancia(w http.ResponseWriter, r *http.Request) {
+	var body CreateInstance
+	json.NewDecoder(r.Body).Decode(&body)
+	if err := ctrl.svc.DisconnectInstance(r.Context(), body.Name); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.WriteHeader(200)
+}
+
 type WhatsappService interface {
 	SendMessage(ctx context.Context, inst, phone, msg string, delay int, name string, days int, amt float64, due, key string) error
 	ViewInstances(ctx context.Context) ([]InstanceResponse, error)
 	CreateInstance(ctx context.Context, name, phone string) (interface{}, error)
 	ConnectInstance(ctx context.Context, name, phone string) (interface{}, error)
+	DisconnectInstance(ctx context.Context, name string) error
 }
 
 type whatsappService struct {
@@ -1096,6 +1108,26 @@ func (s *whatsappService) ConnectInstance(ctx context.Context, name, phone strin
 	}
 
 	return res, err
+}
+
+func (s *whatsappService) DisconnectInstance(ctx context.Context, name string) error {
+	url := fmt.Sprintf("%s/instance/logout/%s", s.ApiURL, name)
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("apikey", s.ApiGlobalKey)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("erro ao desconectar: %s", string(body))
+	}
+	return nil
 }
 
 // --- Structs de Resposta de Terceiros ---

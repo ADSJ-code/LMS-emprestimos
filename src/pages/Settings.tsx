@@ -124,7 +124,28 @@ const Settings = () => {
   const [qrCodeBase64, setQrCodeBase64] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [whatsappStatus, setWhatsappStatus] = useState<"unknown" | "open" | "close">("unknown");
+  const [pairingCode, setPairingCode] = useState("");
+
+  const handleDisconnectWhatsApp = async () => {
+    if (!settings.company.name) return;
+    if (!confirm("Deseja realmente desconectar o WhatsApp?")) return;
+    setIsDisconnecting(true);
+    try {
+      await fetch(`${getApiUrl()}/api/instances/desconectar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: settings.company.name, phone: settings.company.phone }),
+      });
+      setWhatsappStatus("close");
+      alert("WhatsApp desconectado com sucesso.");
+    } catch {
+      alert("Erro ao desconectar.");
+    } finally {
+      setIsDisconnecting(false);
+    }
+  };
 
   const handleCheckWhatsAppStatus = async () => {
     if (!settings.company.name) return;
@@ -202,9 +223,11 @@ const Settings = () => {
       }
 
       const qrCode = data.details?.base64 || data.base64;
+      const code = data.details?.code || data.code || "";
 
       if (qrCode) {
         setQrCodeBase64(qrCode);
+        setPairingCode(code);
         setShowQRModal(true);
       } else if (
         data.status === "CONNECTED" ||
@@ -718,6 +741,14 @@ const Settings = () => {
                         <AlertTriangle size={13} /> Preencha o nome e telefone antes de conectar.
                       </p>
                     )}
+                    <button
+                      onClick={handleDisconnectWhatsApp}
+                      disabled={isDisconnecting || !settings.company.name}
+                      className="w-full px-6 py-3 bg-red-50 text-red-600 border border-red-200 rounded-xl font-bold flex justify-between items-center hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <span>{isDisconnecting ? "Desconectando..." : "Desconectar WhatsApp"}</span>
+                      {isDisconnecting ? <Loader2 size={18} className="animate-spin" /> : <X size={18} />}
+                    </button>
                   </div>
                   <div className="flex flex-col items-center justify-center p-8 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 gap-3">
                     <Activity
@@ -904,18 +935,34 @@ const Settings = () => {
       {showQRModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-white p-8 rounded-3xl w-full max-w-sm flex flex-col items-center shadow-2xl animate-in zoom-in">
-            <h3 className="text-xl font-bold mb-6 text-gray-800">
-              Escaneie o Código
-            </h3>
+            <h3 className="text-xl font-bold mb-2 text-gray-800">Conectar WhatsApp</h3>
+            <p className="text-xs text-slate-400 text-center mb-6">Escolha uma das opções abaixo</p>
+
+            {/* QR Code */}
+            <p className="text-xs font-bold text-slate-500 uppercase mb-2">Opção 1 — Escanear QR Code</p>
             <div className="bg-white p-2 border-2 border-gray-100 rounded-xl shadow-inner">
-              <img src={qrCodeBase64} alt="QR Code" className="w-64 h-64" />
+              <img src={qrCodeBase64} alt="QR Code" className="w-56 h-56" />
             </div>
-            <p className="mt-6 text-xs text-slate-400 text-center">
-              Abra o WhatsApp e escaneie para conectar.
+            <p className="mt-2 text-xs text-slate-400 text-center">
+              Abra o WhatsApp → Menu → Dispositivos conectados → Conectar dispositivo
             </p>
+
+            {/* Pairing Code */}
+            {pairingCode && (
+              <div className="mt-6 w-full">
+                <p className="text-xs font-bold text-slate-500 uppercase mb-2 text-center">Opção 2 — Código de Emparelhamento</p>
+                <div className="bg-slate-50 border-2 border-slate-200 rounded-xl p-4 flex flex-col items-center gap-1">
+                  <span className="text-3xl font-mono font-black tracking-[0.3em] text-slate-800">{pairingCode}</span>
+                  <p className="text-xs text-slate-400 text-center mt-1">
+                    Abra o WhatsApp → Menu → Dispositivos conectados → Conectar com número de telefone
+                  </p>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={() => setShowQRModal(false)}
-              className="mt-8 w-full bg-slate-900 text-white font-bold py-3 rounded-xl hover:bg-slate-800 transition-colors"
+              className="mt-6 w-full bg-slate-900 text-white font-bold py-3 rounded-xl hover:bg-slate-800 transition-colors"
             >
               Fechar
             </button>
