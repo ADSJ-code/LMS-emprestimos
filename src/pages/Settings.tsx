@@ -609,15 +609,67 @@ const Settings = () => {
             {activeTab === "whatsapp" && (
               <div className="space-y-6 animate-in fade-in">
                 <div className="flex items-center gap-3 border-b border-gray-100 pb-2">
-                  <CheckCircle className="text-green-500" />
+                  <MessageCircle className="text-green-500" />
                   <h3 className="text-lg font-bold text-slate-800">
                     Integração WhatsApp
                   </h3>
                 </div>
+
+                {/* Campos obrigatórios para a integração */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-4">
+                  <h4 className="font-bold text-sm uppercase text-slate-600 flex items-center gap-2">
+                    <Building size={16} /> Dados da Instância
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    Estes dados identificam sua empresa na integração com o WhatsApp. O nome será usado como ID da instância.
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                        Nome da Empresa / Instância
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.company.name}
+                        onChange={(e) => updateCompany("name", e.target.value)}
+                        placeholder="Ex: MinhaEmpresa"
+                        className="w-full p-3 border border-slate-200 rounded-xl outline-none font-bold text-slate-700 focus:ring-2 focus:ring-green-100 focus:border-green-300"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                        Telefone / WhatsApp da Empresa
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.company.phone}
+                        onChange={(e) => updateCompany("phone", e.target.value)}
+                        placeholder="Ex: 5511999999999"
+                        className="w-full p-3 border border-slate-200 rounded-xl outline-none text-slate-700 focus:ring-2 focus:ring-green-100 focus:border-green-300"
+                      />
+                      <p className="text-xs text-slate-400 mt-1">Com DDI e DDD, sem espaços ou símbolos.</p>
+                    </div>
+                  </div>
+                  <div className="flex justify-end pt-2">
+                    <button
+                      onClick={() => handleSave()}
+                      disabled={isLoading}
+                      className="bg-slate-800 text-white px-6 py-2 rounded-xl font-bold text-sm hover:bg-slate-700 flex items-center gap-2"
+                    >
+                      {isLoading ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+                      Salvar Dados
+                    </button>
+                  </div>
+                </div>
+
+                {/* Conexão */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-4">
+                    <h4 className="font-bold text-sm uppercase text-slate-600 flex items-center gap-2">
+                      <Activity size={16} /> Conexão
+                    </h4>
                     <p className="text-sm text-slate-500">
-                      Conecte sua instância para disparos automáticos.
+                      Após preencher os dados acima, clique para gerar o QR Code e escanear com o WhatsApp.
                     </p>
                     <button
                       onClick={() =>
@@ -626,28 +678,27 @@ const Settings = () => {
                           settings.company.phone,
                         )
                       }
-                      disabled={isConnecting}
-                      className="w-full px-6 py-4 bg-[#25D366] text-white rounded-xl font-bold flex justify-between items-center hover:bg-[#128C7E] shadow-lg disabled:opacity-50"
+                      disabled={isConnecting || !settings.company.name || !settings.company.phone}
+                      className="w-full px-6 py-4 bg-[#25D366] text-white rounded-xl font-bold flex justify-between items-center hover:bg-[#128C7E] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <span>
-                        {isConnecting
-                          ? "Gerando QR Code..."
-                          : "Conectar o WhatsApp"}
+                        {isConnecting ? "Gerando QR Code..." : "Conectar o WhatsApp"}
                       </span>
                       {!isConnecting && <ArrowRight size={20} />}
                     </button>
+                    {(!settings.company.name || !settings.company.phone) && (
+                      <p className="text-xs text-amber-600 font-bold flex items-center gap-1">
+                        <AlertTriangle size={13} /> Preencha o nome e telefone antes de conectar.
+                      </p>
+                    )}
                   </div>
                   <div className="flex flex-col items-center justify-center p-8 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
                     <Activity
-                      className={
-                        qrCodeBase64 ? "text-green-600" : "text-slate-400"
-                      }
+                      className={qrCodeBase64 ? "text-green-600" : "text-slate-400"}
                       size={32}
                     />
-                    <span className="text-sm font-bold mt-2 text-slate-700">
-                      Status
-                    </span>
-                    <span className="text-xs">
+                    <span className="text-sm font-bold mt-2 text-slate-700">Status</span>
+                    <span className={`text-xs font-bold mt-1 ${qrCodeBase64 ? "text-green-600" : "text-slate-400"}`}>
                       {qrCodeBase64 ? "Pronto para Escanear" : "Desconectado"}
                     </span>
                   </div>
