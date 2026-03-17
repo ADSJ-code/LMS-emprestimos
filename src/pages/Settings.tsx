@@ -33,7 +33,6 @@ const getApiUrl = () =>
   `https://creditnow-prod-266321031136.us-central1.run.app`;
 localStorage.setItem("getApiUrl", getApiUrl());
 
-// --- COMPONENTE MODAL GENÉRICO ---
 const Modal = ({ isOpen, onClose, title, children, color = "slate" }: any) => {
   if (!isOpen) return null;
 
@@ -69,16 +68,13 @@ const Settings = () => {
   >("empresa");
   const [isLoading, setIsLoading] = useState(false);
 
-  // --- AUTH & USER DATA ---
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // --- USER MANAGEMENT STATES ---
   const [users, setUsers] = useState<any[]>([]);
   const [newUser, setNewUser] = useState({ name: "", email: "", password: "" });
   const [isUserLoading, setIsUserLoading] = useState(false);
 
-  // --- MODALS STATES ---
   const [showSuccess, setShowSuccess] = useState(false);
   const [resetModalOpen, setResetModalOpen] = useState(false);
   const [selectedUserEmail, setSelectedUserEmail] = useState<string | null>(
@@ -86,7 +82,6 @@ const Settings = () => {
   );
   const [newPasswordReset, setNewPasswordReset] = useState("");
 
-  // --- DANGER ZONE STATES (RESTORE/RESET) ---
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dangerModalOpen, setDangerModalOpen] = useState(false);
   const [dangerActionType, setDangerActionType] = useState<
@@ -95,7 +90,6 @@ const Settings = () => {
   const [securityCode, setSecurityCode] = useState("");
   const [confirmText, setConfirmText] = useState("");
 
-  // --- SETTINGS FORM STATE ---
   const defaultSettings = {
     company: {
       name: localStorage.getItem("lms_company_name_cache") || "",
@@ -113,13 +107,11 @@ const Settings = () => {
   };
   const [settings, setSettings] = useState<any>(defaultSettings);
 
-  // MODO DE AMORTIZAÇÃO
   const [amortizationMode, setAmortizationMode] = useState<"LINEAR" | "PRICE">(
     (localStorage.getItem("amortizationMode") as "LINEAR" | "PRICE") ||
       "LINEAR",
   );
 
-  // --- ESTADOS WHATSAPP ---
   const [showQRModal, setShowQRModal] = useState(false);
   const [qrCodeBase64, setQrCodeBase64] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
@@ -172,7 +164,6 @@ const Settings = () => {
     }
   };
 
-  // FUNÇÃO DE CONEXÃO INTEGRADA COM BACKEND GO
   const handleConnectWhatsApp = async (nome: string, phone: string) => {
     setIsConnecting(true);
 
@@ -197,7 +188,7 @@ const Settings = () => {
         messageText.includes("não encontrada");
 
       if (isMissing) {
-        console.log("⚠️ Instância ausente detectada. Criando...");
+        console.log("Instância ausente detectada. Criando...");
 
         const createRes = await fetch(
           `${getApiUrl()}/api/instances/criar`,
@@ -212,7 +203,7 @@ const Settings = () => {
         );
 
         if (createRes.ok) {
-          console.log("✅ Instância criada. Tentando conectar em 1.5s...");
+          console.log("Instância criada. Tentando conectar em 1.5s...");
           setTimeout(() => handleConnectWhatsApp(nome, phone), 1500);
           return;
         } else {
@@ -225,7 +216,6 @@ const Settings = () => {
       console.log("Resposta conexão WhatsApp:", JSON.stringify(data, null, 2));
       const qrCode = data.details?.base64 || data.base64;
       const rawCode = data.details?.pairingCode || data.pairingCode || data.details?.code || data.code || "";
-      // Pairing code válido tem 8 caracteres alfanuméricos (ex: "A1B2C3D4" ou "ABCD-EFGH")
       const code = /^[A-Z0-9\-]{4,8}$/i.test(rawCode) ? rawCode : "";
 
       if (qrCode) {
@@ -250,7 +240,6 @@ const Settings = () => {
     }
   };
 
-  // --- INITIAL LOAD ---
   useEffect(() => {
     let userObj = null;
     const sessionStr = localStorage.getItem("lms_active_session");
@@ -296,7 +285,6 @@ const Settings = () => {
     fetchData();
   }, []);
 
-  // --- HANDLERS: EMPRESA E SISTEMA ---
   const handleSave = async (e?: React.FormEvent) => {
     if(e) e.preventDefault();
     if (!isAdmin) {
@@ -338,7 +326,6 @@ const Settings = () => {
     setSettings((p: any) => ({ ...p, system: { ...p.system, [f]: v } }));
   };
 
-  // --- FUNÇÃO REAL DE BACKUP ---
   const handleExportBackup = async () => {
     try {
       setIsLoading(true);
@@ -362,16 +349,15 @@ const Settings = () => {
       downloadAnchorNode.click();
       downloadAnchorNode.remove();
       
-      alert("✅ Backup gerado e baixado com sucesso!");
+      alert("Backup gerado e baixado com sucesso!");
     } catch (error) {
-      alert("❌ Erro ao gerar arquivo de backup.");
+      alert("Erro ao gerar arquivo de backup.");
       console.error(error);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // --- USUÁRIOS & SEGURANÇA ---
   const handleAddUser = async () => {
     if (!isAdmin) return;
     if (!newUser.name || !newUser.email || !newUser.password)
@@ -390,18 +376,47 @@ const Settings = () => {
     }
   };
 
-  const handleSecurityCheck = () => {
+  const handleSecurityCheck = async () => {
     if (securityCode !== "SUPORTE" && securityCode !== "admin123") {
       alert("Código incorreto.");
       return;
     }
+    
     if (dangerActionType === "RESTORE") {
       setDangerModalOpen(false);
       fileInputRef.current?.click();
     } else if (dangerActionType === "RESET") {
       if (confirmText !== "CONFIRMAR") return;
-      alert("Reset efetuado (simulação)");
-      setDangerModalOpen(false);
+
+      try {
+        const sessionStr = localStorage.getItem("lms_active_session");
+        let token = "";
+        
+        if (sessionStr) {
+          const sessionData = JSON.parse(sessionStr);
+          token = sessionData.token || "";
+        }
+
+        const response = await fetch(`${getApiUrl()}/api/system/reset`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          }
+        });
+
+        if (response.ok) {
+          alert("Sistema resetado com sucesso. Todos os dados foram apagados.");
+          localStorage.clear();
+          window.location.href = "/";
+        } else {
+          alert("Falha ao comunicar com a API de reset.");
+        }
+      } catch (error) {
+        alert("Erro de conexão ao tentar resetar o sistema.");
+      } finally {
+        setDangerModalOpen(false);
+      }
     }
   };
 
@@ -668,7 +683,6 @@ const Settings = () => {
                   </h3>
                 </div>
 
-                {/* Campos obrigatórios para a integração */}
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-4">
                   <h4 className="font-bold text-sm uppercase text-slate-600 flex items-center gap-2">
                     <Building size={16} /> Dados da Instância
@@ -715,7 +729,6 @@ const Settings = () => {
                   </div>
                 </div>
 
-                {/* Conexão */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-4">
                     <h4 className="font-bold text-sm uppercase text-slate-600 flex items-center gap-2">
@@ -761,8 +774,8 @@ const Settings = () => {
                         whatsappStatus === "close" ? "text-red-500" :
                         "text-slate-400"
                       }`}>
-                        {whatsappStatus === "open" ? "✅ Conectado" :
-                         whatsappStatus === "close" ? "❌ Desconectado" :
+                        {whatsappStatus === "open" ? "Conectado" :
+                         whatsappStatus === "close" ? "Desconectado" :
                          "— Não verificado"}
                       </span>
                     </div>
@@ -831,7 +844,6 @@ const Settings = () => {
                   </div>
                 </div>
 
-                {/* --- CONFIGURAÇÃO DE ALERTA DE VENCIMENTO RESTAURADA --- */}
                 <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col gap-4">
                   <h4 className="font-bold text-sm uppercase flex items-center gap-2 text-slate-700">
                     <Bell size={18} className="text-slate-500"/>
@@ -873,7 +885,6 @@ const Settings = () => {
                   />
 
                   <div className="flex flex-col sm:flex-row gap-4">
-                    {/* BOTÃO QUE GERA O JSON REAL */}
                     <button
                       onClick={handleExportBackup}
                       disabled={isLoading}
@@ -915,7 +926,6 @@ const Settings = () => {
                   </div>
                 )}
 
-                {/* BOTÃO SALVAR DA ABA SISTEMA */}
                 {isAdmin && (
                     <div className="mt-8 pt-6 border-t border-gray-100 flex justify-end">
                       <button
@@ -937,14 +947,12 @@ const Settings = () => {
         </div>
       </div>
 
-      {/* MODAL QR CODE */}
       {showQRModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-white p-8 rounded-3xl w-full max-w-sm flex flex-col items-center shadow-2xl animate-in zoom-in">
             <h3 className="text-xl font-bold mb-2 text-gray-800">Conectar WhatsApp</h3>
             <p className="text-xs text-slate-400 text-center mb-6">Escolha uma das opções abaixo</p>
 
-            {/* QR Code */}
             <p className="text-xs font-bold text-slate-500 uppercase mb-2">Opção 1 — Escanear QR Code</p>
             <div className="bg-white p-2 border-2 border-gray-100 rounded-xl shadow-inner">
               <img src={qrCodeBase64} alt="QR Code" className="w-56 h-56" />
@@ -953,7 +961,6 @@ const Settings = () => {
               Abra o WhatsApp → Menu → Dispositivos conectados → Conectar dispositivo
             </p>
 
-            {/* Pairing Code */}
             {pairingCode && (
               <div className="mt-6 w-full">
                 <p className="text-xs font-bold text-slate-500 uppercase mb-2 text-center">Opção 2 — Código de Emparelhamento</p>
@@ -976,7 +983,6 @@ const Settings = () => {
         </div>
       )}
 
-      {/* MODAL SEGURANÇA (RESET / RESTORE) */}
       <Modal
         isOpen={dangerModalOpen}
         onClose={() => setDangerModalOpen(false)}
@@ -1018,7 +1024,6 @@ const Settings = () => {
         </div>
       </Modal>
 
-      {/* MODAL RESET SENHA USUÁRIO */}
       <Modal
         isOpen={resetModalOpen}
         onClose={() => setResetModalOpen(false)}
