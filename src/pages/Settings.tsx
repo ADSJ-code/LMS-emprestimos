@@ -188,8 +188,6 @@ const Settings = () => {
         messageText.includes("não encontrada");
 
       if (isMissing) {
-        console.log("Instância ausente detectada. Criando...");
-
         const createRes = await fetch(
           `${getApiUrl()}/api/instances/criar`,
           {
@@ -203,7 +201,6 @@ const Settings = () => {
         );
 
         if (createRes.ok) {
-          console.log("Instância criada. Tentando conectar em 1.5s...");
           setTimeout(() => handleConnectWhatsApp(nome, phone), 1500);
           return;
         } else {
@@ -213,7 +210,6 @@ const Settings = () => {
         }
       }
 
-      console.log("Resposta conexão WhatsApp:", JSON.stringify(data, null, 2));
       const qrCode = data.details?.base64 || data.base64;
       const rawCode = data.details?.pairingCode || data.pairingCode || data.details?.code || data.code || "";
       const code = /^[A-Z0-9\-]{4,8}$/i.test(rawCode) ? rawCode : "";
@@ -229,11 +225,9 @@ const Settings = () => {
       ) {
         alert("WhatsApp já está conectado!");
       } else {
-        console.log("Resposta inesperada:", data);
         alert("Não foi possível obter o QR Code.");
       }
     } catch (error) {
-      console.error("Erro na requisição:", error);
       alert("Erro de rede ao comunicar com o servidor.");
     } finally {
       setIsConnecting(false);
@@ -612,9 +606,16 @@ const Settings = () => {
                                 </button>
                                 <button
                                   title="Excluir Usuário"
-                                  onClick={() => {
+                                  onClick={async () => {
                                     if(confirm("Deseja realmente remover este acesso?")) {
-                                       alert("A exclusão de usuários deve estar conectada à API.");
+                                      try {
+                                        await authService.removeUser(u.username || u.email);
+                                        const updatedList = await authService.listUsers();
+                                        setUsers(updatedList || []);
+                                        alert("Usuário removido com sucesso!");
+                                      } catch (err) {
+                                        alert("Erro ao remover usuário.");
+                                      }
                                     }
                                   }}
                                   className="text-red-600 p-2 hover:bg-red-50 rounded-lg transition-colors"
