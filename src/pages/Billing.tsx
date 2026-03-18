@@ -722,6 +722,7 @@ const Billing = () => {
     if (balance <= 0.10) {
         updatedLoan.status = 'Quitado';
         updatedLoan.installments = 0;
+        if (isSimple) updatedLoan.installmentValue = 0;
     } else {
         updatedLoan.status = 'Em Dia'; 
         
@@ -746,7 +747,16 @@ const Billing = () => {
                  updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
              }
              
-             if (!isSimple || valCapital > 0) updatedLoan.installments = Math.max(0, updatedLoan.installments - 1);
+             if (!isSimple) {
+                 updatedLoan.installments = Math.max(0, updatedLoan.installments - 1);
+             }
+        }
+
+        if (isSimple && valCapital > 0) {
+            let periodRate = updatedLoan.interestRate / 100;
+            if (updatedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
+            else if (updatedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
+            updatedLoan.installmentValue = balance * periodRate;
         }
     }
 
@@ -799,8 +809,17 @@ const Billing = () => {
         updatedLoan.totalPaidInterest = Math.max(0, (updatedLoan.totalPaidInterest || 0) - (lastEntry.interestPaid || 0));
         
         const isSimple = updatedLoan.interestType === 'SIMPLE';
-        if (!isSimple || (lastEntry.capitalPaid && lastEntry.capitalPaid > 0)) {
+        
+        if (!isSimple) {
             updatedLoan.installments += 1;
+        }
+
+        if (isSimple && (lastEntry.capitalPaid && lastEntry.capitalPaid > 0)) {
+            const restoredBalance = updatedLoan.amount - updatedLoan.totalPaidCapital;
+            let periodRate = updatedLoan.interestRate / 100;
+            if (updatedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
+            else if (updatedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
+            updatedLoan.installmentValue = restoredBalance * periodRate;
         }
     }
 
