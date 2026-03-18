@@ -176,7 +176,6 @@ func StartDailyBackupRoutine() {
 
 func performInternalBackup() {
 	log.Println("🔄 Backup Automático...")
-	// CORREÇÃO AQUI: time.Minute em vez de minute
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -394,7 +393,7 @@ func main() {
 
 	// Auth
 	mux.HandleFunc("/api/auth/login", loginHandler)
-	
+
 	// Rotas protegidas
 	mux.HandleFunc("/api/users", authMiddleware(usersHandler))
 	mux.HandleFunc("/api/users/", authMiddleware(userDetailHandler))
@@ -432,7 +431,6 @@ func main() {
 			}
 		}
 
-		// Se não achar a pasta dist, apenas avisa e não trava a API
 		if caminhoDist == "" {
 			if strings.HasPrefix(r.URL.Path, "/api") {
 				http.NotFound(w, r)
@@ -494,43 +492,47 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// BLINDAGEM: Lê o JSON aceitando tanto "email" (React) quanto "Username" (Go)
-	var creds struct {
-		Username string `json:"email"`    
-		Password string `json:"password"` 
-	}
-
 	bodyBytes, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil || creds.Username == "" {
-		// Fallback para Iniciais Maiúsculas se o frontend enviar assim
-		var credsUpper struct {
-			Username string `json:"Username"`
-			Password string `json:"Password"`
-		}
-		json.Unmarshal(bodyBytes, &credsUpper)
-		if credsUpper.Username != "" {
-			creds.Username = credsUpper.Username
-			creds.Password = credsUpper.Password
-		}
+	var payload map[string]interface{}
+	json.Unmarshal(bodyBytes, &payload)
+
+	var username, password string
+
+	if val, ok := payload["email"].(string); ok {
+		username = strings.TrimSpace(val)
+	} else if val, ok := payload["username"].(string); ok && username == "" {
+		username = strings.TrimSpace(val)
+	} else if val, ok := payload["Username"].(string); ok && username == "" {
+		username = strings.TrimSpace(val)
+	}
+
+	if val, ok := payload["password"].(string); ok {
+		password = strings.TrimSpace(val)
+	} else if val, ok := payload["Password"].(string); ok && password == "" {
+		password = strings.TrimSpace(val)
+	}
+
+	if username == "" || password == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var storedUser User
-	if err := userCollection.FindOne(ctx, bson.M{"username": creds.Username}).Decode(&storedUser); err != nil {
-		// Tenta buscar pelo campo 'username' puramente (caso do 'admin' sem @)
-		err = userCollection.FindOne(ctx, bson.M{"username": creds.Username}).Decode(&storedUser)
+	if err := userCollection.FindOne(ctx, bson.M{"username": username}).Decode(&storedUser); err != nil {
+		// Fallback para Iniciais Maiúsculas se falhar
+		err = userCollection.FindOne(ctx, bson.M{"username": username}).Decode(&storedUser)
 		if err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 	}
 
-	// BLINDAGEM: Aceita senha Bcrypt OU texto puro (para testes)
-	if !checkPasswordHash(creds.Password, storedUser.Password) && creds.Password != storedUser.Password {
+	if !checkPasswordHash(password, storedUser.Password) && password != storedUser.Password {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -555,6 +557,7 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
 	switch r.Method {
 	case http.MethodGet:
 		cursor, _ := userCollection.Find(ctx, bson.M{})
@@ -584,6 +587,7 @@ func userDetailHandler(w http.ResponseWriter, r *http.Request) {
 	email := strings.TrimPrefix(r.URL.Path, "/api/users/")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
 	switch r.Method {
 	case http.MethodPut:
 		var d struct {
@@ -607,19 +611,30 @@ func userDetailHandler(w http.ResponseWriter, r *http.Request) {
 func loansHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if r.Method == http.MethodGet {
+
+	switch r.Method {
+	case http.MethodGet:
 		cursor, _ := loanCollection.Find(ctx, bson.M{})
 		var results []Loan
 		cursor.All(ctx, &results)
-		if results == nil { results = []Loan{} }
+		if results == nil {
+			results = []Loan{}
+		}
 		json.NewEncoder(w).Encode(results)
-	} else if r.Method == http.MethodPost {
+	case http.MethodPost:
 		var l Loan
 		json.NewDecoder(r.Body).Decode(&l)
-		l.ID = primitive.NewObjectID().Hex()
+
+		// CORREÇÃO: Só gera código aleatório se o React NÃO enviar o ID
+		if l.ID == "" {
+			l.ID = primitive.NewObjectID().Hex()
+		}
+
 		loanCollection.InsertOne(ctx, l)
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(l)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
@@ -627,14 +642,18 @@ func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/loans/")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if r.Method == http.MethodPut {
+
+	switch r.Method {
+	case http.MethodPut:
 		var l Loan
 		json.NewDecoder(r.Body).Decode(&l)
 		loanCollection.ReplaceOne(ctx, bson.M{"id": id}, l)
 		json.NewEncoder(w).Encode(l)
-	} else if r.Method == http.MethodDelete {
+	case http.MethodDelete:
 		loanCollection.DeleteOne(ctx, bson.M{"id": id})
 		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
@@ -642,19 +661,27 @@ func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
 func clientsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if r.Method == http.MethodGet {
+
+	switch r.Method {
+	case http.MethodGet:
 		cursor, _ := clientCollection.Find(ctx, bson.M{})
 		var results []Client
 		cursor.All(ctx, &results)
-		if results == nil { results = []Client{} }
+		if results == nil {
+			results = []Client{}
+		}
 		json.NewEncoder(w).Encode(results)
-	} else if r.Method == http.MethodPost {
+	case http.MethodPost:
 		var c Client
 		json.NewDecoder(r.Body).Decode(&c)
-		if c.ID == 0 { c.ID = time.Now().UnixNano() / 1e6 }
+		if c.ID == 0 {
+			c.ID = time.Now().UnixNano() / 1e6
+		}
 		clientCollection.InsertOne(ctx, c)
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(c)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
@@ -663,14 +690,18 @@ func clientUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	id, _ := strconv.ParseInt(idStr, 10, 64)
-	if r.Method == http.MethodPut {
+
+	switch r.Method {
+	case http.MethodPut:
 		var c Client
 		json.NewDecoder(r.Body).Decode(&c)
 		clientCollection.ReplaceOne(ctx, bson.M{"id": id}, c)
 		json.NewEncoder(w).Encode(c)
-	} else if r.Method == http.MethodDelete {
+	case http.MethodDelete:
 		clientCollection.DeleteOne(ctx, bson.M{"id": id})
 		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
@@ -679,67 +710,103 @@ func clientUpdateHandler(w http.ResponseWriter, r *http.Request) {
 func affiliatesHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cursor, _ := affiliateCollection.Find(ctx, bson.M{})
-	var res []Affiliate
-	cursor.All(ctx, &res)
-	if res == nil { res = []Affiliate{} }
-	json.NewEncoder(w).Encode(res)
+
+	switch r.Method {
+	case http.MethodGet:
+		cursor, _ := affiliateCollection.Find(ctx, bson.M{})
+		var res []Affiliate
+		cursor.All(ctx, &res)
+		if res == nil {
+			res = []Affiliate{}
+		}
+		json.NewEncoder(w).Encode(res)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func affiliateUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/affiliates/")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if r.Method == http.MethodDelete {
+
+	switch r.Method {
+	case http.MethodDelete:
 		affiliateCollection.DeleteOne(ctx, bson.M{"id": id})
 		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
 func blacklistHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cursor, _ := blacklistCollection.Find(ctx, bson.M{})
-	var res []BlacklistEntry
-	cursor.All(ctx, &res)
-	if res == nil { res = []BlacklistEntry{} }
-	json.NewEncoder(w).Encode(res)
+
+	switch r.Method {
+	case http.MethodGet:
+		cursor, _ := blacklistCollection.Find(ctx, bson.M{})
+		var res []BlacklistEntry
+		cursor.All(ctx, &res)
+		if res == nil {
+			res = []BlacklistEntry{}
+		}
+		json.NewEncoder(w).Encode(res)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func blacklistUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/blacklist/")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if r.Method == http.MethodDelete {
+
+	switch r.Method {
+	case http.MethodDelete:
 		blacklistCollection.DeleteOne(ctx, bson.M{"id": id})
 		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
 func settingsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if r.Method == http.MethodGet {
+
+	switch r.Method {
+	case http.MethodGet:
 		var s Settings
 		settingsCollection.FindOne(ctx, bson.M{}).Decode(&s)
 		json.NewEncoder(w).Encode(s)
-	} else {
+	case http.MethodPost:
 		var s Settings
 		json.NewDecoder(r.Body).Decode(&s)
 		opts := options.Replace().SetUpsert(true)
 		settingsCollection.ReplaceOne(ctx, bson.M{}, s, opts)
 		json.NewEncoder(w).Encode(s)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
 func logsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cursor, _ := logCollection.Find(ctx, bson.M{})
-	var res []LogEntry
-	cursor.All(ctx, &res)
-	if res == nil { res = []LogEntry{} }
-	json.NewEncoder(w).Encode(res)
+
+	switch r.Method {
+	case http.MethodGet:
+		cursor, _ := logCollection.Find(ctx, bson.M{})
+		var res []LogEntry
+		cursor.All(ctx, &res)
+		if res == nil {
+			res = []LogEntry{}
+		}
+		json.NewEncoder(w).Encode(res)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func dashboardSummaryHandler(w http.ResponseWriter, r *http.Request) {
@@ -779,15 +846,15 @@ func NewWhatsappController(s WhatsappService) *WhatsappController {
 
 func (ctrl *WhatsappController) EnviarMensagem(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		UserConectado string `json:"userConectado" binding:"required"`
-		Phone      string `json:"phone" binding:"required"`
-		Message    string `json:"message"`
-		Delay	  int    `json:"delay"`
-		Name      string `json:"name"`
-		LateDays  int    `json:"lateDays"`
-		UpdatedAmount float64 `json:"updatedAmount"`
-		DateVencimento string `json:"dateVencimento"`
-		ApiKey string `json:"apiKey" binding:"required"`
+		UserConectado  string  `json:"userConectado" binding:"required"`
+		Phone          string  `json:"phone" binding:"required"`
+		Message        string  `json:"message"`
+		Delay          int     `json:"delay"`
+		Name           string  `json:"name"`
+		LateDays       int     `json:"lateDays"`
+		UpdatedAmount  float64 `json:"updatedAmount"`
+		DateVencimento string  `json:"dateVencimento"`
+		ApiKey         string  `json:"apiKey" binding:"required"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	err := ctrl.svc.SendMessage(r.Context(), body.UserConectado, body.Phone, body.Message, body.Delay, body.Name, body.LateDays, body.UpdatedAmount, body.DateVencimento, body.ApiKey)
@@ -820,19 +887,12 @@ func (ctrl *WhatsappController) CriarInstanciaMsg(w http.ResponseWriter, r *http
 
 	if ok {
 		if _, hasError := respMap["error"]; hasError {
-			// Define o Header como JSON
 			w.Header().Set("Content-Type", "application/json")
-			
-			// Define o Status Code (equivalente ao http.StatusForbidden)
 			w.WriteHeader(http.StatusForbidden)
-			
-			// Cria a estrutura de resposta manualmente
 			response := map[string]interface{}{
 				"status":  "Falha ao criar instância na API",
 				"details": instance,
 			}
-			
-			// Codifica e envia
 			json.NewEncoder(w).Encode(response)
 			return
 		}
@@ -878,7 +938,6 @@ func NewWhatsappService() WhatsappService {
 	}
 }
 
-// Estruturas para mapear o seu JSON
 type Options struct {
 	Delay    int    `json:"delay"`
 	Presence string `json:"presence"`
@@ -894,21 +953,17 @@ type MessagePayload struct {
 	TextMessage TextMessage `json:"textMessage"`
 }
 
-
 func (s *whatsappService) SendMessage(ctx context.Context, userConectado string, phone string, message string, delayLevel int, name string, lateDays int, updatedAmount float64, dateVencimento string, apiKey string) error {
-	// mensagem personalizada
 	message = DefinirMensagemComDetalhes(delayLevel, name, lateDays, updatedAmount, dateVencimento)
 
-	// Limpeza e formatação do número de telefone
 	re := regexp.MustCompile(`\D`)
 	phoneLimpo := re.ReplaceAllString(phone, "")
 	if len(phoneLimpo) < 13 && len(phoneLimpo) >= 10 {
 		phoneLimpo = "55" + phoneLimpo
 	}
 
-	// Montagem da URL e do Payload
 	url := fmt.Sprintf("%s/message/sendText/%s", s.ApiURL, userConectado)
-	
+
 	payload := MessagePayload{
 		Number: phoneLimpo,
 		Options: Options{
@@ -920,25 +975,21 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 		},
 	}
 
-	// Preparação da requisição
 	b, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("falha ao criar payload: %v", err)
 	}
 
-	// Envia para a API externa
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(b))
 	if err != nil {
 		return fmt.Errorf("falha ao criar requisição: %v", err)
 	}
 
-	// Adiciona os headers necessários
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("apikey", apiKey)
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36")
 
-	// Configura o client com timeout e envia a requisição
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -946,12 +997,10 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 	}
 	defer resp.Body.Close()
 
-	// Lê a resposta
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := strings.ToLower(string(body))
 	log.Printf("Status: %s\nResposta: %s\n", resp.Status, string(body))
 
-	// Verifica erro por status HTTP
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == 401 || resp.StatusCode == 403 ||
 			strings.Contains(bodyStr, "logout") || strings.Contains(bodyStr, "close") ||
@@ -961,7 +1010,6 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 		return fmt.Errorf("API retornou status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Verifica erro no corpo mesmo com status 200
 	disconnectKeywords := []string{
 		"logout", "disconnected", "not connected", "connection closed",
 		"instance not found", "instance not open", "bad session",
@@ -974,54 +1022,50 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 
 	return nil
 }
+
 func DefinirMensagemComDetalhes(delayLevel int, name string, lateDays int, updatedAmount float64, dateVencimento string) string {
-	// Formatação simples para moeda (R$)
 	valorFormatado := fmt.Sprintf("R$ %.2f", updatedAmount)
-	
+
 	switch delayLevel {
 	case 1:
-		// Lembrete de Atraso=
 		return fmt.Sprintf(
-			"Olá, *%s*! \n\nNotamos que o seu pagamento da Credit Now ainda não consta em nosso sistema.\n\n" +
-			"📌 *Detalhes:*\n• Valor: %s\n• Atraso: %d dia(s)\n\n" +
-			"Sabemos que imprevistos acontecem! Podemos te ajudar a regularizar isso hoje com uma condição especial? 💸", 
+			"Olá, *%s*! \n\nNotamos que o seu pagamento da Credit Now ainda não consta em nosso sistema.\n\n"+
+				"📌 *Detalhes:*\n• Valor: %s\n• Atraso: %d dia(s)\n\n"+
+				"Sabemos que imprevistos acontecem! Podemos te ajudar a regularizar isso hoje com uma condição especial? 💸",
 			name, valorFormatado, lateDays)
 
 	case 2:
-		// Lembrete de Vencimento Próximo
 		return fmt.Sprintf(
 			"Olá, *%s*! Tudo bem? ⚠️\n\n"+
-			"Passando para lembrar do vencimento da sua parcela no valor de  *%s* no dia %s Qualquer dúvida, estamos à disposição!\n\n",
+				"Passando para lembrar do vencimento da sua parcela no valor de  *%s* no dia %s Qualquer dúvida, estamos à disposição!\n\n",
 			name, valorFormatado, dateVencimento)
 
 	case 3:
-		// Lembrete de Atraso Avançado
 		return fmt.Sprintf(
-			"🚨 *NOTIFICAÇÃO URGENTE* - %s\n\n*%s*, tentamos diversos contatos sem sucesso.\n\n" +
-			"O débito de %s está em fase avançada de atraso (%d dias). Para evitar o envio do seu CPF aos órgãos de proteção ao crédito (SPC/Serasa), responda esta mensagem imediatamente para negociar. 🚫", 
+			"🚨 *NOTIFICAÇÃO URGENTE* - %s\n\n*%s*, tentamos diversos contatos sem sucesso.\n\n"+
+				"O débito de %s está em fase avançada de atraso (%d dias). Para evitar o envio do seu CPF aos órgãos de proteção ao crédito (SPC/Serasa), responda esta mensagem imediatamente para negociar. 🚫",
 			name, name, valorFormatado, lateDays)
 
 	default:
-		// Mensagem Genérica para outros casos
 		return "Olá! Identificamos uma pendência em seu cadastro na Credit Now. Por favor, entre em contato com nosso suporte para verificarmos as opções de pagamento disponíveis."
 	}
-		
-
 }
 
 func (s *whatsappService) ViewInstances(ctx context.Context) ([]InstanceResponse, error) {
 	url := s.ApiURL + "/instance/fetchInstances"
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
-	// Adiciona o header de autenticação
 	req.Header.Set("apikey", s.ApiGlobalKey)
 	resp, err := http.DefaultClient.Do(req)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer resp.Body.Close()
 
-	// Decodifica a resposta JSON em uma estrutura Go
 	var res []InstanceResponse
 	json.NewDecoder(resp.Body).Decode(&res)
 	return res, err
@@ -1032,10 +1076,9 @@ func (s *whatsappService) CreateInstance(ctx context.Context, name, phone string
 
 	log.Printf("Criando instância com nome: %s e telefone: %s", name, phone)
 
-	// Prepara os dados para criação da instância
 	payload := CreateInstancePayload{
 		Name:   name,
-		QRCode: true, // Solicita geração de QR Code para autenticação
+		QRCode: true,
 		Phone:  phone,
 	}
 
@@ -1044,17 +1087,14 @@ func (s *whatsappService) CreateInstance(ctx context.Context, name, phone string
 		return nil, err
 	}
 
-	// Cria a requisição HTTP POST para criar a instância
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(b))
 	if err != nil {
 		return nil, err
 	}
 
-	// Configuração dos Headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("apikey", s.ApiGlobalKey)
 
-	// Uso de um client com timeout para evitar que a requisição trave o sistema
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1071,29 +1111,24 @@ func (s *whatsappService) CreateInstance(ctx context.Context, name, phone string
 }
 
 func (s *whatsappService) ConnectInstance(ctx context.Context, name, phone string) (interface{}, error) {
-	// Tirar caracteres não numéricos do telefone
 	re := regexp.MustCompile(`\D`)
 	phoneLimpo := re.ReplaceAllString(phone, "")
 	if len(phoneLimpo) < 13 && len(phoneLimpo) >= 10 {
 		phoneLimpo = "55" + phoneLimpo
 	}
 
-	// Montar a URL 
 	url := fmt.Sprintf("%s/instance/connect/%s?number=%s", s.ApiURL, name, phoneLimpo)
 
 	log.Printf("Conectando instância '%s' com número '%s'", name, phoneLimpo)
 
-	// Criação da requisição
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	// Configuração dos Headers
 	req.Header.Set("apikey", s.ApiGlobalKey)
 	req.Header.Set("Accept", "application/json")
 
-	// Execução com Timeout de 30s (importante para o QR Code não dar timeout)
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1101,7 +1136,6 @@ func (s *whatsappService) ConnectInstance(ctx context.Context, name, phone strin
 	}
 	defer resp.Body.Close()
 
-	// Decodificação da resposta
 	var res interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, err
@@ -1129,8 +1163,6 @@ func (s *whatsappService) DisconnectInstance(ctx context.Context, name string) e
 	}
 	return nil
 }
-
-// --- Structs de Resposta de Terceiros ---
 
 type ProfileStatus struct {
 	Status string `json:"status"`
@@ -1162,7 +1194,7 @@ type InstanceResponse struct {
 
 type CreateInstancePayload struct {
 	Name   string `json:"instanceName"`
-	Token  string `json:"token,omitempty"` // Opcional
+	Token  string `json:"token,omitempty"`
 	QRCode bool   `json:"qrcode"`
 	Phone  string `json:"phone"`
 }
@@ -1171,4 +1203,3 @@ type CreateInstance struct {
 	Name  string `json:"name"`
 	Phone string `json:"phone"`
 }
-
