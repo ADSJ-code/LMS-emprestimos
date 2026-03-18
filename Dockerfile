@@ -10,7 +10,7 @@ WORKDIR /app-api
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/*.go ./
-COPY --from=frontend-builder /app/backend/dist ./dist
+COPY --from=frontend-builder /app/dist ./dist
 RUN CGO_ENABLED=0 GOOS=linux go build -o server .
 
 FROM alpine:latest
