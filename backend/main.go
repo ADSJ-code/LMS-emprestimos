@@ -32,8 +32,6 @@ func init() {
 	}
 }
 
-// --- Middlewares ---
-
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -98,8 +96,6 @@ func adminMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// --- Helpers de Segurança ---
-
 func hashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 12)
 	return string(bytes), err
@@ -109,8 +105,6 @@ func checkPasswordHash(password, hash string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
 }
-
-// --- Auditoria e Logs ---
 
 func logAction(action string, details string) {
 	fmt.Printf("\033[32m[AUDITORIA %s]\033[0m %s - %s\n", time.Now().Format("15:04:05"), action, details)
@@ -158,8 +152,6 @@ func StartBackgroundSystemLogs() {
 	}()
 }
 
-// --- Backup ---
-
 func StartDailyBackupRoutine() {
 	go func() {
 		for {
@@ -196,8 +188,6 @@ func performInternalBackup() {
 	logSysAction("BACKUP AUTOMÁTICO", "Sucesso.")
 }
 
-// --- Estruturas de Dados ---
-
 type Claims struct {
 	Username string `json:"username"`
 	jwt.RegisteredClaims
@@ -206,7 +196,7 @@ type Claims struct {
 type User struct {
 	ID       string `json:"id,omitempty" bson:"_id,omitempty"`
 	Name     string `json:"name" bson:"name"`
-	Username string `json:"email" bson:"username"` // Recebe como email, salva como username
+	Username string `json:"email" bson:"username"`
 	Password string `json:"password,omitempty" bson:"password"`
 	Role     string `json:"role" bson:"role"`
 }
@@ -350,8 +340,6 @@ var (
 	settingsCollection  *mongo.Collection
 )
 
-// --- Principal ---
-
 func main() {
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
@@ -391,10 +379,8 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Auth
 	mux.HandleFunc("/api/auth/login", loginHandler)
 
-	// Rotas protegidas
 	mux.HandleFunc("/api/users", authMiddleware(usersHandler))
 	mux.HandleFunc("/api/users/", authMiddleware(userDetailHandler))
 	mux.HandleFunc("/api/loans", authMiddleware(loansHandler))
@@ -409,18 +395,15 @@ func main() {
 	mux.HandleFunc("/api/settings", authMiddleware(settingsHandler))
 	mux.HandleFunc("/api/dashboard/summary", authMiddleware(dashboardSummaryHandler))
 
-	// WhatsApp
 	mux.HandleFunc("/api/message", waCtrl.EnviarMensagem)
 	mux.HandleFunc("/api/instances/ver", waCtrl.VerInstancias)
 	mux.HandleFunc("/api/instances/criar", waCtrl.CriarInstanciaMsg)
 	mux.HandleFunc("/api/instances/conectar", waCtrl.ConectarInstancia)
 	mux.HandleFunc("/api/instances/desconectar", waCtrl.DesconectarInstancia)
 
-	// Admin
 	mux.HandleFunc("/api/admin/reset", adminMiddleware(resetDatabaseHandler))
 	mux.HandleFunc("/api/admin/restore", adminMiddleware(restoreDatabaseHandler))
 
-	// SPA Server (Frontend)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		possiveisCaminhos := []string{"dist", "backend/dist", "../backend/dist"}
 		var caminhoDist string
@@ -466,10 +449,10 @@ func main() {
 func seedAdminUser() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
 	var user User
 	err := userCollection.FindOne(ctx, bson.M{"username": "admin@creditnow.com"}).Decode(&user)
 	if err == mongo.ErrNoDocuments {
-		log.Println("⚠️ Admin não encontrado. Criando agora...")
 		hash, _ := hashPassword("123456")
 		user = User{
 			ID:       primitive.NewObjectID().Hex(),
@@ -482,9 +465,21 @@ func seedAdminUser() {
 	} else if err == nil && user.Role != "ADMIN" {
 		userCollection.UpdateOne(ctx, bson.M{"username": "admin@creditnow.com"}, bson.M{"$set": bson.M{"role": "ADMIN"}})
 	}
-}
 
-// --- Handlers de Login e Usuário ---
+	var devUser User
+	errDev := userCollection.FindOne(ctx, bson.M{"username": "dev@creditnow.com"}).Decode(&devUser)
+	if errDev == mongo.ErrNoDocuments {
+		hashDev, _ := hashPassword("123456")
+		devUser = User{
+			ID:       primitive.NewObjectID().Hex(),
+			Name:     "Desenvolvedor",
+			Username: "dev@creditnow.com",
+			Password: hashDev,
+			Role:     "ADMIN",
+		}
+		userCollection.InsertOne(ctx, devUser)
+	}
+}
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -524,7 +519,6 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 	var storedUser User
 	if err := userCollection.FindOne(ctx, bson.M{"username": username}).Decode(&storedUser); err != nil {
-		// Fallback para Iniciais Maiúsculas se falhar
 		err = userCollection.FindOne(ctx, bson.M{"username": username}).Decode(&storedUser)
 		if err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -550,8 +544,6 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"token": tokenStr, "user": storedUser})
 }
-
-// --- Handlers de API (Resumidos) ---
 
 func usersHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -607,7 +599,6 @@ func userDetailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Empréstimos
 func loansHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -625,7 +616,6 @@ func loansHandler(w http.ResponseWriter, r *http.Request) {
 		var l Loan
 		json.NewDecoder(r.Body).Decode(&l)
 
-		// CORREÇÃO: Só gera código aleatório se o React NÃO enviar o ID
 		if l.ID == "" {
 			l.ID = primitive.NewObjectID().Hex()
 		}
@@ -657,7 +647,6 @@ func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Clientes
 func clientsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -704,8 +693,6 @@ func clientUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
-
-// --- Restante das Funções Auxiliares (WhatsApp, Settings, Dashboard) ---
 
 func affiliatesHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -833,8 +820,6 @@ func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
-
-// --- WhatsApp Logic ---
 
 type WhatsappController struct {
 	svc WhatsappService
@@ -999,7 +984,6 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := strings.ToLower(string(body))
-	log.Printf("Status: %s\nResposta: %s\n", resp.Status, string(body))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == 401 || resp.StatusCode == 403 ||
@@ -1074,8 +1058,6 @@ func (s *whatsappService) ViewInstances(ctx context.Context) ([]InstanceResponse
 func (s *whatsappService) CreateInstance(ctx context.Context, name, phone string) (interface{}, error) {
 	url := s.ApiURL + "/instance/create"
 
-	log.Printf("Criando instância com nome: %s e telefone: %s", name, phone)
-
 	payload := CreateInstancePayload{
 		Name:   name,
 		QRCode: true,
@@ -1118,8 +1100,6 @@ func (s *whatsappService) ConnectInstance(ctx context.Context, name, phone strin
 	}
 
 	url := fmt.Sprintf("%s/instance/connect/%s?number=%s", s.ApiURL, name, phoneLimpo)
-
-	log.Printf("Conectando instância '%s' com número '%s'", name, phoneLimpo)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
