@@ -48,7 +48,6 @@ const getInstanceToken = async (
      const list = Array.isArray(data) ? data : data.data || data.instances || [];
 
      if (list.length === 0) {
-       console.warn("A lista de instâncias veio vazia.");
        return null;
      }
 
@@ -61,21 +60,17 @@ const getInstanceToken = async (
        return { instanceName: targetInstance.instance.instanceName, apikey: targetInstance.instance.apikey };
      }
 
-     // Fallback: primeira instância aberta
      const fallback = list.find((inst: any) => inst.instance?.status === "open");
      if (fallback?.instance?.instanceName && fallback?.instance?.apikey) {
        return { instanceName: fallback.instance.instanceName, apikey: fallback.instance.apikey };
      }
 
-     console.warn(`❌ Nenhuma instância aberta encontrada.`);
      return null;
    } catch (error) {
-     console.error("❌ Erro fatal no getInstanceToken:", error);
      return null;
    }
  };
  
-
 const sendWhatsappApi = async (
   name: string,
   phone: string,
@@ -86,8 +81,6 @@ const sendWhatsappApi = async (
   companyName: string,
   token: string,
 ) => {
-
-  // Enviar via API
   const response = await fetch(getApiUrl+"/api/message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -109,7 +102,7 @@ const sendWhatsappApi = async (
       throw new Error("WHATSAPP_DISCONNECTED");
     }
     throw new Error("Falha ao enviar via API");
-}
+  }
 };
 
 const Billing = () => {
@@ -163,75 +156,71 @@ const Billing = () => {
       hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: ''
   });
   
-const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
-  let companyName = localStorage.getItem("companyName") || "";
-  let companyPhone = localStorage.getItem("companyPhone") || "";
-  if (!companyName || !companyPhone) {
-    try {
-      const s = await settingsService.get();
-      if (s?.company?.name) {
-        companyName = s.company.name;
-        localStorage.setItem("companyName", companyName);
-      }
-      if (s?.company?.phone) {
-        companyPhone = s.company.phone.replace(/\D/g, "");
-        localStorage.setItem("companyPhone", companyPhone);
-      }
-    } catch (_) {}
-  }
-  // Se snowball for undefined, usamos um fallback para não dar erro de "length"
-  const safeSnowball = snowball || { missedInstallments: [], totalUpdated: 0 };
-
-  const client = availableClients.find((c) => c.name === loan.client);
-
-  if (!client || !client.phone) {
-    alert("❌ Erro: Telefone do cliente não encontrado.");
-    return;
-  }
-
-  const cleanPhone = client.phone.replace(/\D/g, "");
-  const firstName = loan.client.split(" ")[0];
-
-  // Usamos o safeSnowball aqui
-  const parcelasText =
-    safeSnowball.missedInstallments.length > 1
-      ? `${safeSnowball.missedInstallments.length} parcelas pendentes`
-      : `uma pendência`;
-
-  const contractCode = `CTR-${loan.id?.substring(0, 6).toUpperCase()}`;
-  const diffDays = loan.diffDays || 0;
-
-  const formattedDate = formatDisplayDate(loan.nextDue);
-  try {
-    const instance = await getInstanceToken(companyName, companyPhone);
-
-    if (!instance) {
-      throw new Error(`Instância WhatsApp não encontrada.`);
+  const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
+    let companyName = localStorage.getItem("companyName") || "";
+    let companyPhone = localStorage.getItem("companyPhone") || "";
+    if (!companyName || !companyPhone) {
+      try {
+        const s = await settingsService.get();
+        if (s?.company?.name) {
+          companyName = s.company.name;
+          localStorage.setItem("companyName", companyName);
+        }
+        if (s?.company?.phone) {
+          companyPhone = s.company.phone.replace(/\D/g, "");
+          localStorage.setItem("companyPhone", companyPhone);
+        }
+      } catch (_) {}
     }
-    await sendWhatsappApi(
-      client.name,
-      cleanPhone,
-      contractCode,
-      diffDays,
-      loan.installmentValue,
-      formattedDate,
-      instance.instanceName,
-      instance.apikey,
-    );
-    alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
-  } catch (error: any) {
-    if (error?.message === "WHATSAPP_DISCONNECTED") {
-      alert("⚠️ WhatsApp desconectado!\n\nVá em Configurações → WhatsApp e reconecte o QR Code para voltar a enviar mensagens.");
+    const safeSnowball = snowball || { missedInstallments: [], totalUpdated: 0 };
+
+    const client = availableClients.find((c) => c.name === loan.client);
+
+    if (!client || !client.phone) {
+      alert("❌ Erro: Telefone do cliente não encontrado.");
       return;
     }
 
-    // Fallback: Se a API falhar, abre o link direto do WhatsApp Web
-    console.warn("API Offline, usando link direto...");
-    const message = `Olá, ${client.name}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loan.installmentValue)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
-    const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
-    window.open(url, "_blank");
-  }
-};
+    const cleanPhone = client.phone.replace(/\D/g, "");
+    const firstName = loan.client.split(" ")[0];
+
+    const parcelasText =
+      safeSnowball.missedInstallments.length > 1
+        ? `${safeSnowball.missedInstallments.length} parcelas pendentes`
+        : `uma pendência`;
+
+    const contractCode = `CTR-${loan.id?.substring(0, 6).toUpperCase()}`;
+    const diffDays = loan.diffDays || 0;
+
+    const formattedDate = formatDisplayDate(loan.nextDue);
+    try {
+      const instance = await getInstanceToken(companyName, companyPhone);
+
+      if (!instance) {
+        throw new Error(`Instância WhatsApp não encontrada.`);
+      }
+      await sendWhatsappApi(
+        client.name,
+        cleanPhone,
+        contractCode,
+        diffDays,
+        loan.installmentValue,
+        formattedDate,
+        instance.instanceName,
+        instance.apikey,
+      );
+      alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
+    } catch (error: any) {
+      if (error?.message === "WHATSAPP_DISCONNECTED") {
+        alert("⚠️ WhatsApp desconectado!\n\nVá em Configurações → WhatsApp e reconecte o QR Code para voltar a enviar mensagens.");
+        return;
+      }
+
+      const message = `Olá, ${client.name}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loan.installmentValue)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
+      const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
+      window.open(url, "_blank");
+    }
+  };
 
   const [simulation, setSimulation] = useState({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
 
@@ -244,11 +233,31 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
 
   const getSyncedBreakdown = (loan: Loan | null) => {
       if (!loan) return { interest: 0, capital: 0, total: 0 };
-      const breakdown = calculateInstallmentBreakdown(loan);
+      
+      const isSimple = loan.interestType === 'SIMPLE';
+      let breakdown = calculateInstallmentBreakdown(loan);
+
+      if (isSimple) {
+          const currentDebt = calculateCapitalBalance(loan);
+          
+          let periodRate = loan.interestRate / 100;
+          if (loan.frequency === 'SEMANAL') periodRate = periodRate / 4;
+          else if (loan.frequency === 'DIARIO') periodRate = periodRate / 30;
+
+          const dynamicInterest = currentDebt * periodRate;
+
+          breakdown = {
+              interest: dynamicInterest,
+              capital: 0,
+              total: dynamicInterest
+          };
+      }
+
       if (loan.status === 'Acordo' && (loan.agreementValue || 0) > 0) {
           const extra = loan.agreementValue || 0;
           return { interest: breakdown.interest + extra, capital: breakdown.capital, total: breakdown.total + extra };
       }
+      
       return breakdown;
   };
 
@@ -282,7 +291,7 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
       setAvailableClients(clientsData || []); 
       setLoans(loansData || []);
       setAvailableAffiliates(affiliatesData || []);
-    } catch (err) { console.error("Erro ao carregar dados:", err); } 
+    } catch (err) {} 
     finally { setIsLoadingList(false); }
   };
 
@@ -361,11 +370,10 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
        const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
        window.open(url, "_blank");
 
-       // Pequeno delay para evitar travamento do navegador se forem muitos clientes
        await new Promise((resolve) => setTimeout(resolve, 800));
      }
    }
-   setSelectedIds([]); // Limpa a seleção após envio
+   setSelectedIds([]);
  };
 
   const handleOpenWhatsApp = (
@@ -420,17 +428,17 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
 
               const isFirst = i === 0;
               let status = 'Pendente';
-              let amountToDisplay = loan.installmentValue;
+              let amountToDisplay = isSimple ? getSyncedBreakdown(loan).total : loan.installmentValue;
               let noteStr = '';
 
               if (stepDate < today) {
                   status = 'Atrasado';
-                  const baseAmount = (isFirst && loan.status === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
+                  const baseAmount = (isFirst && loan.status === 'Acordo') ? amountToDisplay + (loan.agreementValue || 0) : amountToDisplay;
                   const stepDateStr = stepDate.toISOString().split('T')[0];
                   amountToDisplay = calculateOverdueValue(baseAmount, stepDateStr, 'Atrasado', loan.fineRate, loan.moraInterestRate, loan.amount);
               } else if (isFirst && loan.status === 'Acordo') {
                   status = 'Acordo';
-                  amountToDisplay = loan.installmentValue + (loan.agreementValue || 0);
+                  amountToDisplay = amountToDisplay + (loan.agreementValue || 0);
                   
                   const lastAgreement = loan.history?.filter(h => h.type === 'Acordo').slice(-1)[0];
                   if (lastAgreement?.originalDueDate) {
@@ -617,16 +625,10 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
     const localISOTime = (new Date(now.getTime() - offsetMs)).toISOString().slice(0, 16);
     setPayDate(localISOTime);
 
-    const breakdown = calculateInstallmentBreakdown(loan);
+    const breakdown = getSyncedBreakdown(loan);
     let initialInterest = breakdown.interest;
     let initialCapital = breakdown.capital;
     let initialTotal = breakdown.total;
-
-    if (loan.status === 'Acordo' && (loan.agreementValue || 0) > 0) {
-        const extra = loan.agreementValue || 0;
-        initialInterest += extra;
-        initialTotal += extra;
-    }
 
     setPayInterest(initialInterest.toFixed(2));
     setPayCapital(initialCapital.toFixed(2));
@@ -690,12 +692,13 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
         }
     }
 
-    const expectedInterest = calculateInstallmentBreakdown(selectedLoan).interest;
-    const agreementExtra = (selectedLoan.status === 'Acordo' && selectedLoan.agreementValue) ? selectedLoan.agreementValue : 0;
-    const totalTargetInterest = expectedInterest + agreementExtra;
+    const expectedInterest = getSyncedBreakdown(selectedLoan).interest;
+    const totalTargetInterest = expectedInterest;
     const totalInterestInCycle = valInterest + cycleAcc.interest;
 
-    const isPayingFullInstallment = valTotal >= (selectedLoan.installmentValue - 1.0);
+    const isSimple = selectedLoan.interestType === 'SIMPLE';
+    const baseInstallment = isSimple ? expectedInterest : selectedLoan.installmentValue;
+    const isPayingFullInstallment = valTotal >= (baseInstallment - 1.0);
 
     if (!isPayingFullInstallment && totalInterestInCycle < (totalTargetInterest - 0.10) && !settleInterest && valTotal > 0) {
         const userConfirmed = window.confirm(`⚠️ ATENÇÃO: O valor pago (R$ ${formatMoney(valTotal)}) é menor que os Juros/Acordo (R$ ${formatMoney(totalTargetInterest)}).\nDeseja continuar sem quitar? O vencimento NÃO avançará.`);
@@ -743,7 +746,6 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
                  updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
              }
              
-             const isSimple = updatedLoan.interestType === 'SIMPLE';
              if (!isSimple || valCapital > 0) updatedLoan.installments = Math.max(0, updatedLoan.installments - 1);
         }
     }
@@ -770,7 +772,6 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
         setSelectedLoan(updatedLoan);
         setDetailTab('history');
         setIsDetailsOpen(true);
-        alert("✅ Baixa registrada!");
     } catch (err) { alert("Erro ao registrar."); }
   };
 
@@ -818,7 +819,6 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
         );
         setLoans(prev => prev.map(l => l.id === updatedLoan.id ? updatedLoan : l));
         setSelectedLoan(updatedLoan);
-        alert("✅ Reversão concluída no servidor!");
     } catch (err) {
         alert("Erro ao sincronizar com o servidor.");
     }
@@ -858,7 +858,6 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
           );
           setLoans(prev => prev.map(l => l.id === updatedLoan.id ? updatedLoan : l));
           setIsAgreementModalOpen(false);
-          alert("✅ Acordo registrado!");
       } catch (e) { alert("Erro ao salvar acordo."); }
   };
 
@@ -976,7 +975,6 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
         await loanService.create(newLoan);
         fetchLoans();
         closeLoanFlow();
-        alert(`✅ Contrato ${newID} criado.`);
     } catch (err) { alert("Erro ao salvar."); } finally { setIsSaving(false); }
   };
 
@@ -1024,7 +1022,7 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
                                          </div>
                                      </div>
                                      <div className="text-right">
-                                         <p className="font-black text-green-600 text-sm">R$ {formatMoney(l.installmentValue)}</p>
+                                         <p className="font-black text-green-600 text-sm">R$ {formatMoney(l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : l.installmentValue)}</p>
                                          <p className="text-[10px] text-slate-400 uppercase font-bold">Parcela Fixa</p>
                                      </div>
                                  </div>
@@ -1069,7 +1067,7 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
                                          </div>
                                      </div>
                                      <div className="text-right">
-                                         <p className="font-black text-green-600 text-sm">R$ {formatMoney(l.installmentValue)}</p>
+                                         <p className="font-black text-green-600 text-sm">R$ {formatMoney(l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : l.installmentValue)}</p>
                                          <p className="text-[10px] text-slate-400 uppercase font-bold">Cobrar</p>
                                      </div>
                                  </div>
@@ -1191,7 +1189,7 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
                           R$ {formatMoney(loan.totalPaidInterest || 0)}
                         </td>
                         <td className="p-4 text-right font-bold text-slate-500">
-                          R$ {formatMoney(loan.installmentValue)}
+                          R$ {formatMoney(loan.interestType === 'SIMPLE' ? getSyncedBreakdown(loan).total : loan.installmentValue)}
                         </td>
 
                         <td className="p-4 text-center">
@@ -1382,13 +1380,13 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
                             <div className="w-px bg-slate-700"></div>
                             <div>
                                 <p className="text-[10px] uppercase text-slate-400 font-bold">Parcela Fixa</p>
-                                <p className="text-2xl font-bold text-green-400">R$ {formatMoney(selectedLoan.installmentValue)}</p>
+                                <p className="text-2xl font-bold text-green-400">R$ {formatMoney(selectedLoan.interestType === 'SIMPLE' ? getSyncedBreakdown(selectedLoan).total : selectedLoan.installmentValue)}</p>
                                 <div className="text-[10px] text-slate-400 mt-1 flex gap-3">
                                     <span>Juros do Mês: <b>R$ {formatMoney(getSyncedBreakdown(selectedLoan).interest)}</b></span>
                                 </div>
                             </div>
                         </div>
-                        <button onClick={() => handleOpenWhatsApp(selectedLoan.client, selectedLoan.installmentValue, selectedLoan.nextDue)} className="mt-6 flex items-center gap-2 bg-[#25D366] text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-[#128C7E] transition-colors"><MessageCircle size={18}/> Chamar no WhatsApp</button>
+                        <button onClick={() => handleOpenWhatsApp(selectedLoan.client, selectedLoan.interestType === 'SIMPLE' ? getSyncedBreakdown(selectedLoan).total : selectedLoan.installmentValue, selectedLoan.nextDue)} className="mt-6 flex items-center gap-2 bg-[#25D366] text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-[#128C7E] transition-colors"><MessageCircle size={18}/> Chamar no WhatsApp</button>
                     </div>
 
                     <div className="mt-4 pt-4 border-t border-slate-100">
@@ -1510,7 +1508,7 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
                         <p className="text-xs font-bold text-red-800 uppercase tracking-wider">Atenção: Parcela em Atraso</p>
                         <p className="text-lg font-black text-red-900">
                             Valor Total Devido: R$ {formatMoney(calculateOverdueValue(
-                                selectedLoan.installmentValue, 
+                                selectedLoan.interestType === 'SIMPLE' ? getSyncedBreakdown(selectedLoan).total : selectedLoan.installmentValue, 
                                 selectedLoan.nextDue, 
                                 'Atrasado', 
                                 selectedLoan.fineRate, 
@@ -1538,7 +1536,7 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
                         <div className="border-t border-red-200 pt-2 mt-1">
                              <p className="text-xs text-red-800 font-bold flex items-center justify-between">
                                  <span>Valor Atualizado com Multa:</span>
-                                 <span className="text-sm font-black">R$ {formatMoney(calculateOverdueValue(selectedLoan.installmentValue + (selectedLoan.agreementValue || 0), selectedLoan.nextDue, 'Atrasado', selectedLoan.fineRate, selectedLoan.moraInterestRate, selectedLoan.amount))}</span>
+                                 <span className="text-sm font-black">R$ {formatMoney(calculateOverdueValue((selectedLoan.interestType === 'SIMPLE' ? getSyncedBreakdown(selectedLoan).total : selectedLoan.installmentValue) + (selectedLoan.agreementValue || 0), selectedLoan.nextDue, 'Atrasado', selectedLoan.fineRate, selectedLoan.moraInterestRate, selectedLoan.amount))}</span>
                              </p>
                         </div>
                     )}
@@ -1552,7 +1550,7 @@ const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
                     <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden"><div className="bg-blue-600 h-full transition-all" style={{ width: `${Math.min(100, (cycleAcc.interest / (getSyncedBreakdown(selectedLoan).interest || 1)) * 100)}%` }}></div></div>
                 </div>
             )}
-            {!settleInterest && (parseFloat(payInterest || '0') + cycleAcc.interest) >= (selectedLoan.amount * (selectedLoan.interestRate/100) - 0.10) && (
+            {!settleInterest && (parseFloat(payInterest || '0') + cycleAcc.interest) >= ((calculateCapitalBalance(selectedLoan) * (selectedLoan.interestRate/100)) - 0.10) && (
                 <div className="flex items-center gap-2 bg-green-50 text-green-700 p-2 rounded-lg text-xs animate-in fade-in slide-in-from-top-1"><PartyPopper size={16}/><span>✨ Este valor completa os juros do mês! O vencimento avançará.</span></div>
             )}
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-100"><label className="flex items-center gap-2 text-xs font-bold uppercase text-slate-500 mb-2"><Calendar size={14}/> Data e Hora do Pagamento</label><input type="datetime-local" value={payDate} onChange={(e) => setPayDate(e.target.value)} className="w-full p-3 border border-slate-200 rounded-lg bg-white outline-none focus:ring-2 focus:ring-slate-900/5 font-mono text-sm"/><p className="text-[10px] text-slate-400 mt-1 italic">Use para registrar pagamentos feitos anteriormente.</p></div>
