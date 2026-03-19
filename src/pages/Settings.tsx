@@ -80,7 +80,10 @@ const Settings = () => {
   const [selectedUserEmail, setSelectedUserEmail] = useState<string | null>(
     null,
   );
+  
+  // Estados para redefinição de senha
   const [newPasswordReset, setNewPasswordReset] = useState("");
+  const [confirmPasswordReset, setConfirmPasswordReset] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dangerModalOpen, setDangerModalOpen] = useState(false);
@@ -1027,29 +1030,74 @@ const Settings = () => {
 
       <Modal
         isOpen={resetModalOpen}
-        onClose={() => setResetModalOpen(false)}
+        onClose={() => {
+          setResetModalOpen(false);
+          setNewPasswordReset("");
+          setConfirmPasswordReset("");
+        }}
         title="Alterar Senha"
         color="blue"
       >
         <div className="space-y-4">
-          <input
-            type="password"
-            value={newPasswordReset}
-            onChange={(e) => setNewPasswordReset(e.target.value)}
-            className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-100"
-            placeholder="Nova Senha"
-          />
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nova Senha</label>
+            <input
+              type="password"
+              value={newPasswordReset}
+              onChange={(e) => setNewPasswordReset(e.target.value)}
+              className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-100"
+              placeholder="Digite a nova senha"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Confirme a Senha</label>
+            <input
+              type="password"
+              value={confirmPasswordReset}
+              onChange={(e) => setConfirmPasswordReset(e.target.value)}
+              className={`w-full p-3 border rounded-xl outline-none focus:ring-2 ${
+                confirmPasswordReset && newPasswordReset !== confirmPasswordReset 
+                  ? "border-red-300 focus:ring-red-100" 
+                  : "border-slate-200 focus:ring-blue-100"
+              }`}
+              placeholder="Repita a nova senha"
+            />
+            {confirmPasswordReset && newPasswordReset !== confirmPasswordReset && (
+              <p className="text-[10px] text-red-500 font-bold mt-1 uppercase">As senhas não coincidem</p>
+            )}
+          </div>
+
           <button
             onClick={async () => {
-              await authService.updateUser(selectedUserEmail!, {
-                password: newPasswordReset,
-              });
-              alert("Senha alterada!");
-              setResetModalOpen(false);
+              if (!newPasswordReset || !confirmPasswordReset) {
+                alert("Por favor, preencha todos os campos.");
+                return;
+              }
+              if (newPasswordReset !== confirmPasswordReset) {
+                alert("As senhas digitadas não são iguais!");
+                return;
+              }
+              if (newPasswordReset.length < 4) {
+                alert("A senha deve ter pelo menos 4 caracteres.");
+                return;
+              }
+
+              try {
+                await authService.updateUser(selectedUserEmail!, {
+                  password: newPasswordReset,
+                });
+                alert("Senha alterada com sucesso!");
+                setResetModalOpen(false);
+                setNewPasswordReset("");
+                setConfirmPasswordReset("");
+              } catch (err) {
+                alert("Erro ao comunicar com o servidor.");
+              }
             }}
-            className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-colors"
+            className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-colors shadow-lg shadow-blue-900/20"
           >
-            Salvar Senha
+            Confirmar Nova Senha
           </button>
         </div>
       </Modal>

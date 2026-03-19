@@ -4,7 +4,7 @@ import {
   MoreVertical, Loader2, RefreshCw, ShieldAlert, ShieldCheck, 
   Calculator, FileText, Check, ChevronRight, DollarSign, 
   Printer, Eye, TrendingUp, TrendingDown, History, Download, Calendar, AlertTriangle, Info, PartyPopper, UserCheck,
-  Percent, Landmark, CreditCard, Repeat, BellRing, X, FileSignature, Filter, MessageCircle, Users, Send
+  Percent, Landmark, CreditCard, Repeat, BellRing, X, FileSignature, Filter, MessageCircle, Users, Send, Home, Layers
 } from 'lucide-react';
 
 import ExcelJS from 'exceljs';
@@ -148,11 +148,13 @@ const Billing = () => {
   const [collectionLoans, setCollectionLoans] = useState<Loan[]>([]);
   const [todaysLoans, setTodaysLoans] = useState<Loan[]>([]);
 
+  // ATUALIZADO: Incluindo estados para endereço hiper-detalhado do fiador
   const [formData, setFormData] = useState({ 
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
-      firstPaymentDate: '', frequency: 'MENSAL', fineRate: '0.0', moraInterestRate: '0.0', 
+      firstPaymentDate: '', frequency: 'MENSAL', fineRate: '2.0', moraInterestRate: '0.1', 
       clientBank: '', paymentMethod: '', interestType: 'PRICE', 
       hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
+      guarantorHouseType: 'CASA', guarantorNumber: '', guarantorBlock: '', guarantorFloor: '',
       hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: ''
   });
   
@@ -947,8 +949,10 @@ const Billing = () => {
       setLoanFlowStep('closed');
       setFormData({ 
         client: '', amount: '', interestRate: '', installments: '', startDate: '', firstPaymentDate: '', frequency: 'MENSAL', 
-        fineRate: '0.0', moraInterestRate: '0.0', clientBank: '', paymentMethod: '', 
-        interestType: 'PRICE', hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
+        fineRate: '2.0', moraInterestRate: '0.1', clientBank: '', paymentMethod: '', 
+        interestType: 'PRICE', 
+        hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
+        guarantorHouseType: 'CASA', guarantorNumber: '', guarantorBlock: '', guarantorFloor: '',
         hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: ''
       });
   }
@@ -963,7 +967,8 @@ const Billing = () => {
         let maxSeq = 0;
         yearLoans.forEach(l => { const parts = l.id.split('/'); if(parts.length === 2) { const seq = parseInt(parts[0]); if(!isNaN(seq) && seq > maxSeq) maxSeq = seq; } });
         const nextSeq = maxSeq + 1;
-        const newID = `${nextSeq.toString().padStart(2, '0')}/${year}`;
+        // ATUALIZADO: Usando padStart(3) para gerar 001/2026
+        const newID = `${nextSeq.toString().padStart(3, '0')}/${year}`;
 
         let nextDueDate = new Date(formData.startDate);
         if (formData.firstPaymentDate) {
@@ -978,6 +983,11 @@ const Billing = () => {
         const projectedProfit = formData.interestType === 'SIMPLE' ? totalReceivable : Math.max(0, totalReceivable - parseFloat(formData.amount));
         const parseRate = (val: string) => { if (val === '') return 0; const num = parseFloat(val); return isNaN(num) ? 0 : num; };
 
+        // ATUALIZADO: Concatenação hiper-detalhada do endereço do fiador
+        const fullGuarantorAddress = formData.hasGuarantor ? 
+            `${formData.guarantorAddress}, nº ${formData.guarantorNumber}${formData.guarantorHouseType === 'APARTAMENTO' ? ` - Bloco ${formData.guarantorBlock}, Andar ${formData.guarantorFloor}` : ''}` 
+            : '';
+
         const newLoan: Loan = {
             id: newID, client: formData.client, amount: parseFloat(formData.amount), installments: parseInt(formData.installments),
             interestRate: parseFloat(formData.interestRate), startDate: formData.startDate, nextDue: nextDueDate.toISOString().split('T')[0],
@@ -988,7 +998,9 @@ const Billing = () => {
             totalPaidCapital: 0, totalPaidInterest: 0,
             history: [{ date: new Date().toISOString(), amount: parseFloat(formData.amount), type: 'Abertura', note: 'Empréstimo Concedido' }],
             interestType: formData.interestType as 'PRICE' | 'SIMPLE', frequency: formData.frequency as 'MENSAL' | 'SEMANAL' | 'DIARIO', projectedProfit: projectedProfit,
-            guarantorName: formData.hasGuarantor ? formData.guarantorName : '', guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '', guarantorAddress: formData.hasGuarantor ? formData.guarantorAddress : '',
+            guarantorName: formData.hasGuarantor ? formData.guarantorName : '', 
+            guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '', 
+            guarantorAddress: fullGuarantorAddress,
             affiliateName: formData.hasAffiliate ? formData.affiliateName : '', affiliateFee: formData.hasAffiliate ? parseFloat(formData.affiliateFee) : 0, affiliateNotes: formData.hasAffiliate ? formData.affiliateNotes : ''
         };
         await loanService.create(newLoan);
@@ -1433,20 +1445,6 @@ const Billing = () => {
                             </div>
                         </div>
                     )}
-
-                    {selectedLoan.affiliateName && (
-                        <div className="mt-2 bg-indigo-50 border border-indigo-100 rounded-xl p-4 flex items-center gap-3">
-                            <div className="bg-indigo-100 p-2 rounded-full text-indigo-600"><Users size={18}/></div>
-                            <div className="w-full">
-                                <span className="text-xs font-bold text-indigo-400 uppercase block">Indicação / Afiliado</span>
-                                <div className="flex justify-between items-center">
-                                    <span className="text-sm font-bold text-indigo-900">{selectedLoan.affiliateName}</span>
-                                    <span className="text-sm font-black text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded">R$ {formatMoney(selectedLoan.affiliateFee)}</span>
-                                </div>
-                                {selectedLoan.affiliateNotes && <p className="text-[10px] text-indigo-500 italic mt-1">{selectedLoan.affiliateNotes}</p>}
-                            </div>
-                        </div>
-                    )}
                 </>
             ) : detailTab === 'schedule' ? (
                 renderSchedule(selectedLoan)
@@ -1620,8 +1618,38 @@ const Billing = () => {
                 <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Periodicidade</label><div className="relative"><Repeat size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/><select value={formData.frequency} onChange={e => setFormData({...formData, frequency: e.target.value})} className="w-full pl-10 p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5"><option value="MENSAL">Mensal</option><option value="SEMANAL">Semanal</option><option value="DIARIO">Diário</option></select></div></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Primeiro Vencimento</label><input type="date" value={formData.firstPaymentDate} onChange={e => setFormData({...formData, firstPaymentDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 text-sm" placeholder="Opcional" title="Deixe vazio para automático"/></div></div>
                 <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl"><input type="checkbox" id="interestType" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" /><label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros) <span className="text-xs font-normal text-blue-600 block">O cliente paga apenas os juros mensais. O capital não abate.</span></label></div>
                 
+                {/* SEÇÃO DO FIADOR ATUALIZADA - DETALHES DE ENDEREÇO */}
                 <div className="flex items-center gap-2 mt-4"><input type="checkbox" id="hasGuarantor" checked={formData.hasGuarantor} onChange={(e) => setFormData({...formData, hasGuarantor: e.target.checked})} className="w-4 h-4 rounded text-slate-900 focus:ring-slate-500"/><label htmlFor="hasGuarantor" className="text-sm font-bold text-slate-700 cursor-pointer">Adicionar Fiador (Opcional)</label></div>
-                {formData.hasGuarantor && (<div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 animate-in slide-in-from-top-2"><div className="flex items-center gap-2 mb-2"><UserCheck size={18} className="text-slate-500"/><span className="text-xs font-bold uppercase text-slate-500">Dados do Fiador</span></div><input type="text" placeholder="Nome Completo do Fiador" value={formData.guarantorName} onChange={(e) => setFormData({...formData, guarantorName: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/><div className="grid grid-cols-2 gap-3"><input type="text" placeholder="CPF do Fiador" value={formData.guarantorCPF} onChange={(e) => setFormData({...formData, guarantorCPF: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/><input type="text" placeholder="Endereço Completo" value={formData.guarantorAddress} onChange={(e) => setFormData({...formData, guarantorAddress: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/></div></div>)}
+                
+                {formData.hasGuarantor && (
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 animate-in slide-in-from-top-2">
+                        <div className="flex items-center gap-2 mb-2"><UserCheck size={18} className="text-slate-500"/><span className="text-xs font-bold uppercase text-slate-500">Dados do Fiador</span></div>
+                        <input type="text" placeholder="Nome Completo do Fiador" value={formData.guarantorName} onChange={(e) => setFormData({...formData, guarantorName: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/>
+                        <input type="text" placeholder="CPF do Fiador" value={formData.guarantorCPF} onChange={(e) => setFormData({...formData, guarantorCPF: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/>
+                        
+                        <div className="border-t border-slate-200 pt-3">
+                            <div className="flex items-center gap-2 text-slate-400 mb-2"><Home size={14}/><span className="text-[10px] font-bold uppercase tracking-widest">Endereço de Citação</span></div>
+                            <input type="text" placeholder="Rua / Avenida / Logradouro" value={formData.guarantorAddress} onChange={(e) => setFormData({...formData, guarantorAddress: e.target.value})} className="w-full p-2 border rounded-lg bg-white text-sm mb-3"/>
+                            
+                            <div className="grid grid-cols-3 gap-2">
+                                <input type="text" placeholder="Nº" value={formData.guarantorNumber} onChange={(e) => setFormData({...formData, guarantorNumber: e.target.value})} className="w-full p-2 border rounded-lg bg-white text-sm"/>
+                                <select value={formData.guarantorHouseType} onChange={e => setFormData({...formData, guarantorHouseType: e.target.value})} className="w-full p-2 border rounded-lg bg-white text-sm">
+                                    <option value="CASA">Casa</option>
+                                    <option value="APARTAMENTO">Apartamento</option>
+                                </select>
+                                {formData.guarantorHouseType === 'APARTAMENTO' && (
+                                    <input type="text" placeholder="Bloco" value={formData.guarantorBlock} onChange={(e) => setFormData({...formData, guarantorBlock: e.target.value})} className="w-full p-2 border rounded-lg bg-white text-sm animate-in fade-in"/>
+                                )}
+                            </div>
+                            {formData.guarantorHouseType === 'APARTAMENTO' && (
+                                <div className="flex items-center gap-2 mt-2 animate-in slide-in-from-top-1">
+                                    <Layers size={14} className="text-slate-400" />
+                                    <input type="text" placeholder="Andar / Número do Apto" value={formData.guarantorFloor} onChange={(e) => setFormData({...formData, guarantorFloor: e.target.value})} className="w-full p-2 border rounded-lg bg-white text-sm"/>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
 
                 <div className="flex items-center gap-2 mt-2"><input type="checkbox" id="hasAffiliate" checked={formData.hasAffiliate} onChange={(e) => setFormData({...formData, hasAffiliate: e.target.checked})} className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"/><label htmlFor="hasAffiliate" className="text-sm font-bold text-slate-700 cursor-pointer">Houve indicação / Afiliado?</label></div>
                 {formData.hasAffiliate && (
