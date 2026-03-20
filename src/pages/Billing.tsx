@@ -4,7 +4,8 @@ import {
   MoreVertical, Loader2, RefreshCw, ShieldAlert, ShieldCheck, 
   Calculator, FileText, Check, ChevronRight, DollarSign, 
   Printer, Eye, TrendingUp, TrendingDown, History, Download, Calendar, AlertTriangle, Info, PartyPopper, UserCheck,
-  Percent, Landmark, CreditCard, Repeat, BellRing, X, FileSignature, Filter, MessageCircle, Users, Send, Home, Layers
+  Percent, Landmark, CreditCard, Repeat, BellRing, X, FileSignature, Filter, MessageCircle, Users, Send, Home, Layers,
+  Hash, Database
 } from 'lucide-react';
 
 import ExcelJS from 'exceljs';
@@ -112,12 +113,21 @@ const Billing = () => {
   const [isAgreementModalOpen, setIsAgreementModalOpen] = useState(false);
   const [isCollectionModalOpen, setIsCollectionModalOpen] = useState(false);
   const [isDailyAlertOpen, setIsDailyAlertOpen] = useState(false);
+  
+  const [isEditDateModalOpen, setIsEditDateModalOpen] = useState(false);
+  const [editStartDate, setEditStartDate] = useState('');
+  const [editNextDue, setEditNextDue] = useState('');
+
+  const [isEditIdModalOpen, setIsEditIdModalOpen] = useState(false);
+  const [editNewId, setEditNewId] = useState('');
+
   const [collectionDate, setCollectionDate] = useState(new Date().toISOString().split('T')[0]);
 
   const [detailTab, setDetailTab] = useState<'info' | 'schedule' | 'history'>('info');
 
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [clientSearchTerm, setClientSearchTerm] = useState('');
   
   const [statusFilter, setStatusFilter] = useState<'Todos' | 'Em Dia' | 'Atrasado' | 'Quitado' | 'Acordo' | 'PagosNoPeriodo'>('Todos');
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -148,16 +158,40 @@ const Billing = () => {
   const [collectionLoans, setCollectionLoans] = useState<Loan[]>([]);
   const [todaysLoans, setTodaysLoans] = useState<Loan[]>([]);
 
-  // ATUALIZADO: Incluindo estados para endereço hiper-detalhado do fiador
   const [formData, setFormData] = useState({ 
+      manualID: '', isMigration: false,
+      initialPaidCapital: '0', initialPaidInterest: '0',
+      manualInstallmentCapital: '', manualInstallmentInterest: '',
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
-      firstPaymentDate: '', frequency: 'MENSAL', fineRate: '2.0', moraInterestRate: '0.1', 
+      firstPaymentDate: '', frequency: 'MENSAL', fineRate: '0.0', moraInterestRate: '0.0', 
       clientBank: '', paymentMethod: '', interestType: 'PRICE', 
       hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
       guarantorHouseType: 'CASA', guarantorNumber: '', guarantorBlock: '', guarantorFloor: '',
       hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: ''
   });
   
+  useEffect(() => {
+    if (formData.client && availableClients.length > 0) {
+        const clientProfile = availableClients.find(c => c.name === formData.client);
+        const lastLoan = loans
+          .filter(l => l.client === formData.client)
+          .sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime())[0];
+
+        setFormData(prev => ({
+            ...prev,
+            clientBank: clientProfile?.city ? (clientProfile.observations || lastLoan?.clientBank || '') : (lastLoan?.clientBank || ''), 
+            paymentMethod: (clientProfile as any)?.pixKey || lastLoan?.paymentMethod || ''
+        }));
+    }
+  }, [formData.client, availableClients, loans]);
+
+  const filteredClientsForSelect = useMemo(() => {
+      return availableClients.filter(c => 
+        c.name.toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
+        c.cpf.includes(clientSearchTerm)
+      );
+  }, [availableClients, clientSearchTerm]);
+
   const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
     let companyName = localStorage.getItem("companyName") || "";
     let companyPhone = localStorage.getItem("companyPhone") || "";
@@ -305,21 +339,6 @@ const Billing = () => {
           sessionStorage.removeItem('searchClient');
       }
   }, []);
-
-  useEffect(() => {
-      if (formData.client && availableClients.length > 0) {
-          const lastLoan = loans
-            .filter(l => l.client === formData.client)
-            .sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime())[0];
-          if (lastLoan) {
-              setFormData(prev => ({
-                  ...prev,
-                  clientBank: lastLoan.clientBank || '',
-                  paymentMethod: lastLoan.paymentMethod || ''
-              }));
-          }
-      }
-  }, [formData.client]);
 
   const getLoanRealStatus = (loan: Loan) => {
     if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
@@ -530,6 +549,25 @@ const Billing = () => {
     const rateMonthly = parseFloat(formData.interestRate); 
     const numInstallments = parseInt(formData.installments);
     
+    if (formData.isMigration) {
+        const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
+        const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
+        const numInst = parseInt(formData.installments) || 0;
+        const pmt = mCap + mInt;
+
+        if (numInst > 0 && pmt > 0 && formData.startDate) {
+            setSimulation({ 
+                installment: pmt, 
+                totalInterest: mInt * numInst, 
+                totalPayable: pmt * numInst, 
+                isValid: true 
+            });
+        } else {
+            setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
+        }
+        return;
+    }
+
     if (amount > 0 && numInstallments > 0 && !isNaN(rateMonthly) && formData.startDate) {
       setIsSimulating(true);
       const timeoutId = setTimeout(() => {
@@ -560,7 +598,7 @@ const Billing = () => {
     } else { 
         setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false }); 
     }
-  }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency]);
+  }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency, formData.isMigration, formData.manualInstallmentCapital, formData.manualInstallmentInterest]);
 
   useEffect(() => {
       setSelectedIds([]);
@@ -882,6 +920,70 @@ const Billing = () => {
       } catch (e) { alert("Erro ao salvar acordo."); }
   };
 
+  const handleOpenEditDate = (loan: Loan) => {
+      setSelectedLoan(loan);
+      setEditStartDate(loan.startDate ? loan.startDate.split('T')[0] : '');
+      setEditNextDue(loan.nextDue ? loan.nextDue.split('T')[0] : '');
+      setIsEditDateModalOpen(true);
+      setOpenMenuId(null);
+  };
+
+  const confirmEditDate = async () => {
+      if (!selectedLoan || !editStartDate || !editNextDue) return;
+      
+      const updatedLoan = { 
+          ...selectedLoan, 
+          startDate: editStartDate, 
+          nextDue: editNextDue 
+      };
+
+      try {
+          await loanService.update(
+              selectedLoan.id,
+              updatedLoan,
+              'CORREÇÃO DE DATA',
+              `Datas alteradas definitivamente. Nova operação: ${formatDisplayDate(editStartDate)}. Novo Vencimento: ${formatDisplayDate(editNextDue)}.`
+          );
+          setLoans(prev => prev.map(l => l.id === updatedLoan.id ? updatedLoan : l));
+          setIsEditDateModalOpen(false);
+      } catch (e) {
+          alert("Erro ao alterar as datas do contrato.");
+      }
+  };
+
+  const handleOpenEditId = (loan: Loan) => {
+      setSelectedLoan(loan);
+      setEditNewId(loan.id);
+      setIsEditIdModalOpen(true);
+      setOpenMenuId(null);
+  };
+
+  const confirmEditId = async () => {
+      if (!selectedLoan || !editNewId.trim()) return;
+      if (editNewId === selectedLoan.id) {
+          setIsEditIdModalOpen(false);
+          return;
+      }
+      if (loans.some(l => l.id === editNewId)) {
+          alert(`O ID ${editNewId} já existe em outro contrato.`);
+          return;
+      }
+      
+      const updatedLoan = { ...selectedLoan, id: editNewId };
+      try {
+          await loanService.update(
+              selectedLoan.id, 
+              updatedLoan, 
+              'CORREÇÃO DE ID', 
+              `ID alterado de ${selectedLoan.id} para ${editNewId}`
+          );
+          setLoans(prev => prev.map(l => l.id === selectedLoan.id ? updatedLoan : l));
+          setIsEditIdModalOpen(false);
+      } catch (e) {
+          alert("Erro ao alterar o ID do contrato.");
+      }
+  };
+
   const handleExportExcel = async () => {
     const loansToExport = loans.filter(l => selectedIds.includes(l.id));
 
@@ -948,8 +1050,10 @@ const Billing = () => {
   const closeLoanFlow = () => {
       setLoanFlowStep('closed');
       setFormData({ 
+        manualID: '', isMigration: false, initialPaidCapital: '0', initialPaidInterest: '0',
+        manualInstallmentCapital: '', manualInstallmentInterest: '',
         client: '', amount: '', interestRate: '', installments: '', startDate: '', firstPaymentDate: '', frequency: 'MENSAL', 
-        fineRate: '2.0', moraInterestRate: '0.1', clientBank: '', paymentMethod: '', 
+        fineRate: '0.0', moraInterestRate: '0.0', clientBank: '', paymentMethod: '', 
         interestType: 'PRICE', 
         hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
         guarantorHouseType: 'CASA', guarantorNumber: '', guarantorBlock: '', guarantorFloor: '',
@@ -959,53 +1063,98 @@ const Billing = () => {
 
   const handleFinalSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     setIsSaving(true);
-    try {
-        const today = new Date();
-        const year = today.getFullYear();
-        const yearLoans = loans.filter(l => l.id.endsWith(`/${year}`));
-        let maxSeq = 0;
-        yearLoans.forEach(l => { const parts = l.id.split('/'); if(parts.length === 2) { const seq = parseInt(parts[0]); if(!isNaN(seq) && seq > maxSeq) maxSeq = seq; } });
-        const nextSeq = maxSeq + 1;
-        // ATUALIZADO: Usando padStart(3) para gerar 001/2026
-        const newID = `${nextSeq.toString().padStart(3, '0')}/${year}`;
 
-        let nextDueDate = new Date(formData.startDate);
-        if (formData.firstPaymentDate) {
-            nextDueDate = new Date(formData.firstPaymentDate);
-        } else {
+    try {
+        let finalID = formData.manualID;
+
+        if (!finalID) {
+            const today = new Date();
+            const year = today.getFullYear();
+            const yearLoans = loans.filter(l => l.id.endsWith(`/${year}`));
+            let maxSeq = 0;
+            yearLoans.forEach(l => { 
+                const parts = l.id.split('/'); 
+                if(parts.length === 2) { 
+                    const seq = parseInt(parts[0]); 
+                    if(!isNaN(seq) && seq > maxSeq) maxSeq = seq; 
+                } 
+            });
+            finalID = `${(maxSeq + 1).toString().padStart(3, '0')}/${year}`;
+        }
+
+        if (loans.some(l => l.id === finalID)) {
+            alert(`O ID ${finalID} já está em uso por outro contrato.`);
+            setIsSaving(false); return;
+        }
+
+        let nextDueDate = new Date(formData.firstPaymentDate || formData.startDate);
+        if (!formData.firstPaymentDate) {
             if (formData.frequency === 'SEMANAL') nextDueDate.setDate(nextDueDate.getDate() + 7);
             else if (formData.frequency === 'DIARIO') nextDueDate.setDate(nextDueDate.getDate() + 1);
             else nextDueDate.setMonth(nextDueDate.getMonth() + 1);
         }
 
-        const totalReceivable = simulation.installment * parseInt(formData.installments);
-        const projectedProfit = formData.interestType === 'SIMPLE' ? totalReceivable : Math.max(0, totalReceivable - parseFloat(formData.amount));
+        let finalAmount = parseFloat(formData.amount);
+        let finalInterestRate = parseFloat(formData.interestRate);
+        let projectedProfit = 0;
+
+        if (formData.isMigration) {
+            const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
+            const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
+            const numInst = parseInt(formData.installments) || 0;
+            const initCap = parseFloat(formData.initialPaidCapital) || 0;
+            const initInt = parseFloat(formData.initialPaidInterest) || 0;
+
+            finalAmount = (mCap * numInst) + initCap; 
+            finalInterestRate = 0; 
+            projectedProfit = (mInt * numInst) + initInt;
+        } else {
+            const totalReceivable = simulation.installment * parseInt(formData.installments);
+            projectedProfit = formData.interestType === 'SIMPLE' ? totalReceivable : Math.max(0, totalReceivable - finalAmount);
+        }
+
         const parseRate = (val: string) => { if (val === '') return 0; const num = parseFloat(val); return isNaN(num) ? 0 : num; };
 
-        // ATUALIZADO: Concatenação hiper-detalhada do endereço do fiador
         const fullGuarantorAddress = formData.hasGuarantor ? 
             `${formData.guarantorAddress}, nº ${formData.guarantorNumber}${formData.guarantorHouseType === 'APARTAMENTO' ? ` - Bloco ${formData.guarantorBlock}, Andar ${formData.guarantorFloor}` : ''}` 
             : '';
 
+        const history: PaymentRecord[] = [
+            { date: new Date().toISOString(), amount: finalAmount, type: 'Abertura', note: 'Empréstimo Concedido', registeredAt: new Date().toISOString() }
+        ];
+
+        if (formData.isMigration) {
+            history.push({
+                date: new Date().toISOString(),
+                amount: parseFloat(formData.initialPaidCapital) + parseFloat(formData.initialPaidInterest),
+                capitalPaid: parseFloat(formData.initialPaidCapital),
+                interestPaid: parseFloat(formData.initialPaidInterest),
+                type: 'Ajuste de Migração',
+                note: 'Valores pagos antes da implantação do sistema.',
+                registeredAt: new Date().toISOString()
+            });
+        }
+
         const newLoan: Loan = {
-            id: newID, client: formData.client, amount: parseFloat(formData.amount), installments: parseInt(formData.installments),
-            interestRate: parseFloat(formData.interestRate), startDate: formData.startDate, nextDue: nextDueDate.toISOString().split('T')[0],
+            id: finalID, client: formData.client, amount: finalAmount, installments: parseInt(formData.installments),
+            interestRate: finalInterestRate, startDate: formData.startDate, nextDue: nextDueDate.toISOString().split('T')[0],
             status: 'Em Dia', installmentValue: simulation.installment,
             fineRate: parseRate(formData.fineRate), moraInterestRate: parseRate(formData.moraInterestRate),
             clientBank: formData.clientBank, paymentMethod: formData.paymentMethod, justification: '',
             checklistAtApproval: [], 
-            totalPaidCapital: 0, totalPaidInterest: 0,
-            history: [{ date: new Date().toISOString(), amount: parseFloat(formData.amount), type: 'Abertura', note: 'Empréstimo Concedido' }],
-            interestType: formData.interestType as 'PRICE' | 'SIMPLE', frequency: formData.frequency as 'MENSAL' | 'SEMANAL' | 'DIARIO', projectedProfit: projectedProfit,
+            totalPaidCapital: formData.isMigration ? parseFloat(formData.initialPaidCapital) : 0,
+            totalPaidInterest: formData.isMigration ? parseFloat(formData.initialPaidInterest) : 0,
+            history: history, interestType: formData.interestType as 'PRICE' | 'SIMPLE', frequency: formData.frequency as 'MENSAL' | 'SEMANAL' | 'DIARIO', projectedProfit: projectedProfit,
             guarantorName: formData.hasGuarantor ? formData.guarantorName : '', 
             guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '', 
             guarantorAddress: fullGuarantorAddress,
             affiliateName: formData.hasAffiliate ? formData.affiliateName : '', affiliateFee: formData.hasAffiliate ? parseFloat(formData.affiliateFee) : 0, affiliateNotes: formData.hasAffiliate ? formData.affiliateNotes : ''
         };
+
         await loanService.create(newLoan);
-        fetchLoans();
-        closeLoanFlow();
+        fetchLoans(); closeLoanFlow();
     } catch (err) { alert("Erro ao salvar."); } finally { setIsSaving(false); }
   };
 
@@ -1026,6 +1175,17 @@ const Billing = () => {
             </button>
         </div>
       </header>
+
+      <datalist id="bancos-sugestao">
+          <option value="Itaú" />
+          <option value="Bradesco" />
+          <option value="Santander" />
+          <option value="Nubank" />
+          <option value="Inter" />
+          <option value="Caixa Econômica" />
+          <option value="Banco do Brasil" />
+          <option value="C6 Bank" />
+      </datalist>
 
       {isDailyAlertOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
@@ -1310,6 +1470,20 @@ const Billing = () => {
                                       </button>
                                     </>
                                   )}
+
+                                  <button
+                                    onClick={() => handleOpenEditDate(loan)}
+                                    className="w-full text-left px-4 py-3 text-sm text-blue-600 hover:bg-blue-50 flex items-center gap-2"
+                                  >
+                                    <Calendar size={16} /> Editar Datas
+                                  </button>
+                                  
+                                  <button
+                                    onClick={() => handleOpenEditId(loan)}
+                                    className="w-full text-left px-4 py-3 text-sm text-purple-600 hover:bg-purple-50 flex items-center gap-2"
+                                  >
+                                    <Hash size={16} /> Editar ID
+                                  </button>
 
                                   <div className="border-t border-slate-100 my-1"></div>
                                   <button
@@ -1602,6 +1776,44 @@ const Billing = () => {
           </div>
       </Modal>
 
+      <Modal isOpen={isEditDateModalOpen} onClose={() => setIsEditDateModalOpen(false)} title="Editar Datas do Contrato">
+          <div className="space-y-5">
+              <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl">
+                  <div className="flex items-center gap-2 text-blue-800 font-bold mb-2"><Calendar size={20}/> Correção Definitiva</div>
+                  <p className="text-xs text-blue-700">Esta ação altera as datas base do contrato definitivamente, sem gerar registro de "Acordo" no extrato financeiro. Ideal para correções de digitação.</p>
+              </div>
+              <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Data da Operação (Criação)</label>
+                  <input type="date" value={editStartDate} onChange={e => setEditStartDate(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20"/>
+              </div>
+              <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Data do Próximo Vencimento</label>
+                  <input type="date" value={editNextDue} onChange={e => setEditNextDue(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20 font-bold text-slate-800"/>
+              </div>
+              <div className="flex justify-end gap-3 mt-2">
+                  <button onClick={() => setIsEditDateModalOpen(false)} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all">Cancelar</button>
+                  <button onClick={confirmEditDate} className="px-6 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all">Salvar Datas</button>
+              </div>
+          </div>
+      </Modal>
+
+      <Modal isOpen={isEditIdModalOpen} onClose={() => setIsEditIdModalOpen(false)} title="Editar ID do Contrato">
+          <div className="space-y-5">
+              <div className="bg-purple-50 border border-purple-200 p-4 rounded-xl">
+                  <div className="flex items-center gap-2 text-purple-800 font-bold mb-2"><Hash size={20}/> Padronização de ID</div>
+                  <p className="text-xs text-purple-700">Esta ação altera o número de identificação do contrato. Use para padronizar contratos antigos (ex: 045/2023).</p>
+              </div>
+              <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Novo ID do Contrato</label>
+                  <input type="text" value={editNewId} onChange={e => setEditNewId(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-purple-500/20 font-mono font-bold text-slate-800"/>
+              </div>
+              <div className="flex justify-end gap-3 mt-2">
+                  <button onClick={() => setIsEditIdModalOpen(false)} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all">Cancelar</button>
+                  <button onClick={confirmEditId} className="px-6 py-3 bg-purple-600 text-white font-bold rounded-xl hover:bg-purple-700 transition-all">Salvar Novo ID</button>
+              </div>
+          </div>
+      </Modal>
+
       <Modal 
         isOpen={loanFlowStep !== 'closed'} 
         onClose={closeLoanFlow} 
@@ -1609,14 +1821,83 @@ const Billing = () => {
       >
         <form onSubmit={handleFinalSave} className="space-y-6">
             <div className="space-y-4">
-                <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Cliente Selecionado</label><select required value={formData.client} onChange={e => setFormData({...formData, client: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5"><option value="">Selecione o titular...</option>{availableClients.map((c) => (<option key={c.id} value={c.name}>{c.name}</option>))}</select></div>
-                <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100"><div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Banco do Cliente</label><input value={formData.clientBank} onChange={e => setFormData({...formData, clientBank: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Ex: Nubank, Itaú..."/></div><div className="col-span-2"><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Forma de Pagamento</label><input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="CPF, Email, Ag/Conta..."/></div>
-                <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="0.0"/></div>
-                <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros Mora Diária (%)</label><input value={formData.moraInterestRate} onChange={e => setFormData({...formData, moraInterestRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="0.0"/></div>
+                
+                {/* BUSCA DE CLIENTE NATIVA COM DATALIST */}
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                    <label className="flex items-center gap-2 text-xs font-bold uppercase text-slate-500 mb-2"><Search size={14}/> Cliente</label>
+                    <input 
+                        list="clients-datalist"
+                        required
+                        placeholder="Digite para buscar e selecione o cliente..."
+                        value={formData.client}
+                        onChange={e => setFormData({...formData, client: e.target.value})}
+                        className="w-full p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5 font-bold"
+                        autoComplete="off"
+                    />
+                    <datalist id="clients-datalist">
+                        {availableClients.map((c) => (<option key={c.id} value={c.name}>{c.name} ({c.cpf})</option>))}
+                    </datalist>
                 </div>
-                <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="0,00"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="5.0"/></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Data da Operação</label><input required type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" /></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.installments} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="12"/></div></div>
-                <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Periodicidade</label><div className="relative"><Repeat size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/><select value={formData.frequency} onChange={e => setFormData({...formData, frequency: e.target.value})} className="w-full pl-10 p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5"><option value="MENSAL">Mensal</option><option value="SEMANAL">Semanal</option><option value="DIARIO">Diário</option></select></div></div><div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Primeiro Vencimento</label><input type="date" value={formData.firstPaymentDate} onChange={e => setFormData({...formData, firstPaymentDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 text-sm" placeholder="Opcional" title="Deixe vazio para automático"/></div></div>
-                <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl"><input type="checkbox" id="interestType" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" /><label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros) <span className="text-xs font-normal text-blue-600 block">O cliente paga apenas os juros mensais. O capital não abate.</span></label></div>
+
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="flex items-center gap-1 text-xs font-bold uppercase text-slate-500 mb-1"><Hash size={12}/> ID do Contrato</label>
+                        <input value={formData.manualID} onChange={e => setFormData({...formData, manualID: e.target.value})} className="w-full p-2 border rounded-lg bg-white font-mono" placeholder="Ex: 045/2023 (Opcional)"/>
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Banco do Cliente</label>
+                        <input list="bancos-sugestao" value={formData.clientBank} onChange={e => setFormData({...formData, clientBank: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Selecione ou digite..."/>
+                    </div>
+                </div>
+
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                    <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Chave PIX / Forma de Pagamento</label>
+                    <input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Puxado automaticamente..."/>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input type="number" step="0.1" value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" /></div>
+                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros Mora Diária (%)</label><input type="number" step="0.01" value={formData.moraInterestRate} onChange={e => setFormData({...formData, moraInterestRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" /></div>
+                </div>
+
+                {/* MODALIDADE DE CONTRATO ANTIGO / MIGRAÇÃO */}
+                <div className={`p-3 border rounded-xl transition-all ${formData.isMigration ? 'bg-amber-50 border-amber-300' : 'bg-slate-50 border-slate-200'}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                        <input type="checkbox" id="isMigration" checked={formData.isMigration} onChange={(e) => setFormData({...formData, isMigration: e.target.checked})} className={`w-5 h-5 rounded focus:ring-amber-500 ${formData.isMigration ? 'text-amber-600' : 'text-slate-500'}`} />
+                        <label htmlFor="isMigration" className={`text-sm font-bold cursor-pointer flex items-center gap-2 ${formData.isMigration ? 'text-amber-800' : 'text-slate-600'}`}><Database size={16}/> É um contrato antigo (Migração)?</label>
+                    </div>
+                    {formData.isMigration && (
+                        <div className="mt-3 animate-in zoom-in-95 border-t border-amber-200 pt-3">
+                            <div className="grid grid-cols-2 gap-3 mb-3">
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital Já Pago (R$)</label><input type="number" step="0.01" value={formData.initialPaidCapital} onChange={e => setFormData({...formData, initialPaidCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" /></div>
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Juros Já Pagos (R$)</label><input type="number" step="0.01" value={formData.initialPaidInterest} onChange={e => setFormData({...formData, initialPaidInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" /></div>
+                            </div>
+                            <p className="text-[10px] font-bold text-amber-800 uppercase mb-2 mt-4 border-t border-amber-200 pt-2">Definir Parcelas Restantes Manualmente</p>
+                            <div className="grid grid-cols-3 gap-3">
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Qtd. Parcelas Restantes</label><input required type="number" value={formData.installments} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" /></div>
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital / Parcela (R$)</label><input required type="number" step="0.01" value={formData.manualInstallmentCapital} onChange={e => setFormData({...formData, manualInstallmentCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" /></div>
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Juros / Parcela (R$)</label><input required type="number" step="0.01" value={formData.manualInstallmentInterest} onChange={e => setFormData({...formData, manualInstallmentInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" /></div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {!formData.isMigration && (
+                    <>
+                        <div className="grid grid-cols-3 gap-4">
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="0,00"/></div>
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="5.0"/></div>
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.installments} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="12"/></div>
+                        </div>
+                        <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl"><input type="checkbox" id="interestType" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" /><label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros) <span className="text-xs font-normal text-blue-600 block">O cliente paga apenas os juros mensais. O capital não abate.</span></label></div>
+                    </>
+                )}
+                
+                <div className="grid grid-cols-3 gap-4">
+                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">{formData.isMigration ? 'Data Original (Criação)' : 'Data da Operação'}</label><input required type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" /></div>
+                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Periodicidade</label><div className="relative"><Repeat size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/><select value={formData.frequency} onChange={e => setFormData({...formData, frequency: e.target.value})} className="w-full pl-10 p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5"><option value="MENSAL">Mensal</option><option value="SEMANAL">Semanal</option><option value="DIARIO">Diário</option></select></div></div>
+                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">{formData.isMigration ? 'Próximo Vencimento' : 'Primeiro Vencimento'}</label><input type="date" required={formData.isMigration} value={formData.firstPaymentDate} onChange={e => setFormData({...formData, firstPaymentDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 text-sm" placeholder="Opcional" title="Deixe vazio para automático"/></div>
+                </div>
                 
                 {/* SEÇÃO DO FIADOR ATUALIZADA - DETALHES DE ENDEREÇO */}
                 <div className="flex items-center gap-2 mt-4"><input type="checkbox" id="hasGuarantor" checked={formData.hasGuarantor} onChange={(e) => setFormData({...formData, hasGuarantor: e.target.checked})} className="w-4 h-4 rounded text-slate-900 focus:ring-slate-500"/><label htmlFor="hasGuarantor" className="text-sm font-bold text-slate-700 cursor-pointer">Adicionar Fiador (Opcional)</label></div>
@@ -1676,10 +1957,10 @@ const Billing = () => {
             </div>
             
             <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-inner">
-                <div className="flex items-center gap-2 mb-4 border-b border-slate-200 pb-3"><Calculator size={20} className="text-slate-800" /><h4 className="text-[12px] font-bold text-slate-800 uppercase tracking-widest">Simulação Financeira ({formData.interestType === 'SIMPLE' ? 'Juros Simples' : 'Price'})</h4></div>
+                <div className="flex items-center gap-2 mb-4 border-b border-slate-200 pb-3"><Calculator size={20} className="text-slate-800" /><h4 className="text-[12px] font-bold text-slate-800 uppercase tracking-widest">Simulação Financeira ({formData.isMigration ? 'Migração Manual' : formData.interestType === 'SIMPLE' ? 'Juros Simples' : 'Price'})</h4></div>
                 {isSimulating ? (<div className="flex justify-center py-4"><Loader2 className="animate-spin text-slate-400" /></div>) : simulation.isValid ? (
                     <div className="space-y-4">
-                        <div className="flex justify-between items-center text-sm font-medium"><span className="text-slate-500">Montante Financiado:</span><span className="text-slate-900 font-bold">R$ {formatMoney(parseFloat(formData.amount))}</span></div>
+                        <div className="flex justify-between items-center text-sm font-medium"><span className="text-slate-500">Montante Financiado:</span><span className="text-slate-900 font-bold">R$ {formatMoney(parseFloat(formData.amount) || ((parseFloat(formData.manualInstallmentCapital)*parseFloat(formData.installments))+parseFloat(formData.initialPaidCapital)) )}</span></div>
                         <div className="flex justify-between items-center">
                             <span className="text-sm text-slate-500 font-medium">
                                 Parcela {formData.frequency === 'DIARIO' ? 'Diária' : formData.frequency === 'SEMANAL' ? 'Semanal' : 'Mensal'} ({formData.installments}x):
@@ -1695,7 +1976,7 @@ const Billing = () => {
                             </div>
                         )}
                     </div>
-                ) : (<p className="text-center text-slate-400 text-xs py-4 font-medium italic">Aguardando dados...</p>)}
+                ) : (<p className="text-center text-slate-400 text-xs py-4 font-medium italic">Preencha os campos obrigatórios...</p>)}
             </div>
             
             <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">

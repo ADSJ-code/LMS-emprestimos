@@ -4,7 +4,7 @@ import {
   Search, Plus, MoreVertical, Edit2, Trash2, Eye, 
   MapPin, Phone, Mail, User, ShieldCheck, AlertCircle, RefreshCw, FileText, Upload, Loader2,
   DollarSign, CheckCircle, XCircle, Clock, TrendingUp, TrendingDown, Users, Calendar, Activity, List, Check, ShieldAlert,
-  Home, Layers
+  Home, Layers, CreditCard
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
@@ -33,7 +33,7 @@ const Clients = () => {
 
   const [isCepLoading, setIsCepLoading] = useState(false);
 
-  // --- FORM DATA ATUALIZADO (Campos para Contrato Juliana) ---
+  // --- FORM DATA ATUALIZADO (Campos para Contrato Juliana + PIX) ---
   const [formData, setFormData] = useState<Partial<Client> & { 
     justification?: string, 
     checklist?: string[],
@@ -41,13 +41,16 @@ const Clients = () => {
     maritalStatus?: string,
     houseType?: 'CASA' | 'APARTAMENTO',
     block?: string,
-    floor?: string 
+    floor?: string,
+    pixKeyType?: string,
+    pixKey?: string
   }>({
     name: '', cpf: '', rg: '', email: '', phone: '',
     nationality: 'Brasileiro(a)', maritalStatus: 'SOLTEIRO(A)',
     cep: '', address: '', number: '', neighborhood: '', city: '', state: '',
     observations: '', documents: [], status: 'Ativo', justification: '', checklist: [],
-    houseType: 'CASA', block: '', floor: ''
+    houseType: 'CASA', block: '', floor: '',
+    pixKeyType: 'CPF', pixKey: ''
   });
 
   const [openMenuId, setOpenMenuId] = useState<string | number | null>(null);
@@ -258,7 +261,8 @@ const Clients = () => {
       setFormData({ 
           ...client, documents: client.documents || [], justification: client.justification || '', checklist: savedChecklist,
           nationality: client.nationality || 'Brasileiro(a)', maritalStatus: client.maritalStatus || 'SOLTEIRO(A)',
-          houseType: client.houseType || 'CASA', block: client.block || '', floor: client.floor || ''
+          houseType: client.houseType || 'CASA', block: client.block || '', floor: client.floor || '',
+          pixKeyType: (client as any).pixKeyType || 'CPF', pixKey: (client as any).pixKey || ''
       });
     } else {
       setEditingId(null);
@@ -266,7 +270,8 @@ const Clients = () => {
       setFormData({ 
           name: '', cpf: '', rg: '', email: '', phone: '', cep: '', address: '', number: '', neighborhood: '', city: '', state: '', 
           observations: '', documents: [], status: 'Ativo', justification: '', checklist: [],
-          nationality: 'Brasileiro(a)', maritalStatus: 'SOLTEIRO(A)', houseType: 'CASA', block: '', floor: ''
+          nationality: 'Brasileiro(a)', maritalStatus: 'SOLTEIRO(A)', houseType: 'CASA', block: '', floor: '',
+          pixKeyType: 'CPF', pixKey: ''
       });
     }
     setIsModalOpen(true);
@@ -382,6 +387,23 @@ const Clients = () => {
                         <input type="email" placeholder="Email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full p-2.5 border rounded-lg" />
                     </div>
                 </div>
+
+                {/* --- NOVO BLOCO: DADOS BANCÁRIOS / PIX --- */}
+                <div className="bg-slate-50 p-4 rounded-xl border space-y-3">
+                    <h4 className="text-[10px] font-black uppercase text-slate-400 mb-2 flex items-center gap-1"><CreditCard size={12}/> Dados Bancários / PIX</h4>
+                    <div className="grid grid-cols-3 gap-3">
+                        <select value={formData.pixKeyType || 'CPF'} onChange={e => setFormData({...formData, pixKeyType: e.target.value})} className="w-full p-2.5 border rounded-lg bg-white text-xs font-bold text-slate-600">
+                            <option value="CPF">CPF</option>
+                            <option value="CNPJ">CNPJ</option>
+                            <option value="TELEFONE">Telefone</option>
+                            <option value="EMAIL">E-mail</option>
+                            <option value="ALEATORIA">Aleatória</option>
+                            <option value="DADOS_BANCARIOS">Agência/Conta</option>
+                        </select>
+                        <input placeholder="Digite a Chave Pix ou Conta" value={formData.pixKey || ''} onChange={e => setFormData({...formData, pixKey: e.target.value})} className="col-span-2 w-full p-2.5 border rounded-lg text-sm" />
+                    </div>
+                </div>
+                {/* ----------------------------------------- */}
 
                 <div className="bg-slate-50 p-4 rounded-xl border space-y-3">
                     <h4 className="text-[10px] font-black uppercase text-slate-400 mb-2">Localização {isCepLoading && <Loader2 className="animate-spin inline" size={10}/>}</h4>

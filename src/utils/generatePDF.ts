@@ -227,7 +227,7 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client) => {
   addText(`1.1 Pelo presente instrumento, o MUTUANTE entrega ao MUTUÁRIO neste ato, a título de empréstimo (ou "Mútuo"), a importância de ${formatMoney(originalAmount)} ${valorParaExtenso(originalAmount)}, através de transferência bancária para a chave Pix CPF: ${pixDestino} do próprio MUTUÁRIO${bankInfo}.`);
   addText(`1.2 Fica acordado entre as Partes que o Valor do Mútuo, na data do vencimento do presente contrato, será acrescido de uma taxa de remuneração a ${loan.interestRate}% a.m do Valor do Mútuo.`);
   addText(`1.3 O Valor do Mútuo deverá ser restituído em sua integralidade pelo MUTUÁRIO ao MUTUANTE, respeitando-se os juros e correção pactuados na cláusula 1.2 acima, até o término do prazo de vigência do presente contrato, qual seja, até o pagamento da parcela.`);
-  addText(`1.4 Caso o MUTUÁRIO deixe de pagar integralmente o Valor do Mútuo e seus acessórios no prazo estipulado na cláusula 1.3 acima, o saldo devedor corrigido na data do término de referido prazo ficará sujeito a juros moratórios à taxa de ${loan.moraInterestRate}% ao dia, multa de mora na ordem de ${loan.fineRate}% sobre o valor atualizado do débito e correção monetária.`);
+  addText(`1.4 Caso o MUTUÁRIO deixe de pagar integralmente o Valor do Mútuo e seus acessórios no prazo estipulado na cláusula 1.3 acima, o saldo devedor corrigido na data do término de referido prazo ficará sujeito a juros moratórios à taxa de 20% (vinte por cento) ao ano, multa de mora na ordem de 3% (três por cento) sobre o valor atualizado do débito e correção monetária.`);
 
   y += 5;
   addText("Cláusula Segunda – DO PRAZO DE VIGÊNCIA", true);
@@ -319,9 +319,9 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client) => 
     for (let i = 1; i <= totalOriginalInstallments; i++) {
         if (i > 1) doc.addPage();
         
-        // Aplica o papel de parede também nas notas promissórias
-        aplicarFundoTimbrado(doc);
-        
+        // As páginas da promissória ficarão em branco (sem timbrado) conforme solicitado.
+        doc.setTextColor(0, 0, 0); // Garante que o texto seja preto
+
         const pDate = new Date(baseDate);
         // Como baseDate já é o vencimento 1, somamos (i - 1)
         if (loan.frequency === 'SEMANAL') pDate.setDate(baseDate.getDate() + (7 * (i - 1)));

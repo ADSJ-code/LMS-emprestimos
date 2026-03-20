@@ -104,7 +104,11 @@ export interface SystemUser {
     role?: string;
 }
 
-const API_BASE_URL = (import.meta.env.VITE_API_URL || '') + '/api';
+const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+
+export const API_BASE_URL = isLocal 
+  ? 'http://localhost:8080/api' 
+  : 'https://creditnow-prod-266321031136.us-central1.run.app/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
