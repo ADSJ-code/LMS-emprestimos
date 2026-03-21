@@ -5,7 +5,7 @@ import {
   Calculator, FileText, Check, ChevronRight, DollarSign, 
   Printer, Eye, TrendingUp, TrendingDown, History, Download, Calendar, AlertTriangle, Info, PartyPopper, UserCheck,
   Percent, Landmark, CreditCard, Repeat, BellRing, X, FileSignature, Filter, MessageCircle, Users, Send, Home, Layers,
-  Hash, Database
+  Hash, Database, Edit
 } from 'lucide-react';
 
 import ExcelJS from 'exceljs';
@@ -114,12 +114,8 @@ const Billing = () => {
   const [isCollectionModalOpen, setIsCollectionModalOpen] = useState(false);
   const [isDailyAlertOpen, setIsDailyAlertOpen] = useState(false);
   
-  const [isEditDateModalOpen, setIsEditDateModalOpen] = useState(false);
-  const [editStartDate, setEditStartDate] = useState('');
-  const [editNextDue, setEditNextDue] = useState('');
-
-  const [isEditIdModalOpen, setIsEditIdModalOpen] = useState(false);
-  const [editNewId, setEditNewId] = useState('');
+  const [isEditContractModalOpen, setIsEditContractModalOpen] = useState(false);
+  const [editContractData, setEditContractData] = useState<any>({});
 
   const [collectionDate, setCollectionDate] = useState(new Date().toISOString().split('T')[0]);
 
@@ -160,10 +156,10 @@ const Billing = () => {
 
   const [formData, setFormData] = useState({ 
       manualID: '', isMigration: false,
-      initialPaidCapital: '0', initialPaidInterest: '0',
+      initialPaidCapital: '', initialPaidInterest: '',
       manualInstallmentCapital: '', manualInstallmentInterest: '',
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
-      firstPaymentDate: '', frequency: 'MENSAL', fineRate: '0.0', moraInterestRate: '0.0', 
+      firstPaymentDate: '', frequency: 'MENSAL', fineRate: '', moraInterestRate: '', 
       clientBank: '', paymentMethod: '', interestType: 'PRICE', 
       hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
       guarantorHouseType: 'CASA', guarantorNumber: '', guarantorBlock: '', guarantorFloor: '',
@@ -173,17 +169,34 @@ const Billing = () => {
   useEffect(() => {
     if (formData.client && availableClients.length > 0) {
         const clientProfile = availableClients.find(c => c.name === formData.client);
+        
+        let pKey = '';
+        if (clientProfile) {
+            const obs = clientProfile.observations || '';
+            const metaMatch = obs.match(/\[META:(.*?)\]/);
+            if (metaMatch) {
+                try {
+                    const meta = JSON.parse(metaMatch[1]);
+                    pKey = meta.pixKey || '';
+                } catch (e) {}
+            } else {
+                pKey = (clientProfile as any).pixKey || '';
+            }
+        }
+
         const lastLoan = loans
           .filter(l => l.client === formData.client)
           .sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime())[0];
 
+        const defaultBank = (clientProfile as any)?.bankName || lastLoan?.clientBank || '';
+
         setFormData(prev => ({
             ...prev,
-            clientBank: clientProfile?.city ? (clientProfile.observations || lastLoan?.clientBank || '') : (lastLoan?.clientBank || ''), 
-            paymentMethod: (clientProfile as any)?.pixKey || lastLoan?.paymentMethod || ''
+            clientBank: defaultBank, 
+            paymentMethod: pKey || lastLoan?.paymentMethod || ''
         }));
     }
-  }, [formData.client, availableClients, loans]);
+  }, [formData.client, availableClients]);
 
   const filteredClientsForSelect = useMemo(() => {
       return availableClients.filter(c => 
@@ -192,7 +205,17 @@ const Billing = () => {
       );
   }, [availableClients, clientSearchTerm]);
 
+  const formatDisplayDate = (dateString: string) => {
+      if (!dateString) return '-';
+      const cleanDate = dateString.split('T')[0];
+      const [year, month, day] = cleanDate.split('-').map(Number);
+      return new Date(year, month - 1, day).toLocaleDateString('pt-BR');
+  };
+
   const handleWhatsApp = async (loan: LoanExtended, snowball: any) => {
+    const confirmMessage = window.confirm(`Tem certeza que deseja enviar uma mensagem de cobrança para ${loan.client}?`);
+    if (!confirmMessage) return;
+
     let companyName = localStorage.getItem("companyName") || "";
     let companyPhone = localStorage.getItem("companyPhone") || "";
     if (!companyName || !companyPhone) {
@@ -219,11 +242,6 @@ const Billing = () => {
 
     const cleanPhone = client.phone.replace(/\D/g, "");
     const firstName = loan.client.split(" ")[0];
-
-    const parcelasText =
-      safeSnowball.missedInstallments.length > 1
-        ? `${safeSnowball.missedInstallments.length} parcelas pendentes`
-        : `uma pendência`;
 
     const contractCode = `CTR-${loan.id?.substring(0, 6).toUpperCase()}`;
     const diffDays = loan.diffDays || 0;
@@ -260,13 +278,6 @@ const Billing = () => {
 
   const [simulation, setSimulation] = useState({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
 
-  const formatDisplayDate = (dateString: string) => {
-      if (!dateString) return '-';
-      const cleanDate = dateString.split('T')[0];
-      const [year, month, day] = cleanDate.split('-').map(Number);
-      return new Date(year, month - 1, day).toLocaleDateString('pt-BR');
-  };
-
   const getSyncedBreakdown = (loan: Loan | null) => {
       if (!loan) return { interest: 0, capital: 0, total: 0 };
       
@@ -295,19 +306,6 @@ const Billing = () => {
       }
       
       return breakdown;
-  };
-
-  const getClientLTV = (clientName: string) => {
-      const clientLoans = loans.filter(l => l.client === clientName);
-      let totalEmprestado = 0;
-      let totalLucroRecebido = 0;
-      
-      clientLoans.forEach(l => {
-          totalEmprestado += Number(l.amount) || 0;
-          totalLucroRecebido += Number(l.totalPaidInterest) || 0;
-      });
-
-      return { totalEmprestado, totalLucroRecebido };
   };
 
   useEffect(() => {
@@ -339,6 +337,33 @@ const Billing = () => {
           sessionStorage.removeItem('searchClient');
       }
   }, []);
+
+  useEffect(() => {
+      if (todaysLoans.length > 0) {
+          const todayStr = new Date().toISOString().split('T')[0];
+          const lastPopupDate = localStorage.getItem('lastDailyPopupDate');
+          
+          if (lastPopupDate !== todayStr) {
+              setIsDailyAlertOpen(true);
+              localStorage.setItem('lastDailyPopupDate', todayStr);
+          }
+      }
+  }, [todaysLoans]);
+
+  useEffect(() => {
+      const handleFocus = () => {
+          if (todaysLoans.length > 0) {
+              const todayStr = new Date().toISOString().split('T')[0];
+              const lastPopupDate = localStorage.getItem('lastDailyPopupDate');
+              if (lastPopupDate !== todayStr) {
+                  setIsDailyAlertOpen(true);
+                  localStorage.setItem('lastDailyPopupDate', todayStr);
+              }
+          }
+      };
+      window.addEventListener('focus', handleFocus);
+      return () => window.removeEventListener('focus', handleFocus);
+  }, [todaysLoans]);
 
   const getLoanRealStatus = (loan: Loan) => {
     if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
@@ -396,28 +421,6 @@ const Billing = () => {
    }
    setSelectedIds([]);
  };
-
-  const handleOpenWhatsApp = (
-    clientName: string,
-    loanAmount: number,
-    dueDate: string,
-    e?: React.MouseEvent,
-  ) => {
-    if (e) e.stopPropagation();
-    setOpenMenuId(null);
-    const client = availableClients.find((c) => c.name === clientName);
-    if (!client || !client.phone) {
-      alert("Telefone do cliente não encontrado no cadastro.");
-      return;
-    }
-
-    const cleanPhone = client.phone.replace(/\D/g, "");
-    const formattedDate = formatDisplayDate(dueDate);
-    const message = `Olá, ${clientName}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loanAmount)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
-
-    const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
-    window.open(url, "_blank");
-  };
 
   const renderSchedule = (loan: Loan) => {
       const historyPayments = (loan.history || []).filter(h => h.type === 'Parcela' || h.type === 'Amortização' || h.type === 'Juros');
@@ -545,30 +548,53 @@ const Billing = () => {
   }, [loans, collectionDate]);
 
   useEffect(() => {
-    const amount = parseFloat(formData.amount); 
-    const rateMonthly = parseFloat(formData.interestRate); 
-    const numInstallments = parseInt(formData.installments);
+    const amount = parseFloat(formData.amount) || 0; 
+    const rateMonthly = parseFloat(formData.interestRate) || 0; 
     
     if (formData.isMigration) {
-        const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
-        const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
-        const numInst = parseInt(formData.installments) || 0;
-        const pmt = mCap + mInt;
+        const initCap = parseFloat(formData.initialPaidCapital) || 0;
+        
+        if (formData.interestType === 'SIMPLE') {
+            const balance = Math.max(0, amount - initCap);
+            let periodRate = rateMonthly / 100;
+            if (formData.frequency === 'SEMANAL') periodRate = periodRate / 4;
+            else if (formData.frequency === 'DIARIO') periodRate = periodRate / 30;
 
-        if (numInst > 0 && pmt > 0 && formData.startDate) {
-            setSimulation({ 
-                installment: pmt, 
-                totalInterest: mInt * numInst, 
-                totalPayable: pmt * numInst, 
-                isValid: true 
-            });
+            const pmt = balance * periodRate; 
+            
+            if (amount > 0 && formData.startDate) {
+                setSimulation({ 
+                    installment: pmt, 
+                    totalInterest: 0, 
+                    totalPayable: pmt + amount, 
+                    isValid: true 
+                });
+            } else {
+                setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
+            }
         } else {
-            setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
+            const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
+            const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
+            const numInst = parseInt(formData.installments) || 0;
+            const pmt = mCap + mInt;
+
+            if (numInst > 0 && pmt > 0 && formData.startDate && amount > 0) {
+                setSimulation({ 
+                    installment: pmt, 
+                    totalInterest: mInt * numInst, 
+                    totalPayable: pmt * numInst, 
+                    isValid: true 
+                });
+            } else {
+                setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
+            }
         }
         return;
     }
 
-    if (amount > 0 && numInstallments > 0 && !isNaN(rateMonthly) && formData.startDate) {
+    const numInstallments = formData.interestType === 'SIMPLE' ? 1 : (parseInt(formData.installments) || 0);
+    
+    if (amount > 0 && numInstallments > 0 && rateMonthly >= 0 && formData.startDate) {
       setIsSimulating(true);
       const timeoutId = setTimeout(() => {
         let periodRate = rateMonthly / 100;
@@ -598,7 +624,7 @@ const Billing = () => {
     } else { 
         setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false }); 
     }
-  }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency, formData.isMigration, formData.manualInstallmentCapital, formData.manualInstallmentInterest]);
+  }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency, formData.isMigration, formData.manualInstallmentCapital, formData.manualInstallmentInterest, formData.initialPaidCapital, formData.initialPaidInterest]);
 
   useEffect(() => {
       setSelectedIds([]);
@@ -670,8 +696,9 @@ const Billing = () => {
     let initialCapital = breakdown.capital;
     let initialTotal = breakdown.total;
 
-    setPayInterest(initialInterest.toFixed(2));
-    setPayCapital(initialCapital.toFixed(2));
+    // FIX: EVITANDO O "0.00" NOS INPUTS DE PAGAMENTO SE FOREM ZERO
+    setPayInterest(initialInterest > 0 ? initialInterest.toFixed(2) : '');
+    setPayCapital(initialCapital > 0 ? initialCapital.toFixed(2) : '');
     setPayTotal(initialTotal);
     setSettleInterest(false); 
 
@@ -920,67 +947,77 @@ const Billing = () => {
       } catch (e) { alert("Erro ao salvar acordo."); }
   };
 
-  const handleOpenEditDate = (loan: Loan) => {
+  const handleOpenEditContract = (loan: Loan) => {
       setSelectedLoan(loan);
-      setEditStartDate(loan.startDate ? loan.startDate.split('T')[0] : '');
-      setEditNextDue(loan.nextDue ? loan.nextDue.split('T')[0] : '');
-      setIsEditDateModalOpen(true);
+      
+      let displayInstallment = loan.installmentValue.toString();
+      if (loan.interestType === 'SIMPLE') {
+          let periodRate = loan.interestRate / 100;
+          if (loan.frequency === 'SEMANAL') periodRate = periodRate / 4;
+          else if (loan.frequency === 'DIARIO') periodRate = periodRate / 30;
+          const currentBalance = Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
+          displayInstallment = (currentBalance * periodRate).toFixed(2);
+      }
+
+      setEditContractData({
+          id: loan.id,
+          amount: loan.amount.toString(),
+          interestRate: loan.interestRate.toString(),
+          installments: loan.interestType === 'SIMPLE' ? '1' : loan.installments.toString(),
+          installmentValue: displayInstallment,
+          startDate: loan.startDate ? loan.startDate.split('T')[0] : '',
+          nextDue: loan.nextDue ? loan.nextDue.split('T')[0] : '',
+          fineRate: (loan.fineRate || '').toString(),
+          moraInterestRate: (loan.moraInterestRate || '').toString(),
+          clientBank: loan.clientBank || '',
+          paymentMethod: loan.paymentMethod || '',
+          guarantorName: loan.guarantorName || '',
+          guarantorCPF: loan.guarantorCPF || '',
+          guarantorAddress: loan.guarantorAddress || ''
+      });
+      setIsEditContractModalOpen(true);
       setOpenMenuId(null);
   };
 
-  const confirmEditDate = async () => {
-      if (!selectedLoan || !editStartDate || !editNextDue) return;
+  const confirmEditContract = async () => {
+      if (!selectedLoan || !editContractData.id) return;
       
+      if (editContractData.id !== selectedLoan.id && loans.some(l => l.id === editContractData.id)) {
+          alert(`O ID ${editContractData.id} já existe em outro contrato.`);
+          return;
+      }
+      
+      const isSimple = selectedLoan.interestType === 'SIMPLE';
+
       const updatedLoan = { 
           ...selectedLoan, 
-          startDate: editStartDate, 
-          nextDue: editNextDue 
+          id: editContractData.id,
+          amount: parseFloat(editContractData.amount) || selectedLoan.amount,
+          interestRate: parseFloat(editContractData.interestRate) || selectedLoan.interestRate,
+          installments: isSimple ? 1 : (parseInt(editContractData.installments) || selectedLoan.installments),
+          installmentValue: isSimple ? selectedLoan.installmentValue : (parseFloat(editContractData.installmentValue) || selectedLoan.installmentValue),
+          startDate: editContractData.startDate, 
+          nextDue: editContractData.nextDue,
+          fineRate: parseFloat(editContractData.fineRate) || 0,
+          moraInterestRate: parseFloat(editContractData.moraInterestRate) || 0,
+          clientBank: editContractData.clientBank,
+          paymentMethod: editContractData.paymentMethod,
+          guarantorName: editContractData.guarantorName,
+          guarantorCPF: editContractData.guarantorCPF,
+          guarantorAddress: editContractData.guarantorAddress
       };
 
       try {
           await loanService.update(
               selectedLoan.id,
               updatedLoan,
-              'CORREÇÃO DE DATA',
-              `Datas alteradas definitivamente. Nova operação: ${formatDisplayDate(editStartDate)}. Novo Vencimento: ${formatDisplayDate(editNextDue)}.`
-          );
-          setLoans(prev => prev.map(l => l.id === updatedLoan.id ? updatedLoan : l));
-          setIsEditDateModalOpen(false);
-      } catch (e) {
-          alert("Erro ao alterar as datas do contrato.");
-      }
-  };
-
-  const handleOpenEditId = (loan: Loan) => {
-      setSelectedLoan(loan);
-      setEditNewId(loan.id);
-      setIsEditIdModalOpen(true);
-      setOpenMenuId(null);
-  };
-
-  const confirmEditId = async () => {
-      if (!selectedLoan || !editNewId.trim()) return;
-      if (editNewId === selectedLoan.id) {
-          setIsEditIdModalOpen(false);
-          return;
-      }
-      if (loans.some(l => l.id === editNewId)) {
-          alert(`O ID ${editNewId} já existe em outro contrato.`);
-          return;
-      }
-      
-      const updatedLoan = { ...selectedLoan, id: editNewId };
-      try {
-          await loanService.update(
-              selectedLoan.id, 
-              updatedLoan, 
-              'CORREÇÃO DE ID', 
-              `ID alterado de ${selectedLoan.id} para ${editNewId}`
+              'EDIÇÃO DE CONTRATO',
+              `Ficha do contrato editada pelo painel.`
           );
           setLoans(prev => prev.map(l => l.id === selectedLoan.id ? updatedLoan : l));
-          setIsEditIdModalOpen(false);
+          setIsEditContractModalOpen(false);
       } catch (e) {
-          alert("Erro ao alterar o ID do contrato.");
+          alert("Erro ao editar o contrato.");
       }
   };
 
@@ -1050,10 +1087,11 @@ const Billing = () => {
   const closeLoanFlow = () => {
       setLoanFlowStep('closed');
       setFormData({ 
-        manualID: '', isMigration: false, initialPaidCapital: '0', initialPaidInterest: '0',
+        manualID: '', isMigration: false, 
+        initialPaidCapital: '', initialPaidInterest: '',
         manualInstallmentCapital: '', manualInstallmentInterest: '',
         client: '', amount: '', interestRate: '', installments: '', startDate: '', firstPaymentDate: '', frequency: 'MENSAL', 
-        fineRate: '0.0', moraInterestRate: '0.0', clientBank: '', paymentMethod: '', 
+        fineRate: '', moraInterestRate: '', clientBank: '', paymentMethod: '', 
         interestType: 'PRICE', 
         hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
         guarantorHouseType: 'CASA', guarantorNumber: '', guarantorBlock: '', guarantorFloor: '',
@@ -1070,18 +1108,15 @@ const Billing = () => {
         let finalID = formData.manualID;
 
         if (!finalID) {
-            const today = new Date();
-            const year = today.getFullYear();
-            const yearLoans = loans.filter(l => l.id.endsWith(`/${year}`));
             let maxSeq = 0;
-            yearLoans.forEach(l => { 
-                const parts = l.id.split('/'); 
-                if(parts.length === 2) { 
-                    const seq = parseInt(parts[0]); 
+            loans.forEach(l => { 
+                const match = l.id.match(/^(\d+)/); 
+                if (match) { 
+                    const seq = parseInt(match[1]); 
                     if(!isNaN(seq) && seq > maxSeq) maxSeq = seq; 
                 } 
             });
-            finalID = `${(maxSeq + 1).toString().padStart(3, '0')}/${year}`;
+            finalID = (maxSeq + 1).toString();
         }
 
         if (loans.some(l => l.id === finalID)) {
@@ -1096,23 +1131,35 @@ const Billing = () => {
             else nextDueDate.setMonth(nextDueDate.getMonth() + 1);
         }
 
-        let finalAmount = parseFloat(formData.amount);
-        let finalInterestRate = parseFloat(formData.interestRate);
+        let finalAmount = parseFloat(formData.amount) || 0;
+        let finalInterestRate = parseFloat(formData.interestRate) || 0;
         let projectedProfit = 0;
+        let finalInstallmentValue = 0;
+
+        const isSimpleMode = formData.interestType === 'SIMPLE';
+        const numInst = isSimpleMode ? 1 : (parseInt(formData.installments) || 1);
 
         if (formData.isMigration) {
-            const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
-            const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
-            const numInst = parseInt(formData.installments) || 0;
             const initCap = parseFloat(formData.initialPaidCapital) || 0;
             const initInt = parseFloat(formData.initialPaidInterest) || 0;
 
-            finalAmount = (mCap * numInst) + initCap; 
-            finalInterestRate = 0; 
-            projectedProfit = (mInt * numInst) + initInt;
+            if (isSimpleMode) {
+                 const balance = Math.max(0, finalAmount - initCap);
+                 let periodRate = finalInterestRate / 100;
+                 if (formData.frequency === 'SEMANAL') periodRate = periodRate / 4;
+                 else if (formData.frequency === 'DIARIO') periodRate = periodRate / 30;
+                 finalInstallmentValue = balance * periodRate;
+                 projectedProfit = 0;
+            } else {
+                 const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
+                 const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
+                 finalInstallmentValue = mCap + mInt;
+                 projectedProfit = (mInt * numInst) + initInt;
+            }
         } else {
-            const totalReceivable = simulation.installment * parseInt(formData.installments);
-            projectedProfit = formData.interestType === 'SIMPLE' ? totalReceivable : Math.max(0, totalReceivable - finalAmount);
+            finalInstallmentValue = simulation.installment;
+            const totalReceivable = simulation.installment * numInst;
+            projectedProfit = isSimpleMode ? totalReceivable : Math.max(0, totalReceivable - finalAmount);
         }
 
         const parseRate = (val: string) => { if (val === '') return 0; const num = parseFloat(val); return isNaN(num) ? 0 : num; };
@@ -1128,9 +1175,9 @@ const Billing = () => {
         if (formData.isMigration) {
             history.push({
                 date: new Date().toISOString(),
-                amount: parseFloat(formData.initialPaidCapital) + parseFloat(formData.initialPaidInterest),
-                capitalPaid: parseFloat(formData.initialPaidCapital),
-                interestPaid: parseFloat(formData.initialPaidInterest),
+                amount: (parseFloat(formData.initialPaidCapital) || 0) + (parseFloat(formData.initialPaidInterest) || 0),
+                capitalPaid: parseFloat(formData.initialPaidCapital) || 0,
+                interestPaid: parseFloat(formData.initialPaidInterest) || 0,
                 type: 'Ajuste de Migração',
                 note: 'Valores pagos antes da implantação do sistema.',
                 registeredAt: new Date().toISOString()
@@ -1138,14 +1185,14 @@ const Billing = () => {
         }
 
         const newLoan: Loan = {
-            id: finalID, client: formData.client, amount: finalAmount, installments: parseInt(formData.installments),
+            id: finalID, client: formData.client, amount: finalAmount, installments: numInst,
             interestRate: finalInterestRate, startDate: formData.startDate, nextDue: nextDueDate.toISOString().split('T')[0],
-            status: 'Em Dia', installmentValue: simulation.installment,
+            status: 'Em Dia', installmentValue: finalInstallmentValue,
             fineRate: parseRate(formData.fineRate), moraInterestRate: parseRate(formData.moraInterestRate),
             clientBank: formData.clientBank, paymentMethod: formData.paymentMethod, justification: '',
             checklistAtApproval: [], 
-            totalPaidCapital: formData.isMigration ? parseFloat(formData.initialPaidCapital) : 0,
-            totalPaidInterest: formData.isMigration ? parseFloat(formData.initialPaidInterest) : 0,
+            totalPaidCapital: formData.isMigration ? parseFloat(formData.initialPaidCapital) || 0 : 0,
+            totalPaidInterest: formData.isMigration ? parseFloat(formData.initialPaidInterest) || 0 : 0,
             history: history, interestType: formData.interestType as 'PRICE' | 'SIMPLE', frequency: formData.frequency as 'MENSAL' | 'SEMANAL' | 'DIARIO', projectedProfit: projectedProfit,
             guarantorName: formData.hasGuarantor ? formData.guarantorName : '', 
             guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '', 
@@ -1380,7 +1427,7 @@ const Billing = () => {
                           R$ {formatMoney(loan.totalPaidInterest || 0)}
                         </td>
                         <td className="p-4 text-right font-bold text-slate-500">
-                          R$ {formatMoney(loan.interestType === 'SIMPLE' ? getSyncedBreakdown(loan).total : loan.installmentValue)}
+                          R$ {formatMoney(loan.interestType === 'SIMPLE' && !loan.history?.some(h => h.type === 'Ajuste de Migração') ? getSyncedBreakdown(loan).total : loan.installmentValue)}
                         </td>
 
                         <td className="p-4 text-center">
@@ -1472,17 +1519,10 @@ const Billing = () => {
                                   )}
 
                                   <button
-                                    onClick={() => handleOpenEditDate(loan)}
+                                    onClick={() => handleOpenEditContract(loan)}
                                     className="w-full text-left px-4 py-3 text-sm text-blue-600 hover:bg-blue-50 flex items-center gap-2"
                                   >
-                                    <Calendar size={16} /> Editar Datas
-                                  </button>
-                                  
-                                  <button
-                                    onClick={() => handleOpenEditId(loan)}
-                                    className="w-full text-left px-4 py-3 text-sm text-purple-600 hover:bg-purple-50 flex items-center gap-2"
-                                  >
-                                    <Hash size={16} /> Editar ID
+                                    <Edit size={16} /> Editar Contrato
                                   </button>
 
                                   <div className="border-t border-slate-100 my-1"></div>
@@ -1570,13 +1610,13 @@ const Billing = () => {
                         
                         <div className="mt-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700 flex gap-4">
                             <div className="flex-1">
-                                <span className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Total Já Emprestado (LTV)</span>
-                                <span className="text-sm font-bold text-blue-400">R$ {formatMoney(getClientLTV(selectedLoan.client).totalEmprestado)}</span>
+                                <span className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Valor do Contrato</span>
+                                <span className="text-sm font-bold text-blue-400">R$ {formatMoney(selectedLoan.amount)}</span>
                             </div>
                             <div className="w-px bg-slate-700"></div>
                             <div className="flex-1">
-                                <span className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Lucro Total Gerado</span>
-                                <span className="text-sm font-bold text-green-400">R$ {formatMoney(getClientLTV(selectedLoan.client).totalLucroRecebido)}</span>
+                                <span className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Lucro Recebido Neste Contrato</span>
+                                <span className="text-sm font-bold text-green-400">R$ {formatMoney(selectedLoan.totalPaidInterest || 0)}</span>
                             </div>
                         </div>
 
@@ -1591,7 +1631,7 @@ const Billing = () => {
                                 </div>
                             </div>
                         </div>
-                        <button onClick={() => handleOpenWhatsApp(selectedLoan.client, selectedLoan.interestType === 'SIMPLE' ? getSyncedBreakdown(selectedLoan).total : selectedLoan.installmentValue, selectedLoan.nextDue)} className="mt-6 flex items-center gap-2 bg-[#25D366] text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-[#128C7E] transition-colors"><MessageCircle size={18}/> Chamar no WhatsApp</button>
+                        <button onClick={() => handleWhatsApp(selectedLoan as LoanExtended, (selectedLoan as any).snowball)} className="mt-6 flex items-center gap-2 bg-[#25D366] text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-[#128C7E] transition-colors"><MessageCircle size={18}/> Chamar no WhatsApp</button>
                     </div>
 
                     <div className="mt-4 pt-4 border-t border-slate-100">
@@ -1749,12 +1789,18 @@ const Billing = () => {
                 <div>
                     <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Capital (Amortização)</label>
                     <small className="block text-[10px] text-slate-400 mb-1">Esperado: R$ {formatMoney(getSyncedBreakdown(selectedLoan).capital)}</small>
-                    <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">R$</span><input type="number" step="0.01" value={payCapital} onChange={(e) => setPayCapital(e.target.value)} className="w-full pl-10 p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 font-bold text-slate-700" placeholder="0.00"/></div>
+                    <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">R$</span>
+                        <input type="number" step="0.01" value={payCapital} onChange={(e) => setPayCapital(e.target.value)} className="w-full pl-10 p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 font-bold text-slate-700" placeholder="0.00"/>
+                    </div>
                 </div>
                 <div>
                     <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros (Lucro)</label>
                     <small className="block text-[10px] text-slate-400 mb-1">Esperado: R$ {formatMoney(getSyncedBreakdown(selectedLoan).interest)}</small>
-                    <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-green-500 font-bold">R$</span><input type="number" step="0.01" value={payInterest} onChange={(e) => setPayInterest(e.target.value)} className="w-full pl-10 p-3 border border-green-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500/20 font-bold text-green-600 bg-green-50/30" placeholder="0.00"/></div>
+                    <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-green-500 font-bold">R$</span>
+                        <input type="number" step="0.01" value={payInterest} onChange={(e) => setPayInterest(e.target.value)} className="w-full pl-10 p-3 border border-green-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500/20 font-bold text-green-600 bg-green-50/30" placeholder="0.00"/>
+                    </div>
                 </div>
             </div>
             <div className="flex items-center gap-2 py-2"><input type="checkbox" id="settleInterest" checked={settleInterest} onChange={(e) => setSettleInterest(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500"/><label htmlFor="settleInterest" className="text-xs font-bold text-slate-600">Quitar Juros do Mês?</label></div>
@@ -1771,46 +1817,63 @@ const Billing = () => {
                   <p className="text-xs text-orange-700">Este acordo alterará o vencimento e o status para "Em Acordo". O valor acordado será registrado, mas não haverá cobrança automática de juros adicionais neste período.</p>
               </div>
               <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nova Data de Vencimento</label><input type="date" value={agreementDate} onChange={e => setAgreementDate(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-orange-500/20"/></div>
-              <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Valor Acordado (R$)</label><input type="number" step="0.01" value={agreementValue} onChange={e => setAgreementValue(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-orange-500/20 font-bold text-slate-800"/></div>
+              <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Valor Acordado (R$)</label><input type="number" step="0.01" value={agreementValue} onChange={e => setAgreementValue(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-orange-500/20 font-bold text-slate-800" placeholder=""/></div>
               <button onClick={confirmAgreement} className="w-full py-3 bg-orange-600 text-white font-bold rounded-xl hover:bg-orange-700 transition-all">Confirmar Acordo</button>
           </div>
       </Modal>
 
-      <Modal isOpen={isEditDateModalOpen} onClose={() => setIsEditDateModalOpen(false)} title="Editar Datas do Contrato">
-          <div className="space-y-5">
-              <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl">
-                  <div className="flex items-center gap-2 text-blue-800 font-bold mb-2"><Calendar size={20}/> Correção Definitiva</div>
-                  <p className="text-xs text-blue-700">Esta ação altera as datas base do contrato definitivamente, sem gerar registro de "Acordo" no extrato financeiro. Ideal para correções de digitação.</p>
+      {/* --- MEGA MODAL EDITAR CONTRATO --- */}
+      <Modal isOpen={isEditContractModalOpen} onClose={() => setIsEditContractModalOpen(false)} title="Editar Ficha do Contrato">
+          <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2 custom-scrollbar">
+              <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl mb-4">
+                  <div className="flex items-center gap-2 text-blue-800 font-bold mb-1"><Edit size={18}/> Edição Completa</div>
+                  <p className="text-xs text-blue-700">Modifique qualquer dado base do contrato. Estas alterações substituirão os dados originais no sistema e não gerarão um "Acordo" no extrato.</p>
               </div>
-              <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Data da Operação (Criação)</label>
-                  <input type="date" value={editStartDate} onChange={e => setEditStartDate(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20"/>
+              
+              <div className="grid grid-cols-2 gap-4">
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">ID do Contrato</label><input type="text" value={editContractData.id} onChange={e => setEditContractData({...editContractData, id: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-slate-800"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Valor Emprestado Original (R$)</label><input type="number" step="0.01" value={editContractData.amount} onChange={e => setEditContractData({...editContractData, amount: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
               </div>
-              <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Data do Próximo Vencimento</label>
-                  <input type="date" value={editNextDue} onChange={e => setEditNextDue(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20 font-bold text-slate-800"/>
+
+              <div className="grid grid-cols-3 gap-4">
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Taxa (%)</label><input type="number" step="0.01" value={editContractData.interestRate} onChange={e => setEditContractData({...editContractData, interestRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Parcelas</label><input type="number" value={selectedLoan?.interestType === 'SIMPLE' ? 1 : editContractData.installments} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installments: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none disabled:bg-slate-100 disabled:text-slate-400"/></div>
+                  <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">Valor Parcela (R$)</label>
+                      <input type="number" step="0.01" value={editContractData.installmentValue} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installmentValue: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-green-600 disabled:bg-slate-100"/>
+                      {selectedLoan?.interestType === 'SIMPLE' && <span className="text-[9px] text-blue-500 mt-1 block leading-tight">Valor da parcela atualizado dinamicamente com base no Saldo Devedor.</span>}
+                  </div>
               </div>
-              <div className="flex justify-end gap-3 mt-2">
-                  <button onClick={() => setIsEditDateModalOpen(false)} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all">Cancelar</button>
-                  <button onClick={confirmEditDate} className="px-6 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all">Salvar Datas</button>
+
+              <div className="grid grid-cols-2 gap-4">
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Data da Operação</label><input type="date" value={editContractData.startDate} onChange={e => setEditContractData({...editContractData, startDate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Próximo Vencimento</label><input type="date" value={editContractData.nextDue} onChange={e => setEditContractData({...editContractData, nextDue: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-slate-800"/></div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Multa Atraso (%)</label><input type="number" step="0.01" value={editContractData.fineRate} onChange={e => setEditContractData({...editContractData, fineRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Mora Diária (%)</label><input type="number" step="0.01" value={editContractData.moraInterestRate} onChange={e => setEditContractData({...editContractData, moraInterestRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Banco do Cliente</label><input type="text" value={editContractData.clientBank} onChange={e => setEditContractData({...editContractData, clientBank: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Chave Pix/Conta</label><input type="text" value={editContractData.paymentMethod} onChange={e => setEditContractData({...editContractData, paymentMethod: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+              </div>
+
+              <div className="border-t border-slate-100 pt-4">
+                  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Dados do Fiador (Opcional)</label>
+                  <div className="space-y-3">
+                      <input type="text" placeholder="Nome do Fiador" value={editContractData.guarantorName} onChange={e => setEditContractData({...editContractData, guarantorName: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
+                      <input type="text" placeholder="CPF do Fiador" value={editContractData.guarantorCPF} onChange={e => setEditContractData({...editContractData, guarantorCPF: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
+                      <input type="text" placeholder="Endereço do Fiador" value={editContractData.guarantorAddress} onChange={e => setEditContractData({...editContractData, guarantorAddress: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
+                  </div>
               </div>
           </div>
-      </Modal>
-
-      <Modal isOpen={isEditIdModalOpen} onClose={() => setIsEditIdModalOpen(false)} title="Editar ID do Contrato">
-          <div className="space-y-5">
-              <div className="bg-purple-50 border border-purple-200 p-4 rounded-xl">
-                  <div className="flex items-center gap-2 text-purple-800 font-bold mb-2"><Hash size={20}/> Padronização de ID</div>
-                  <p className="text-xs text-purple-700">Esta ação altera o número de identificação do contrato. Use para padronizar contratos antigos (ex: 045/2023).</p>
-              </div>
-              <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Novo ID do Contrato</label>
-                  <input type="text" value={editNewId} onChange={e => setEditNewId(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-purple-500/20 font-mono font-bold text-slate-800"/>
-              </div>
-              <div className="flex justify-end gap-3 mt-2">
-                  <button onClick={() => setIsEditIdModalOpen(false)} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all">Cancelar</button>
-                  <button onClick={confirmEditId} className="px-6 py-3 bg-purple-600 text-white font-bold rounded-xl hover:bg-purple-700 transition-all">Salvar Novo ID</button>
-              </div>
+          <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-100">
+              <button onClick={() => setIsEditContractModalOpen(false)} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all">Cancelar</button>
+              <button onClick={confirmEditContract} className="px-8 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all flex items-center gap-2 shadow-lg shadow-blue-900/20">
+                  <CheckCircle size={18}/> Salvar Alterações
+              </button>
           </div>
       </Modal>
 
@@ -1842,7 +1905,7 @@ const Billing = () => {
                 <div className="grid grid-cols-2 gap-4">
                     <div>
                         <label className="flex items-center gap-1 text-xs font-bold uppercase text-slate-500 mb-1"><Hash size={12}/> ID do Contrato</label>
-                        <input value={formData.manualID} onChange={e => setFormData({...formData, manualID: e.target.value})} className="w-full p-2 border rounded-lg bg-white font-mono" placeholder="Ex: 045/2023 (Opcional)"/>
+                        <input value={formData.manualID} onChange={e => setFormData({...formData, manualID: e.target.value})} className="w-full p-2 border rounded-lg bg-white font-mono" placeholder="Ex: 225"/>
                     </div>
                     <div>
                         <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Banco do Cliente</label>
@@ -1852,15 +1915,15 @@ const Billing = () => {
 
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
                     <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Chave PIX / Forma de Pagamento</label>
-                    <input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Puxado automaticamente..."/>
+                    <input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Puxado automaticamente do cliente..."/>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
-                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input type="number" step="0.1" value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" /></div>
-                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros Mora Diária (%)</label><input type="number" step="0.01" value={formData.moraInterestRate} onChange={e => setFormData({...formData, moraInterestRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" /></div>
+                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input type="number" step="0.1" value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="" /></div>
+                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros Mora Diária (%)</label><input type="number" step="0.01" value={formData.moraInterestRate} onChange={e => setFormData({...formData, moraInterestRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="" /></div>
                 </div>
 
-                {/* MODALIDADE DE CONTRATO ANTIGO / MIGRAÇÃO */}
+                {/* MODALIDADE DE CONTRATO ANTIGO / MIGRAÇÃO NO TOPO */}
                 <div className={`p-3 border rounded-xl transition-all ${formData.isMigration ? 'bg-amber-50 border-amber-300' : 'bg-slate-50 border-slate-200'}`}>
                     <div className="flex items-center gap-2 mb-2">
                         <input type="checkbox" id="isMigration" checked={formData.isMigration} onChange={(e) => setFormData({...formData, isMigration: e.target.checked})} className={`w-5 h-5 rounded focus:ring-amber-500 ${formData.isMigration ? 'text-amber-600' : 'text-slate-500'}`} />
@@ -1869,14 +1932,37 @@ const Billing = () => {
                     {formData.isMigration && (
                         <div className="mt-3 animate-in zoom-in-95 border-t border-amber-200 pt-3">
                             <div className="grid grid-cols-2 gap-3 mb-3">
-                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital Já Pago (R$)</label><input type="number" step="0.01" value={formData.initialPaidCapital} onChange={e => setFormData({...formData, initialPaidCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" /></div>
-                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Juros Já Pagos (R$)</label><input type="number" step="0.01" value={formData.initialPaidInterest} onChange={e => setFormData({...formData, initialPaidInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" /></div>
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Valor Original Emprestado (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Taxa Registrada (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
                             </div>
+                            <div className="grid grid-cols-2 gap-3 mb-3">
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital Já Pago (R$)</label><input type="number" step="0.01" value={formData.initialPaidCapital} onChange={e => setFormData({...formData, initialPaidCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Juros Já Pagos (R$)</label><input type="number" step="0.01" value={formData.initialPaidInterest} onChange={e => setFormData({...formData, initialPaidInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
+                            </div>
+                            
+                            <div className="flex items-center gap-2 p-3 bg-white border border-amber-200 rounded-xl mb-3">
+                                <input type="checkbox" id="interestTypeMig" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500" />
+                                <label htmlFor="interestTypeMig" className="text-sm font-bold text-amber-800 cursor-pointer">Pagamento Mínimo (Só Juros)</label>
+                            </div>
+
                             <p className="text-[10px] font-bold text-amber-800 uppercase mb-2 mt-4 border-t border-amber-200 pt-2">Definir Parcelas Restantes Manualmente</p>
                             <div className="grid grid-cols-3 gap-3">
-                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Qtd. Parcelas Restantes</label><input required type="number" value={formData.installments} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" /></div>
-                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital / Parcela (R$)</label><input required type="number" step="0.01" value={formData.manualInstallmentCapital} onChange={e => setFormData({...formData, manualInstallmentCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" /></div>
-                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Juros / Parcela (R$)</label><input required type="number" step="0.01" value={formData.manualInstallmentInterest} onChange={e => setFormData({...formData, manualInstallmentInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" /></div>
+                                <div>
+                                    <label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Qtd. Parcelas Restantes</label>
+                                    <input required type="number" value={formData.interestType === 'SIMPLE' ? 1 : formData.installments} disabled={formData.interestType === 'SIMPLE'} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white disabled:bg-amber-50 disabled:text-amber-400" placeholder="" />
+                                </div>
+                                
+                                {formData.interestType !== 'SIMPLE' && (
+                                    <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital / Parcela (R$)</label><input required type="number" step="0.01" value={formData.manualInstallmentCapital} onChange={e => setFormData({...formData, manualInstallmentCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
+                                )}
+                                
+                                <div className={formData.interestType === 'SIMPLE' ? 'col-span-2' : ''}>
+                                    <label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">
+                                        Juros / Parcela (R$)
+                                        {formData.interestType === 'SIMPLE' && <span className="lowercase text-[8px] font-normal ml-1">(Será recalculado dincamicamente se pagar capital)</span>}
+                                    </label>
+                                    <input required type="number" step="0.01" value={formData.manualInstallmentInterest} onChange={e => setFormData({...formData, manualInstallmentInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" />
+                                </div>
                             </div>
                         </div>
                     )}
@@ -1885,9 +1971,9 @@ const Billing = () => {
                 {!formData.isMigration && (
                     <>
                         <div className="grid grid-cols-3 gap-4">
-                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="0,00"/></div>
-                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="5.0"/></div>
-                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.installments} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder="12"/></div>
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.interestType === 'SIMPLE' ? 1 : formData.installments} disabled={formData.interestType === 'SIMPLE'} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 disabled:bg-slate-100 disabled:text-slate-400" placeholder=""/></div>
                         </div>
                         <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl"><input type="checkbox" id="interestType" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" /><label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros) <span className="text-xs font-normal text-blue-600 block">O cliente paga apenas os juros mensais. O capital não abate.</span></label></div>
                     </>
@@ -1899,7 +1985,6 @@ const Billing = () => {
                     <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">{formData.isMigration ? 'Próximo Vencimento' : 'Primeiro Vencimento'}</label><input type="date" required={formData.isMigration} value={formData.firstPaymentDate} onChange={e => setFormData({...formData, firstPaymentDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 text-sm" placeholder="Opcional" title="Deixe vazio para automático"/></div>
                 </div>
                 
-                {/* SEÇÃO DO FIADOR ATUALIZADA - DETALHES DE ENDEREÇO */}
                 <div className="flex items-center gap-2 mt-4"><input type="checkbox" id="hasGuarantor" checked={formData.hasGuarantor} onChange={(e) => setFormData({...formData, hasGuarantor: e.target.checked})} className="w-4 h-4 rounded text-slate-900 focus:ring-slate-500"/><label htmlFor="hasGuarantor" className="text-sm font-bold text-slate-700 cursor-pointer">Adicionar Fiador (Opcional)</label></div>
                 
                 {formData.hasGuarantor && (
@@ -1960,10 +2045,10 @@ const Billing = () => {
                 <div className="flex items-center gap-2 mb-4 border-b border-slate-200 pb-3"><Calculator size={20} className="text-slate-800" /><h4 className="text-[12px] font-bold text-slate-800 uppercase tracking-widest">Simulação Financeira ({formData.isMigration ? 'Migração Manual' : formData.interestType === 'SIMPLE' ? 'Juros Simples' : 'Price'})</h4></div>
                 {isSimulating ? (<div className="flex justify-center py-4"><Loader2 className="animate-spin text-slate-400" /></div>) : simulation.isValid ? (
                     <div className="space-y-4">
-                        <div className="flex justify-between items-center text-sm font-medium"><span className="text-slate-500">Montante Financiado:</span><span className="text-slate-900 font-bold">R$ {formatMoney(parseFloat(formData.amount) || ((parseFloat(formData.manualInstallmentCapital)*parseFloat(formData.installments))+parseFloat(formData.initialPaidCapital)) )}</span></div>
+                        <div className="flex justify-between items-center text-sm font-medium"><span className="text-slate-500">Montante Financiado:</span><span className="text-slate-900 font-bold">R$ {formatMoney(parseFloat(formData.amount) || 0)}</span></div>
                         <div className="flex justify-between items-center">
                             <span className="text-sm text-slate-500 font-medium">
-                                Parcela {formData.frequency === 'DIARIO' ? 'Diária' : formData.frequency === 'SEMANAL' ? 'Semanal' : 'Mensal'} ({formData.installments}x):
+                                Parcela {formData.frequency === 'DIARIO' ? 'Diária' : formData.frequency === 'SEMANAL' ? 'Semanal' : 'Mensal'} ({formData.interestType === 'SIMPLE' ? 1 : formData.installments}x):
                             </span>
                             <span className="text-xl font-black text-green-600 bg-green-50 px-3 py-1 rounded-lg border border-green-100">R$ {formatMoney(simulation.installment)}</span>
                         </div>

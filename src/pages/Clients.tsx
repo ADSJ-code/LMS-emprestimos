@@ -18,22 +18,18 @@ interface ChecklistItem {
 const Clients = () => {
   const navigate = useNavigate();
 
-  // --- Estados Principais ---
   const [clients, setClients] = useState<Client[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]); 
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   
-  // --- Estados dos Modais ---
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | number | null>(null);
   const [modalTab, setModalTab] = useState<'dados' | 'financeiro' | 'analise'>('dados');
   
   const [globalMetricModal, setGlobalMetricModal] = useState<'base' | 'ativos' | 'emprestado' | 'lucro' | null>(null);
-
   const [isCepLoading, setIsCepLoading] = useState(false);
 
-  // --- FORM DATA ATUALIZADO (Campos para Contrato Juliana + PIX) ---
   const [formData, setFormData] = useState<Partial<Client> & { 
     justification?: string, 
     checklist?: string[],
@@ -54,8 +50,6 @@ const Clients = () => {
   });
 
   const [openMenuId, setOpenMenuId] = useState<string | number | null>(null);
-
-  // --- LÓGICA DA TRIAGEM COMPLETA ---
   const [activeStage, setActiveStage] = useState<1 | 2>(1);
 
   const initialChecklist: ChecklistItem[] = useMemo(() => [
@@ -93,13 +87,11 @@ const Clients = () => {
       navigate('/billing');
   };
 
-  // --- MÁSCARAS ---
   const maskCPF = (value: string) => value.replace(/\D/g, "").replace(/(\d{3})(\d)/, "$1.$2").replace(/(\d{3})(\d)/, "$1.$2").replace(/(\d{3})(\d{1,2})/, "$1-$2").replace(/(-\d{2})\d+?$/, "$1");
   const maskRG = (value: string) => value.replace(/\D/g, "").replace(/(\d{2})(\d)/, "$1.$2").replace(/(\d{3})(\d)/, "$1.$2").replace(/(\d{3})(\d{1,2})/, "$1-$2").slice(0, 12);
   const maskPhone = (value: string) => value.replace(/\D/g, "").replace(/(\d{2})(\d)/, "($1) $2").replace(/(\d{5})(\d)/, "$1-$2").replace(/(-\d{4})\d+?$/, "$1");
   const maskCEP = (value: string) => value.replace(/\D/g, "").replace(/^(\d{5})(\d)/, "$1-$2").slice(0, 9);
 
-  // --- BUSCA CEP ---
   const handleCepBlur = async (e: React.FocusEvent<HTMLInputElement>) => {
     const cep = e.target.value.replace(/\D/g, '');
     if (cep.length === 8) {
@@ -121,7 +113,6 @@ const Clients = () => {
     }
   };
 
-  // --- DATA FETCHING ---
   const fetchData = async () => {
     setIsLoading(true);
     try {
@@ -176,7 +167,6 @@ const Clients = () => {
       return { totalEmprestado, totalDevolvido, lucroReal, saldoFinal, atrasos, contratos: clientLoans.length };
   };
 
-  // --- DOCUMENTOS ---
   type DocType = 'RG_FRENTE' | 'RG_VERSO' | 'COMPROVANTE_RESIDENCIA';
   const getDoc = (type: DocType) => formData.documents?.find(d => d.name.startsWith(`[${type}]`));
 
@@ -231,7 +221,6 @@ const Clients = () => {
       );
   };
 
-  // --- LÓGICA DE DÍVIDA (RESTAURADA) ---
   const getClientDebtStatus = (clientName: string) => {
     const clientLoans = loans.filter(l => l.client === clientName);
     if (clientLoans.length === 0) return { label: 'Sem Histórico', color: 'gray' };
@@ -242,7 +231,6 @@ const Clients = () => {
     return { label: 'Quitado', color: 'green' };
   };
 
-  // --- FILTRO DE CLIENTES (RESTAURADO) ---
   const filteredClients = useMemo(() => {
     return processedClients.filter(c => 
       c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -251,6 +239,7 @@ const Clients = () => {
     );
   }, [processedClients, searchTerm]);
 
+  // SISTEMA DE DESEMPACOTAMENTO DE DADOS (IMPEDE A PERDA DO PIX)
   const handleOpenModal = (client?: any, defaultTab: 'dados' | 'financeiro' | 'analise' = 'dados') => {
     setModalTab(defaultTab); 
     if (client) {
@@ -258,11 +247,32 @@ const Clients = () => {
       const savedChecklist = client.checklist || [];
       const restoredItems = initialChecklist.map(item => ({ ...item, checked: savedChecklist.includes(item.id) }));
       setChecklistItems(restoredItems);
+      
+      let displayObs = client.observations || '';
+      let metaData: any = {};
+
+      const metaMatch = displayObs.match(/\[META:(.*?)\]/);
+      if (metaMatch) {
+          try {
+              metaData = JSON.parse(metaMatch[1]);
+              displayObs = displayObs.replace(/\[META:.*?\]/g, '').trim();
+          } catch (e) {}
+      }
+
       setFormData({ 
-          ...client, documents: client.documents || [], justification: client.justification || '', checklist: savedChecklist,
-          nationality: client.nationality || 'Brasileiro(a)', maritalStatus: client.maritalStatus || 'SOLTEIRO(A)',
-          houseType: client.houseType || 'CASA', block: client.block || '', floor: client.floor || '',
-          pixKeyType: (client as any).pixKeyType || 'CPF', pixKey: (client as any).pixKey || ''
+          ...client, 
+          documents: client.documents || [], 
+          justification: client.justification || '', 
+          checklist: savedChecklist,
+          observations: displayObs,
+          
+          nationality: metaData.nat || client.nationality || 'Brasileiro(a)', 
+          maritalStatus: metaData.mar || client.maritalStatus || 'SOLTEIRO(A)',
+          houseType: metaData.ht || client.houseType || 'CASA', 
+          block: metaData.bl || client.block || '', 
+          floor: metaData.fl || client.floor || '',
+          pixKeyType: metaData.pixType || client.pixKeyType || 'CPF', 
+          pixKey: metaData.pixKey || client.pixKey || ''
       });
     } else {
       setEditingId(null);
@@ -278,19 +288,30 @@ const Clients = () => {
     setOpenMenuId(null);
   };
 
+  // SISTEMA DE EMPACOTAMENTO DE DADOS (SALVA NO BACKEND SEM MODIFICAR O BANCO)
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     try {
       const checkedIds = checklistItems.filter(i => i.checked).map(i => i.id);
-      const payload = { ...formData, checklist: checkedIds };
+      
+      let cleanObs = (formData.observations || '').replace(/\[META:.*?\]/g, '').trim();
+      const meta = {
+          pixType: formData.pixKeyType, pixKey: formData.pixKey,
+          nat: formData.nationality, mar: formData.maritalStatus,
+          ht: formData.houseType, bl: formData.block, fl: formData.floor
+      };
+      const finalObs = `${cleanObs} [META:${JSON.stringify(meta)}]`.trim();
+
+      const payload = { ...formData, checklist: checkedIds, observations: finalObs };
+      
       if (editingId) {
         await clientService.update(editingId, payload as Client);
-        alert('Atualizado!');
+        alert('Atualizado com sucesso!');
       } else {
         const maxNum = processedClients.reduce((max, c) => Math.max(max, c.displayNumber), 0);
         await clientService.create({ ...payload, id: Date.now(), clientNumber: maxNum + 1 } as Client);
-        alert('Cadastrado!');
+        alert('Cadastrado com sucesso!');
       }
       setIsModalOpen(false); fetchData();
     } catch (err) { alert("Erro ao salvar."); } finally { setIsLoading(false); }
@@ -375,7 +396,13 @@ const Clients = () => {
                 <div className="bg-slate-50 p-4 rounded-xl border space-y-3">
                     <input required placeholder="Nome Completo" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full p-2.5 border rounded-lg" />
                     <div className="grid grid-cols-2 gap-3">
-                        <input required placeholder="CPF" value={formData.cpf} onChange={e => setFormData({...formData, cpf: maskCPF(e.target.value)})} className="w-full p-2.5 border rounded-lg" />
+                        <input required placeholder="CPF" value={formData.cpf} onChange={e => {
+                            const val = maskCPF(e.target.value);
+                            setFormData(prev => {
+                                const autoSync = prev.pixKeyType === 'CPF' && (!prev.pixKey || prev.pixKey === prev.cpf);
+                                return { ...prev, cpf: val, ...(autoSync ? { pixKey: val } : {}) };
+                            });
+                        }} className="w-full p-2.5 border rounded-lg" />
                         <input placeholder="RG" value={formData.rg} onChange={e => setFormData({...formData, rg: maskRG(e.target.value)})} className="w-full p-2.5 border rounded-lg" />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
@@ -383,16 +410,37 @@ const Clients = () => {
                         <select value={formData.maritalStatus} onChange={e => setFormData({...formData, maritalStatus: e.target.value})} className="w-full p-2.5 border rounded-lg bg-white text-xs"><option value="SOLTEIRO(A)">Solteiro(a)</option><option value="CASADO(A)">Casado(a)</option><option value="DIVORCIADO(A)">Divorciado(a)</option><option value="VIÚVO(A)">Viúvo(a)</option><option value="UNIÃO ESTÁVEL">União Estável</option></select>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
-                        <input required placeholder="WhatsApp" value={formData.phone} onChange={e => setFormData({...formData, phone: maskPhone(e.target.value)})} className="w-full p-2.5 border rounded-lg" />
-                        <input type="email" placeholder="Email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full p-2.5 border rounded-lg" />
+                        <input required placeholder="WhatsApp" value={formData.phone} maxLength={15} onChange={e => {
+                            const val = maskPhone(e.target.value);
+                            setFormData(prev => {
+                                const autoSync = prev.pixKeyType === 'TELEFONE' && (!prev.pixKey || prev.pixKey === prev.phone);
+                                return { ...prev, phone: val, ...(autoSync ? { pixKey: val } : {}) };
+                            });
+                        }} className="w-full p-2.5 border rounded-lg" />
+                        <input type="email" placeholder="Email" value={formData.email} onChange={e => {
+                            const val = e.target.value;
+                            setFormData(prev => {
+                                const autoSync = prev.pixKeyType === 'EMAIL' && (!prev.pixKey || prev.pixKey === prev.email);
+                                return { ...prev, email: val, ...(autoSync ? { pixKey: val } : {}) };
+                            });
+                        }} className="w-full p-2.5 border rounded-lg" />
                     </div>
                 </div>
 
-                {/* --- NOVO BLOCO: DADOS BANCÁRIOS / PIX --- */}
                 <div className="bg-slate-50 p-4 rounded-xl border space-y-3">
                     <h4 className="text-[10px] font-black uppercase text-slate-400 mb-2 flex items-center gap-1"><CreditCard size={12}/> Dados Bancários / PIX</h4>
                     <div className="grid grid-cols-3 gap-3">
-                        <select value={formData.pixKeyType || 'CPF'} onChange={e => setFormData({...formData, pixKeyType: e.target.value})} className="w-full p-2.5 border rounded-lg bg-white text-xs font-bold text-slate-600">
+                        <select value={formData.pixKeyType || 'CPF'} onChange={e => {
+                            const type = e.target.value;
+                            setFormData(prev => {
+                                let pKey = prev.pixKey;
+                                if (type === 'CPF' && prev.cpf) pKey = prev.cpf;
+                                else if (type === 'TELEFONE' && prev.phone) pKey = prev.phone;
+                                else if (type === 'EMAIL' && prev.email) pKey = prev.email;
+                                else if (type === 'ALEATORIA' || type === 'DADOS_BANCARIOS' || type === 'CNPJ') pKey = '';
+                                return { ...prev, pixKeyType: type, pixKey: pKey };
+                            });
+                        }} className="w-full p-2.5 border rounded-lg bg-white text-xs font-bold text-slate-600 outline-none">
                             <option value="CPF">CPF</option>
                             <option value="CNPJ">CNPJ</option>
                             <option value="TELEFONE">Telefone</option>
@@ -403,7 +451,6 @@ const Clients = () => {
                         <input placeholder="Digite a Chave Pix ou Conta" value={formData.pixKey || ''} onChange={e => setFormData({...formData, pixKey: e.target.value})} className="col-span-2 w-full p-2.5 border rounded-lg text-sm" />
                     </div>
                 </div>
-                {/* ----------------------------------------- */}
 
                 <div className="bg-slate-50 p-4 rounded-xl border space-y-3">
                     <h4 className="text-[10px] font-black uppercase text-slate-400 mb-2">Localização {isCepLoading && <Loader2 className="animate-spin inline" size={10}/>}</h4>
@@ -426,6 +473,11 @@ const Clients = () => {
                         <input placeholder="Cidade" value={formData.city} onChange={e => setFormData({...formData, city: e.target.value})} className="col-span-2 w-full p-2.5 border rounded-lg" />
                         <input placeholder="UF" value={formData.state} maxLength={2} onChange={e => setFormData({...formData, state: e.target.value.toUpperCase()})} className="w-full p-2.5 border rounded-lg uppercase" />
                     </div>
+                </div>
+
+                <div className="bg-slate-50 p-4 rounded-xl border">
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-2">Observações Livres</label>
+                    <textarea value={formData.observations} onChange={e => setFormData({...formData, observations: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none text-sm" placeholder="Anotações do cliente..."></textarea>
                 </div>
 
                 <div className="grid grid-cols-3 gap-3">
