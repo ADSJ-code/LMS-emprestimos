@@ -56,6 +56,27 @@ const Dashboard = () => {
   const [recentActivities, setRecentActivities] = useState<any[]>([]);
 
   // Helpers de Tempo e Matemática
+  const getToday = () => {
+      const now = new Date();
+      const localOffset = now.getTimezoneOffset() * 60000;
+      const localNow = new Date(now.getTime() - localOffset);
+      const localTodayStr = localNow.toISOString().split('T')[0];
+      const [ty, tm, td] = localTodayStr.split('-').map(Number);
+      return new Date(ty, tm - 1, td);
+  };
+
+  const getLoanRealStatus = (loan: Loan) => {
+      if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
+      if (loan.status === 'Acordo') return 'Acordo';
+      const balance = Number(loan.amount) - (Number(loan.totalPaidCapital) || 0);
+      if (balance <= 0.10) return 'Quitado'; 
+      const now = new Date();
+      const todayStr = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+      const dueStr = loan.nextDue.split('T')[0];
+      if (dueStr < todayStr) return 'Atrasado';
+      return 'Em Dia';
+  };
+
   const parseLocalDate = (dateStr: string) => {
     if (!dateStr) return new Date();
     const cleanStr = dateStr.split('T')[0];
@@ -78,22 +99,23 @@ const Dashboard = () => {
   };
 
   const getLoanDetails = (loan: Loan) => {
-      const today = new Date();
-      today.setHours(0,0,0,0);
+      const today = getToday();
       let tempDue = parseLocalDate(loan.nextDue);
       let totalOverdue = 0;
       let missedCount = 0;
       let count = 0;
       
-      const baseAmount = loan.status === 'Acordo' ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
+      const realStatus = getLoanRealStatus(loan);
+      const baseAmount = realStatus === 'Acordo' ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
       const remainingInstallments = loan.interestType === 'SIMPLE' ? 999 : (loan.installments || 1);
+      const pad = (n: number) => n.toString().padStart(2, '0');
       
       while (tempDue < today) {
-          const dateStr = tempDue.toISOString().split('T')[0];
+          const dateStr = `${tempDue.getFullYear()}-${pad(tempDue.getMonth() + 1)}-${pad(tempDue.getDate())}`;
           totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
           missedCount++;
           
-          if (loan.status === 'Acordo') break; 
+          if (realStatus === 'Acordo') break; 
           
           count++;
           if (count >= remainingInstallments) break; 
@@ -104,7 +126,7 @@ const Dashboard = () => {
           else tempDue.setMonth(tempDue.getMonth() + 1);
       }
 
-      if (missedCount === 0 && loan.status === 'Atrasado') {
+      if (missedCount === 0 && realStatus === 'Atrasado') {
            const dateStr = loan.nextDue.split('T')[0];
            totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
            missedCount = 1;
@@ -132,8 +154,7 @@ const Dashboard = () => {
       setAllLoans(safeLoans); 
       setAllClients(clients || []);
       
-      const today = new Date();
-      today.setHours(0,0,0,0);
+      const today = getToday();
       
       let startFilter: Date | null = null;
       let endFilter: Date | null = null;
@@ -213,18 +234,21 @@ const Dashboard = () => {
                 if (currentDue >= startFilter && currentDue <= endFilter) {
                     hasMatch = true;
                     
-                    const isOverdueInstallment = currentDue < today || (i === 0 && loan.status === 'Atrasado');
+                    const realStatus = getLoanRealStatus(loan);
+                    const isOverdueInstallment = currentDue < today || (i === 0 && realStatus === 'Atrasado');
 
                     // Separando o que é lucro/capital futuro do que é atraso dentro deste período (Acaba com a duplicidade!)
                     if (isOverdueInstallment) {
-                        const baseAmount = (i === 0 && loan.status === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
-                        overToAdd += calculateOverdueValue(baseAmount, currentDue.toISOString().split('T')[0], 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+                        const baseAmount = (i === 0 && realStatus === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
+                        const dateStr = `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`;
+                        overToAdd += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
                         
                         slices.push({
                             date: `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`,
-                            capital: 0, // Está em atraso, não soma no capital futuro
+                            capital: 0, 
                             interest: 0, 
-                            index: i
+                            index: i,
+                            isOverdue: true
                         });
                     } else {
                         capToAdd += breakdown.capital;
@@ -234,7 +258,8 @@ const Dashboard = () => {
                             date: `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`,
                             capital: breakdown.capital,
                             interest: breakdown.interest,
-                            index: i
+                            index: i,
+                            isOverdue: false
                         });
                     }
                 }
@@ -277,7 +302,8 @@ const Dashboard = () => {
                         uniqueSliceId: `${loan.id}-slice-${slice.index}`,
                         projectedDate: slice.date,
                         projectedCapitalForPeriod: slice.capital, 
-                        projectedInterestForPeriod: slice.interest
+                        projectedInterestForPeriod: slice.interest,
+                        isOverdueSlice: slice.isOverdue
                     });
                 });
             } else {
@@ -286,7 +312,8 @@ const Dashboard = () => {
                     uniqueSliceId: loan.id,
                     projectedDate: loan.nextDue,
                     projectedCapitalForPeriod: capToAdd, 
-                    projectedInterestForPeriod: profToAdd
+                    projectedInterestForPeriod: profToAdd,
+                    isOverdueSlice: getLoanRealStatus(loan) === 'Atrasado'
                 });
             }
         }
@@ -308,7 +335,8 @@ const Dashboard = () => {
 
       const activities = [...safeLoans].sort((a, b) => new Date(b.nextDue).getTime() - new Date(a.nextDue).getTime()).slice(0, 6).map((loan: any) => {
         const dueDate = parseLocalDate(loan.nextDue);
-        const isOverdue = dueDate < today && loan.status !== 'Pago' && loan.status !== 'Quitado';
+        const realStatus = getLoanRealStatus(loan);
+        const isOverdue = dueDate < today && realStatus !== 'Quitado';
         return {
           id: loan.id,
           type: isOverdue ? 'atraso' : 'novo_contrato',
@@ -349,14 +377,14 @@ const Dashboard = () => {
 
   const detailedLoans = useMemo(() => {
       if (!selectedRange || selectedRange === 'clients_contracts') return [];
-      const today = new Date();
-      today.setHours(0,0,0,0);
+      const today = getToday();
 
       if (selectedRange === 'overdue') {
           const contextIds = new Set(filteredLoansContext.map(l => l.id));
           return allLoans.filter(l => {
+              const realStatus = getLoanRealStatus(l);
               const dueDate = parseLocalDate(l.nextDue);
-              const isOverdue = l.status !== 'Pago' && l.status !== 'Quitado' && (dueDate < today || l.status === 'Atrasado');
+              const isOverdue = realStatus !== 'Quitado' && (dueDate < today || realStatus === 'Atrasado');
               
               let passTier = true;
               if (tierFilters.overdue === 'low') passTier = l.interestRate < 10;
@@ -368,8 +396,9 @@ const Dashboard = () => {
       }
 
       return filteredLoansContext.filter(l => {
-          if (selectedRange === 'active') return l.status !== 'Pago' && l.status !== 'Quitado';
-          if (l.status === 'Pago' || l.status === 'Quitado') return false; 
+          const realStatus = getLoanRealStatus(l);
+          if (selectedRange === 'active') return realStatus !== 'Quitado';
+          if (realStatus === 'Quitado') return false; 
           
           let passTier = true;
           if (selectedRange === 'capital' && tierFilters.capital !== 'all') {
@@ -553,7 +582,7 @@ const Dashboard = () => {
                                               ) : (
                                                   <>
                                                       {parseLocalDate(loan.projectedDate).toLocaleDateString('pt-BR')}
-                                                      {loan.projectedCapitalForPeriod === 0 && <div className="text-[9px] text-red-500 font-bold uppercase tracking-wider mt-0.5">(Já em Atraso)</div>}
+                                                      {loan.isOverdueSlice && <div className="text-[9px] text-red-500 font-bold uppercase tracking-wider mt-0.5">(Já em Atraso)</div>}
                                                   </>
                                               )}
                                           </td>
@@ -561,16 +590,16 @@ const Dashboard = () => {
                                           <td className="p-4 text-center font-bold text-slate-600">{loan.interestRate}%</td>
                                           
                                           <td className="p-4 text-right font-bold text-slate-700">
-                                              R$ {formatMoney(selectedRange === 'overdue' ? loan.installmentValue : loan.projectedCapitalForPeriod)}
+                                              R$ {formatMoney(selectedRange === 'overdue' ? (calculateInstallmentBreakdown(loan).capital) : loan.projectedCapitalForPeriod)}
                                           </td>
                                           <td className="p-4 text-right font-bold text-green-600">
-                                              {selectedRange === 'overdue' ? '-' : `R$ ${formatMoney(loan.projectedInterestForPeriod)}`}
+                                              R$ {formatMoney(selectedRange === 'overdue' ? (calculateInstallmentBreakdown(loan).interest) : loan.projectedInterestForPeriod)}
                                           </td>
                                           
                                           {selectedRange === 'overdue' && <td className="p-4 text-right font-black text-red-600">R$ {formatMoney(overdueVal)}</td>}
                                           <td className="p-4 text-center">
-                                              <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${loan.status === 'Atrasado' ? 'bg-red-50 text-red-600' : loan.status === 'Acordo' ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>
-                                                  {loan.status}
+                                              <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${getLoanRealStatus(loan) === 'Atrasado' ? 'bg-red-50 text-red-600' : getLoanRealStatus(loan) === 'Acordo' ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>
+                                                  {getLoanRealStatus(loan)}
                                               </span>
                                           </td>
                                       </tr>

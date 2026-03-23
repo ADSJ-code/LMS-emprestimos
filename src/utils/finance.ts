@@ -18,15 +18,19 @@ export const calculateOverdueValue = (
 ): number => {
   if (status !== 'Atrasado' && status !== 'Acordo') return amount;
 
-  // CORREÇÃO DO FUSO HORÁRIO: Força a data a ser lida no fuso local exato
+  // CORREÇÃO DEFINITIVA DE FUSO HORÁRIO (FALSO ATRASO)
+  // Separa a data de vencimento de forma limpa
   const cleanDate = dueDateStr.split('T')[0];
   const [year, month, day] = cleanDate.split('-').map(Number);
   const due = new Date(year, month - 1, day);
   
-  const today = new Date();
-  
-  due.setHours(0, 0, 0, 0);
-  today.setHours(0, 0, 0, 0);
+  // Força o "Hoje" a respeitar o fuso horário local do usuário e não o UTC do Servidor
+  const now = new Date();
+  const localOffset = now.getTimezoneOffset() * 60000;
+  const localNow = new Date(now.getTime() - localOffset);
+  const localTodayStr = localNow.toISOString().split('T')[0];
+  const [ty, tm, td] = localTodayStr.split('-').map(Number);
+  const today = new Date(ty, tm - 1, td);
 
   if (today <= due) return amount;
 

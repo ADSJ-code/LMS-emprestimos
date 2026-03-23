@@ -39,14 +39,15 @@ const Clients = () => {
     block?: string,
     floor?: string,
     pixKeyType?: string,
-    pixKey?: string
+    pixKey?: string,
+    bankName?: string
   }>({
     name: '', cpf: '', rg: '', email: '', phone: '',
     nationality: 'Brasileiro(a)', maritalStatus: 'SOLTEIRO(A)',
     cep: '', address: '', number: '', neighborhood: '', city: '', state: '',
     observations: '', documents: [], status: 'Ativo', justification: '', checklist: [],
     houseType: 'CASA', block: '', floor: '',
-    pixKeyType: 'CPF', pixKey: ''
+    pixKeyType: 'CPF', pixKey: '', bankName: ''
   });
 
   const [openMenuId, setOpenMenuId] = useState<string | number | null>(null);
@@ -272,7 +273,8 @@ const Clients = () => {
           block: metaData.bl || client.block || '', 
           floor: metaData.fl || client.floor || '',
           pixKeyType: metaData.pixType || client.pixKeyType || 'CPF', 
-          pixKey: metaData.pixKey || client.pixKey || ''
+          pixKey: metaData.pixKey || client.pixKey || '',
+          bankName: metaData.bn || client.bankName || ''
       });
     } else {
       setEditingId(null);
@@ -281,7 +283,7 @@ const Clients = () => {
           name: '', cpf: '', rg: '', email: '', phone: '', cep: '', address: '', number: '', neighborhood: '', city: '', state: '', 
           observations: '', documents: [], status: 'Ativo', justification: '', checklist: [],
           nationality: 'Brasileiro(a)', maritalStatus: 'SOLTEIRO(A)', houseType: 'CASA', block: '', floor: '',
-          pixKeyType: 'CPF', pixKey: ''
+          pixKeyType: 'CPF', pixKey: '', bankName: ''
       });
     }
     setIsModalOpen(true);
@@ -299,7 +301,8 @@ const Clients = () => {
       const meta = {
           pixType: formData.pixKeyType, pixKey: formData.pixKey,
           nat: formData.nationality, mar: formData.maritalStatus,
-          ht: formData.houseType, bl: formData.block, fl: formData.floor
+          ht: formData.houseType, bl: formData.block, fl: formData.floor,
+          bn: formData.bankName
       };
       const finalObs = `${cleanObs} [META:${JSON.stringify(meta)}]`.trim();
 
@@ -429,6 +432,21 @@ const Clients = () => {
 
                 <div className="bg-slate-50 p-4 rounded-xl border space-y-3">
                     <h4 className="text-[10px] font-black uppercase text-slate-400 mb-2 flex items-center gap-1"><CreditCard size={12}/> Dados Bancários / PIX</h4>
+                    <div className="mb-3">
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Banco do Cliente</label>
+                        <select value={formData.bankName} onChange={e => setFormData({...formData, bankName: e.target.value})} className="w-full p-2.5 border rounded-lg bg-white text-sm font-bold text-slate-700 outline-none cursor-pointer">
+                            <option value="">Selecione o Banco...</option>
+                            <option value="Itaú">Itaú</option>
+                            <option value="Bradesco">Bradesco</option>
+                            <option value="Santander">Santander</option>
+                            <option value="Nubank">Nubank</option>
+                            <option value="Inter">Inter</option>
+                            <option value="Caixa Econômica">Caixa Econômica</option>
+                            <option value="Banco do Brasil">Banco do Brasil</option>
+                            <option value="C6 Bank">C6 Bank</option>
+                            <option value="Outro">Outro / Não Listado</option>
+                        </select>
+                    </div>
                     <div className="grid grid-cols-3 gap-3">
                         <select value={formData.pixKeyType || 'CPF'} onChange={e => {
                             const type = e.target.value;
@@ -476,8 +494,8 @@ const Clients = () => {
                 </div>
 
                 <div className="bg-slate-50 p-4 rounded-xl border">
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-2">Observações Livres</label>
-                    <textarea value={formData.observations} onChange={e => setFormData({...formData, observations: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none text-sm" placeholder="Anotações do cliente..."></textarea>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-2">Observações Livres / Informações de Avalistas</label>
+                    <textarea value={formData.observations} onChange={e => setFormData({...formData, observations: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none text-sm" placeholder="Anotações gerais ou dados de avalistas frequentes..."></textarea>
                 </div>
 
                 <div className="grid grid-cols-3 gap-3">
