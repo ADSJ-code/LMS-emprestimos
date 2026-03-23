@@ -434,18 +434,25 @@ const Clients = () => {
                     <h4 className="text-[10px] font-black uppercase text-slate-400 mb-2 flex items-center gap-1"><CreditCard size={12}/> Dados Bancários / PIX</h4>
                     <div className="mb-3">
                         <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Banco do Cliente</label>
-                        <select value={formData.bankName} onChange={e => setFormData({...formData, bankName: e.target.value})} className="w-full p-2.5 border rounded-lg bg-white text-sm font-bold text-slate-700 outline-none cursor-pointer">
-                            <option value="">Selecione o Banco...</option>
-                            <option value="Itaú">Itaú</option>
-                            <option value="Bradesco">Bradesco</option>
-                            <option value="Santander">Santander</option>
-                            <option value="Nubank">Nubank</option>
-                            <option value="Inter">Inter</option>
-                            <option value="Caixa Econômica">Caixa Econômica</option>
-                            <option value="Banco do Brasil">Banco do Brasil</option>
-                            <option value="C6 Bank">C6 Bank</option>
-                            <option value="Outro">Outro / Não Listado</option>
-                        </select>
+                        <input 
+                            list="bank-options"
+                            placeholder="Digite ou selecione o banco..."
+                            value={formData.bankName} 
+                            onChange={e => setFormData({...formData, bankName: e.target.value})} 
+                            className="w-full p-2.5 border rounded-lg bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-slate-900/5"
+                        />
+                        <datalist id="bank-options">
+                            <option value="Itaú" />
+                            <option value="Bradesco" />
+                            <option value="Santander" />
+                            <option value="Nubank" />
+                            <option value="Inter" />
+                            <option value="Caixa Econômica" />
+                            <option value="Banco do Brasil" />
+                            <option value="C6 Bank" />
+                            <option value="PagBank" />
+                            <option value="Mercado Pago" />
+                        </datalist>
                     </div>
                     <div className="grid grid-cols-3 gap-3">
                         <select value={formData.pixKeyType || 'CPF'} onChange={e => {

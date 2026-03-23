@@ -136,6 +136,17 @@ const Billing = () => {
   const [isSimulating, setIsSimulating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingList, setIsLoadingList] = useState(false);
+  const [companySettings, setCompanySettings] = useState<any>(null);
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const s = await settingsService.get();
+        setCompanySettings(s);
+      } catch (err) { console.error("Erro ao carregar configurações", err); }
+    };
+    loadSettings();
+  }, []);
 
   const [payDate, setPayDate] = useState(''); 
   const [payCapital, setPayCapital] = useState(''); 
@@ -161,7 +172,6 @@ const Billing = () => {
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
       firstPaymentDate: '', frequency: 'MENSAL', fineRate: '', moraInterestRate: '', 
       clientBank: '', paymentMethod: '', interestType: 'PRICE', 
-      hasAvalist: false, avalistName: '', avalistCPF: '',
       hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
       guarantorHouseType: 'CASA', guarantorNumber: '', guarantorBlock: '', guarantorFloor: '',
       hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: ''
@@ -579,37 +589,17 @@ const Billing = () => {
             const numInst = parseInt(formData.installments) || 0;
             const pmt = mCap + mInt;
 
-// CÁLCULO REVERSO AUTOMÁTICO NA CRIAÇÃO (Linear)
-            const initCap = parseFloat(formData.initialPaidCapital) || 0;
-            const balance = Math.max(0, amount - initCap);
-
-            if (balance > 0 && pmt > 0 && numInst > 0) {
-                const totalPagar = pmt * numInst;
-                const jurosTotal = Math.max(0, totalPagar - balance);
-                const taxaPeriodoBruta = jurosTotal / balance;
-                const taxaMensalEquivalente = (taxaPeriodoBruta / numInst);
-                
-                let multiplier = formData.frequency === 'SEMANAL' ? 4 : formData.frequency === 'DIARIO' ? 30 : 1;
-                const autoRate = (taxaMensalEquivalente * multiplier * 100).toFixed(2);
-                
-                if (formData.interestRate !== autoRate) {
-                    setFormData((prev: any) => ({...prev, interestRate: autoRate}));
-                }
-            }
-
-            if (numInst > 0 && pmt > 0 && formData.startDate && amount > 0) {
-                const totalPagar = pmt * numInst;
-                const jurosReal = Math.max(0, totalPagar - balance);
-                setSimulation({ 
-                    installment: pmt, 
-                    totalInterest: jurosReal, 
-                    totalPayable: totalPagar, 
-                    isValid: true 
-                });
-            } else {
-                setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
-            }
-        }
+            if (numInst > 0 && pmt > 0 && formData.startDate && amount > 0) {
+                setSimulation({ 
+                    installment: pmt, 
+                    totalInterest: mInt * numInst, 
+                    totalPayable: pmt * numInst, 
+                    isValid: true 
+                });
+            } else {
+                setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
+            }
+        }
         return;
     }
 
@@ -646,30 +636,6 @@ const Billing = () => {
         setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false }); 
     }
   }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency, formData.isMigration, formData.manualInstallmentCapital, formData.manualInstallmentInterest, formData.initialPaidCapital, formData.initialPaidInterest]);
-
-  useEffect(() => {
-    if (isEditContractModalOpen && editContractData.isMigration) {
-      const pv = parseFloat(editContractData.amount) || 0;
-      const pmt = parseFloat(editContractData.installmentValue) || 0;
-      const n = parseInt(editContractData.installments) || 0;
-
-      if (pv > 0 && pmt > 0 && n > 0) {
-        let low = 0.0; let high = 2.0; let best = 0;
-        for(let i=0; i<40; i++) {
-          let mid = (low + high)/2;
-          let calcPmt = pv * (mid * Math.pow(1+mid, n)) / (Math.pow(1+mid, n) - 1);
-          if(calcPmt > pmt) high = mid; else low = mid;
-          best = mid;
-        }
-        let multiplier = selectedLoan?.frequency === 'SEMANAL' ? 4 : selectedLoan?.frequency === 'DIARIO' ? 30 : 1;
-        const autoRate = (best * multiplier * 100).toFixed(2);
-        
-        if (editContractData.interestRate !== autoRate) {
-          setEditContractData((prev: any) => ({ ...prev, interestRate: autoRate }));
-        }
-      }
-    }
-  }, [editContractData.amount, editContractData.installmentValue, editContractData.installments, editContractData.isMigration, isEditContractModalOpen, selectedLoan?.frequency]);
 
   useEffect(() => {
       setSelectedIds([]);
@@ -1016,12 +982,9 @@ const Billing = () => {
           moraInterestRate: (loan.moraInterestRate || '').toString(),
           clientBank: loan.clientBank || '',
           paymentMethod: loan.paymentMethod || '',
-          avalistName: (loan as any).avalistName || '',
-          avalistCPF: (loan as any).avalistCPF || '',
           guarantorName: loan.guarantorName || '',
           guarantorCPF: loan.guarantorCPF || '',
-          guarantorAddress: loan.guarantorAddress || '',
-          isMigration: loan.history?.some((h: any) => h.type === 'Ajuste de Migração') || false
+          guarantorAddress: loan.guarantorAddress || ''
       });
       setIsEditContractModalOpen(true);
       setOpenMenuId(null);
@@ -1050,8 +1013,6 @@ const Billing = () => {
           moraInterestRate: parseFloat(editContractData.moraInterestRate) || 0,
           clientBank: editContractData.clientBank,
           paymentMethod: editContractData.paymentMethod,
-          avalistName: editContractData.avalistName,
-          avalistCPF: editContractData.avalistCPF,
           guarantorName: editContractData.guarantorName,
           guarantorCPF: editContractData.guarantorCPF,
           guarantorAddress: editContractData.guarantorAddress
@@ -1143,7 +1104,6 @@ const Billing = () => {
         client: '', amount: '', interestRate: '', installments: '', startDate: '', firstPaymentDate: '', frequency: 'MENSAL', 
         fineRate: '', moraInterestRate: '', clientBank: '', paymentMethod: '', 
         interestType: 'PRICE', 
-        hasAvalist: false, avalistName: '', avalistCPF: '',
         hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
         guarantorHouseType: 'CASA', guarantorNumber: '', guarantorBlock: '', guarantorFloor: '',
         hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: ''
@@ -1161,13 +1121,13 @@ const Billing = () => {
         if (!finalID) {
             let maxSeq = 0;
             loans.forEach(l => { 
-                // Só considera na contagem os IDs que são puramente numéricos (ignora os hashs antigos)
-                if (/^\d+$/.test(l.id)) {
-                    const seq = parseInt(l.id, 10); 
+                const match = l.id.match(/^(\d+)/); 
+                if (match) { 
+                    const seq = parseInt(match[1]); 
                     if(!isNaN(seq) && seq > maxSeq) maxSeq = seq; 
                 } 
             });
-            finalID = String(maxSeq + 1).padStart(4, '0');
+            finalID = (maxSeq + 1).toString();
         }
 
         if (loans.some(l => l.id === finalID)) {
@@ -1202,14 +1162,11 @@ const Billing = () => {
                  finalInstallmentValue = balance * periodRate;
                  projectedProfit = 0;
             } else {
-                 const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
-                 const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
-                 finalInstallmentValue = mCap + mInt;
-                 
-                 const balance = Math.max(0, finalAmount - initCap);
-                 const totalPayable = finalInstallmentValue * numInst;
-                 projectedProfit = Math.max(0, totalPayable - balance) + initInt;
-            }
+                 const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
+                 const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
+                 finalInstallmentValue = mCap + mInt;
+                 projectedProfit = (mInt * numInst) + initInt;
+            }
         } else {
             finalInstallmentValue = simulation.installment;
             const totalReceivable = simulation.installment * numInst;
@@ -1238,7 +1195,7 @@ const Billing = () => {
             });
         }
 
-        const newLoan: any = {
+        const newLoan: Loan = {
             id: finalID, client: formData.client, amount: finalAmount, installments: numInst,
             interestRate: finalInterestRate, startDate: formData.startDate, nextDue: nextDueDate.toISOString().split('T')[0],
             status: 'Em Dia', installmentValue: finalInstallmentValue,
@@ -1251,8 +1208,6 @@ const Billing = () => {
             guarantorName: formData.hasGuarantor ? formData.guarantorName : '', 
             guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '', 
             guarantorAddress: fullGuarantorAddress,
-            avalistName: formData.hasAvalist ? formData.avalistName : '',
-            avalistCPF: formData.hasAvalist ? formData.avalistCPF : '',
             affiliateName: formData.hasAffiliate ? formData.affiliateName : '', affiliateFee: formData.hasAffiliate ? parseFloat(formData.affiliateFee) : 0, affiliateNotes: formData.hasAffiliate ? formData.affiliateNotes : ''
         };
 
@@ -1587,7 +1542,7 @@ const Billing = () => {
                                       const c = availableClients.find(
                                         (cl) => cl.name === loan.client,
                                       );
-                                      generateContractPDF(loan, c);
+                                      generateContractPDF(loan, c, companySettings);
                                       setOpenMenuId(null);
                                     }}
                                     className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
@@ -1599,7 +1554,7 @@ const Billing = () => {
                                       const c = availableClients.find(
                                         (cl) => cl.name === loan.client,
                                       );
-                                      generatePromissoryPDF(loan, c);
+                                      generatePromissoryPDF(loan, c, companySettings);
                                       setOpenMenuId(null);
                                     }}
                                     className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
@@ -1706,26 +1661,15 @@ const Billing = () => {
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
-                        {(selectedLoan as any).avalistName && (
-                            <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 flex items-center gap-3">
-                                <div className="bg-indigo-100 p-2 rounded-full text-indigo-600"><ShieldCheck size={18}/></div>
-                                <div>
-                                    <span className="text-[10px] font-bold text-indigo-400 uppercase block">Avalista (Promissória)</span>
-                                    <span className="text-xs font-bold text-indigo-900">{(selectedLoan as any).avalistName}</span>
-                                </div>
+                    {selectedLoan.guarantorName && (
+                        <div className="mt-2 bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-center gap-3">
+                            <div className="bg-blue-100 p-2 rounded-full text-blue-600"><UserCheck size={18}/></div>
+                            <div>
+                                <span className="text-xs font-bold text-blue-400 uppercase block">Fiador Vinculado</span>
+                                <span className="text-sm font-bold text-blue-900">{selectedLoan.guarantorName}</span>
                             </div>
-                        )}
-                        {selectedLoan.guarantorName && (
-                            <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 flex items-center gap-3">
-                                <div className="bg-blue-100 p-2 rounded-full text-blue-600"><UserCheck size={18}/></div>
-                                <div>
-                                    <span className="text-[10px] font-bold text-blue-400 uppercase block">Fiador (Contrato)</span>
-                                    <span className="text-xs font-bold text-blue-900">{selectedLoan.guarantorName}</span>
-                                </div>
-                            </div>
-                        )}
-                    </div>
+                        </div>
+                    )}
                 </>
             ) : detailTab === 'schedule' ? (
                 renderSchedule(selectedLoan)
@@ -1896,30 +1840,19 @@ const Billing = () => {
                   <div className="flex items-center gap-2 text-blue-800 font-bold mb-1"><Edit size={18}/> Edição Completa</div>
                   <p className="text-xs text-blue-700">Modifique qualquer dado base do contrato. Estas alterações substituirão os dados originais no sistema e não gerarão um "Acordo" no extrato.</p>
               </div>
-
-              <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl mb-4">
-                  <input type="checkbox" id="editIsMigration" checked={editContractData.isMigration} onChange={(e) => setEditContractData({...editContractData, isMigration: e.target.checked})} className="w-5 h-5 rounded text-amber-600 focus:ring-amber-500" />
-                  <label htmlFor="editIsMigration" className="text-sm font-bold text-amber-800 cursor-pointer flex items-center gap-2"><Database size={16}/> Tratar como Contrato Migrado (Cálculo manual de parcelas)</label>
-              </div>
               
               <div className="grid grid-cols-2 gap-4">
                   <div><label className="block text-xs font-bold text-slate-500 mb-1">ID do Contrato</label><input type="text" value={editContractData.id} onChange={e => setEditContractData({...editContractData, id: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-slate-800"/></div>
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Valor Emprestado Original (R$)</label><input type="number" step="0.01" value={editContractData.amount} onWheel={(e) => e.currentTarget.blur()} onChange={e => setEditContractData({...editContractData, amount: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Valor Emprestado Original (R$)</label><input type="number" step="0.01" value={editContractData.amount} onChange={e => setEditContractData({...editContractData, amount: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
               </div>
 
               <div className="grid grid-cols-3 gap-4">
-                  <div>
-                      <label className="flex text-xs font-bold text-slate-500 mb-1 justify-between items-center">
-                          Taxa (%)
-                          {editContractData.isMigration && <span className="text-blue-500 text-[9px] font-bold animate-pulse">🪄 auto-calculado</span>}
-                      </label>
-                      <input type="number" step="0.01" value={editContractData.interestRate} onWheel={(e) => e.currentTarget.blur()} onChange={e => setEditContractData({...editContractData, interestRate: e.target.value})} className={`w-full p-2.5 border rounded-lg outline-none ${editContractData.isMigration ? 'bg-slate-50 cursor-not-allowed' : ''}`} readOnly={editContractData.isMigration}/>
-                  </div>
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Parcelas</label><input type="number" onWheel={(e) => e.currentTarget.blur()} value={selectedLoan?.interestType === 'SIMPLE' ? 1 : editContractData.installments} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installments: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none disabled:bg-slate-100 disabled:text-slate-400"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Taxa (%)</label><input type="number" step="0.01" value={editContractData.interestRate} onChange={e => setEditContractData({...editContractData, interestRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Parcelas</label><input type="number" value={selectedLoan?.interestType === 'SIMPLE' ? 1 : editContractData.installments} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installments: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none disabled:bg-slate-100 disabled:text-slate-400"/></div>
                   <div>
                       <label className="block text-xs font-bold text-slate-500 mb-1">Valor Parcela (R$)</label>
-                      <input type="number" step="0.01" onWheel={(e) => e.currentTarget.blur()} value={editContractData.installmentValue} disabled={selectedLoan?.interestType === 'SIMPLE' && !editContractData.isMigration} onChange={e => setEditContractData({...editContractData, installmentValue: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-green-600 disabled:bg-slate-100"/>
-                      {selectedLoan?.interestType === 'SIMPLE' && !editContractData.isMigration && <span className="text-[9px] text-blue-500 mt-1 block leading-tight">Valor da parcela atualizado dinamicamente com base no Saldo Devedor.</span>}
+                      <input type="number" step="0.01" value={editContractData.installmentValue} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installmentValue: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-green-600 disabled:bg-slate-100"/>
+                      {selectedLoan?.interestType === 'SIMPLE' && <span className="text-[9px] text-blue-500 mt-1 block leading-tight">Valor da parcela atualizado dinamicamente com base no Saldo Devedor.</span>}
                   </div>
               </div>
 
@@ -1934,26 +1867,16 @@ const Billing = () => {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Banco do Cliente</label><input type="text" value={editContractData.clientBank} onChange={e => setEditContractData({...editContractData, clientBank: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Banco do Cliente</label><input list="bancos-sugestao" value={editContractData.clientBank} onChange={e => setEditContractData({...editContractData, clientBank: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none" placeholder="Digite ou selecione o banco..."/></div>
                   <div><label className="block text-xs font-bold text-slate-500 mb-1">Chave Pix/Conta</label><input type="text" value={editContractData.paymentMethod} onChange={e => setEditContractData({...editContractData, paymentMethod: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
               </div>
 
-              <div className="border-t border-slate-100 pt-4 space-y-4">
-                  <div>
-                      <label className="block text-xs font-bold text-blue-600 mb-2 uppercase">Dados do Avalista (Promissória)</label>
-                      <div className="grid grid-cols-2 gap-2">
-                          <input type="text" placeholder="Nome do Avalista" value={editContractData.avalistName || ''} onChange={e => setEditContractData({...editContractData, avalistName: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
-                          <input type="text" placeholder="CPF do Avalista" value={editContractData.avalistCPF || ''} onChange={e => setEditContractData({...editContractData, avalistCPF: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
-                      </div>
-                  </div>
-
-                  <div className="pt-2">
-                      <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Dados do Fiador (Contrato)</label>
-                      <div className="space-y-3">
-                          <input type="text" placeholder="Nome do Fiador" value={editContractData.guarantorName || ''} onChange={e => setEditContractData({...editContractData, guarantorName: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
-                          <input type="text" placeholder="CPF do Fiador" value={editContractData.guarantorCPF || ''} onChange={e => setEditContractData({...editContractData, guarantorCPF: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
-                          <input type="text" placeholder="Endereço do Fiador" value={editContractData.guarantorAddress || ''} onChange={e => setEditContractData({...editContractData, guarantorAddress: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
-                      </div>
+              <div className="border-t border-slate-100 pt-4">
+                  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Dados do Fiador (Opcional)</label>
+                  <div className="space-y-3">
+                      <input type="text" placeholder="Nome do Fiador" value={editContractData.guarantorName} onChange={e => setEditContractData({...editContractData, guarantorName: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
+                      <input type="text" placeholder="CPF do Fiador" value={editContractData.guarantorCPF} onChange={e => setEditContractData({...editContractData, guarantorCPF: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
+                      <input type="text" placeholder="Endereço do Fiador" value={editContractData.guarantorAddress} onChange={e => setEditContractData({...editContractData, guarantorAddress: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
                   </div>
               </div>
           </div>
@@ -1997,18 +1920,7 @@ const Billing = () => {
                     </div>
                     <div>
                         <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Banco do Cliente</label>
-                        <select value={formData.clientBank} onChange={e => setFormData({...formData, clientBank: e.target.value})} className="w-full p-2 border rounded-lg bg-white outline-none cursor-pointer">
-                            <option value="">Selecione...</option>
-                            <option value="Itaú">Itaú</option>
-                            <option value="Bradesco">Bradesco</option>
-                            <option value="Santander">Santander</option>
-                            <option value="Nubank">Nubank</option>
-                            <option value="Inter">Inter</option>
-                            <option value="Caixa Econômica">Caixa Econômica</option>
-                            <option value="Banco do Brasil">Banco do Brasil</option>
-                            <option value="C6 Bank">C6 Bank</option>
-                            <option value="Outro">Outro (Editar no cliente)</option>
-                        </select>
+                        <input list="bancos-sugestao" value={formData.clientBank} onChange={e => setFormData({...formData, clientBank: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Selecione ou digite..."/>
                     </div>
                 </div>
 
@@ -2031,14 +1943,8 @@ const Billing = () => {
                     {formData.isMigration && (
                         <div className="mt-3 animate-in zoom-in-95 border-t border-amber-200 pt-3">
                             <div className="grid grid-cols-2 gap-3 mb-3">
-                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Valor Original Emprestado (R$)</label><input required type="number" step="0.01" onWheel={(e) => e.currentTarget.blur()} value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
-                                <div>
-                                    <label className="flex text-[10px] uppercase font-bold text-amber-700 mb-1 justify-between items-center">
-                                        Taxa Registrada (%)
-                                        <span className="text-amber-600 font-bold animate-pulse">🪄 auto-reverso</span>
-                                    </label>
-                                    <input required type="number" step="0.01" onWheel={(e) => e.currentTarget.blur()} value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-amber-50 cursor-not-allowed" readOnly placeholder="" />
-                                </div>
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Valor Original Emprestado (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Taxa Registrada (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
                             </div>
                             <div className="grid grid-cols-2 gap-3 mb-3">
                                 <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital Já Pago (R$)</label><input type="number" step="0.01" value={formData.initialPaidCapital} onChange={e => setFormData({...formData, initialPaidCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
@@ -2058,7 +1964,7 @@ const Billing = () => {
                                 </div>
                                 
                                 {formData.interestType !== 'SIMPLE' && (
-                                    <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital / Parcela (R$)</label><input required type="number" step="0.01" onWheel={(e) => e.currentTarget.blur()} value={formData.manualInstallmentCapital} onChange={e => setFormData({...formData, manualInstallmentCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
+                                    <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital / Parcela (R$)</label><input required type="number" step="0.01" value={formData.manualInstallmentCapital} onChange={e => setFormData({...formData, manualInstallmentCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
                                 )}
                                 
                                 <div className={formData.interestType === 'SIMPLE' ? 'col-span-2' : ''}>
@@ -2066,7 +1972,7 @@ const Billing = () => {
                                         Juros / Parcela (R$)
                                         {formData.interestType === 'SIMPLE' && <span className="lowercase text-[8px] font-normal ml-1">(Será recalculado dincamicamente se pagar capital)</span>}
                                     </label>
-                                    <input required type="number" step="0.01" onWheel={(e) => e.currentTarget.blur()} value={formData.manualInstallmentInterest} onChange={e => setFormData({...formData, manualInstallmentInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" />
+                                    <input required type="number" step="0.01" value={formData.manualInstallmentInterest} onChange={e => setFormData({...formData, manualInstallmentInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" />
                                 </div>
                             </div>
                         </div>
@@ -2076,9 +1982,9 @@ const Billing = () => {
                 {!formData.isMigration && (
                     <>
                         <div className="grid grid-cols-3 gap-4">
-                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onWheel={(e) => e.currentTarget.blur()} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
-                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onWheel={(e) => e.currentTarget.blur()} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
-                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.interestType === 'SIMPLE' ? 1 : formData.installments} disabled={formData.interestType === 'SIMPLE'} onWheel={(e) => e.currentTarget.blur()} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 disabled:bg-slate-100 disabled:text-slate-400" placeholder=""/></div>
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.interestType === 'SIMPLE' ? 1 : formData.installments} disabled={formData.interestType === 'SIMPLE'} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 disabled:bg-slate-100 disabled:text-slate-400" placeholder=""/></div>
                         </div>
                         <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl"><input type="checkbox" id="interestType" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" /><label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros) <span className="text-xs font-normal text-blue-600 block">O cliente paga apenas os juros mensais. O capital não abate.</span></label></div>
                     </>
@@ -2090,19 +1996,7 @@ const Billing = () => {
                     <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">{formData.isMigration ? 'Próximo Vencimento' : 'Primeiro Vencimento'}</label><input type="date" required={formData.isMigration} value={formData.firstPaymentDate} onChange={e => setFormData({...formData, firstPaymentDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 text-sm" placeholder="Opcional" title="Deixe vazio para automático"/></div>
                 </div>
                 
-                {/* SEÇÃO AVALISTA (PARA PROMISSÓRIA) */}
-                <div className="flex items-center gap-2 mt-4"><input type="checkbox" id="hasAvalist" checked={formData.hasAvalist} onChange={(e) => setFormData({...formData, hasAvalist: e.target.checked})} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500"/><label htmlFor="hasAvalist" className="text-sm font-bold text-slate-700 cursor-pointer">Adicionar Avalista (Título de Crédito/Promissória)</label></div>
-                
-                {formData.hasAvalist && (
-                    <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-100 space-y-3 animate-in slide-in-from-top-2">
-                        <div className="flex items-center gap-2 mb-2"><UserCheck size={18} className="text-blue-600"/><span className="text-xs font-bold uppercase text-blue-600">Dados do Avalista</span></div>
-                        <input type="text" placeholder="Nome Completo do Avalista" value={formData.avalistName} onChange={(e) => setFormData({...formData, avalistName: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/>
-                        <input type="text" placeholder="CPF do Avalista" value={formData.avalistCPF} onChange={(e) => setFormData({...formData, avalistCPF: e.target.value})} className="w-full p-2 border rounded-lg bg-white"/>
-                    </div>
-                )}
-
-                {/* SEÇÃO FIADOR (PARA CONTRATO) */}
-                <div className="flex items-center gap-2 mt-2"><input type="checkbox" id="hasGuarantor" checked={formData.hasGuarantor} onChange={(e) => setFormData({...formData, hasGuarantor: e.target.checked})} className="w-4 h-4 rounded text-slate-900 focus:ring-slate-500"/><label htmlFor="hasGuarantor" className="text-sm font-bold text-slate-700 cursor-pointer">Adicionar Fiador (Contrato de Mútuo)</label></div>
+                <div className="flex items-center gap-2 mt-4"><input type="checkbox" id="hasGuarantor" checked={formData.hasGuarantor} onChange={(e) => setFormData({...formData, hasGuarantor: e.target.checked})} className="w-4 h-4 rounded text-slate-900 focus:ring-slate-500"/><label htmlFor="hasGuarantor" className="text-sm font-bold text-slate-700 cursor-pointer">Adicionar Fiador (Opcional)</label></div>
                 
                 {formData.hasGuarantor && (
                     <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 animate-in slide-in-from-top-2">

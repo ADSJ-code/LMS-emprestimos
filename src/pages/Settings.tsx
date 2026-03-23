@@ -101,6 +101,8 @@ const Settings = () => {
       email: "",
       phone: "",
       address: "",
+      city: "",
+      bankName: "",
     },
     system: {
       autoBackup: false,
@@ -511,6 +513,19 @@ const Settings = () => {
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                      Cidade (Para o Contrato/Foro)
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.company.city}
+                      onChange={(e) => updateCompany("city", e.target.value)}
+                      disabled={!isAdmin}
+                      placeholder="Ex: Mauá"
+                      className="w-full p-3 border border-slate-200 rounded-xl outline-none font-bold disabled:bg-slate-50 disabled:text-slate-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
                       Email de Contato
                     </label>
                     <input
@@ -531,6 +546,19 @@ const Settings = () => {
                       onChange={(e) => updateCompany("pixKey", e.target.value)}
                       disabled={!isAdmin}
                       className="w-full p-3 border border-green-200 bg-green-50/30 text-green-800 font-mono rounded-xl outline-none disabled:bg-slate-50 disabled:text-slate-500 disabled:border-slate-200"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                      Instituição Bancária
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.company.bankName}
+                      onChange={(e) => updateCompany("bankName", e.target.value)}
+                      disabled={!isAdmin}
+                      placeholder="Ex: Banco Itaú"
+                      className="w-full p-3 border border-slate-200 rounded-xl outline-none disabled:bg-slate-50 disabled:text-slate-500"
                     />
                   </div>
                   <div className="md:col-span-2">
