@@ -142,6 +142,12 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client, setti
 
     aplicarFundoTimbrado(doc, settings);
 
+    // --- IDENTIFICAÇÃO DO CONTRATO ---
+    doc.setFont("times", "bold");
+    doc.setFontSize(10);
+    doc.text(`CONTRATO Nº: ${loan.id}`, 190, y, { align: 'right' });
+    y += 5;
+
     const addText = (text: string, isBold: boolean = false, align: 'left' | 'center' | 'right' | 'justify' = 'justify') => {
         doc.setFont("times", isBold ? "bold" : "normal");
         doc.setFontSize(10);
@@ -278,7 +284,12 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client, set
         doc.setFont("times", "bold"); doc.setFontSize(12);
         doc.text("NOTA PROMISSÓRIA", 15, startY + 12);
         doc.text(`Nº  #${i}/${totalInst.toString().padStart(3, '0')}#`, 90, startY + 12, { align: "center" });
-        doc.setFont("times", "normal");
+        
+        // --- IDENTIFICAÇÃO DO CONTRATO NA PROMISSÓRIA ---
+        doc.setFontSize(8);
+        doc.text(`Ref. Contrato: ${loan.id}`, 90, startY + 17, { align: "center" });
+        
+        doc.setFont("times", "normal"); doc.setFontSize(12);
         doc.text(`Vencimento: ${pDate.getDate()} de ${MESES_EXTENSO[pDate.getMonth()]} de ${pDate.getFullYear()}`, 185, startY + 12, { align: "right" });
 
         doc.setFont("times", "bold"); doc.text(`R$  ${formatMoney(val).replace('R$', '').trim()}`, 185, startY + 22, { align: 'right' });
