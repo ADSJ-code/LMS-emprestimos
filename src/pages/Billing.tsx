@@ -1268,7 +1268,6 @@ const Billing = () => {
       <header className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
         <div><h2 className="text-2xl font-bold text-slate-800">Cobrança e Empréstimos</h2><p className="text-slate-500">Gestão financeira completa.</p></div>
         <div className="flex flex-wrap gap-2">
-            <button onClick={() => setIsDailyAlertOpen(true)} className="flex items-center gap-2 bg-blue-100 text-blue-700 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-blue-200 transition-colors shadow-sm"><AlertCircle size={18} /> Vencimentos Hoje</button>
             <button onClick={() => setIsCollectionModalOpen(true)} className="flex items-center gap-2 bg-yellow-400 text-yellow-900 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-yellow-500 transition-colors shadow-lg shadow-yellow-400/20"><BellRing size={18} /> Cobrança</button>
             <button onClick={() => fetchLoans()} className="flex items-center gap-2 bg-white border border-gray-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm hover:bg-gray-50 transition-colors font-bold shadow-sm"><RefreshCw className={isLoadingList ? "animate-spin" : ""} size={18} /></button>
             <button 
