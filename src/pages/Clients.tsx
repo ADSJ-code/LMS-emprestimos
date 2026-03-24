@@ -29,9 +29,9 @@ const Clients = () => {
   
   const [globalMetricModal, setGlobalMetricModal] = useState<'base' | 'ativos' | 'emprestado' | 'lucro' | null>(null);
   const [isCepLoading, setIsCepLoading] = useState(false);
+  const [clientType, setClientType] = useState<'PF' | 'PJ'>('PF'); // NOVO ESTADO AQUI
 
-  const [formData, setFormData] = useState<Partial<Client> & { 
-    justification?: string, 
+  const [formData, setFormData] = useState<Partial<Client> & {justification?: string, 
     checklist?: string[],
     nationality?: string,
     maritalStatus?: string,
@@ -89,11 +89,12 @@ const Clients = () => {
   };
 
   const maskCPF = (value: string) => value.replace(/\D/g, "").replace(/(\d{3})(\d)/, "$1.$2").replace(/(\d{3})(\d)/, "$1.$2").replace(/(\d{3})(\d{1,2})/, "$1-$2").replace(/(-\d{2})\d+?$/, "$1");
+  const maskCNPJ = (value: string) => value.replace(/\D/g, "").replace(/^(\d{2})(\d)/, "$1.$2").replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3").replace(/\.(\d{3})(\d)/, ".$1/$2").replace(/(\d{4})(\d)/, "$1-$2").slice(0, 18);
   const maskRG = (value: string) => value.replace(/\D/g, "").replace(/(\d{2})(\d)/, "$1.$2").replace(/(\d{3})(\d)/, "$1.$2").replace(/(\d{3})(\d{1,2})/, "$1-$2").slice(0, 12);
   const maskPhone = (value: string) => value.replace(/\D/g, "").replace(/(\d{2})(\d)/, "($1) $2").replace(/(\d{5})(\d)/, "$1-$2").replace(/(-\d{4})\d+?$/, "$1");
   const maskCEP = (value: string) => value.replace(/\D/g, "").replace(/^(\d{5})(\d)/, "$1-$2").slice(0, 9);
-
   const handleCepBlur = async (e: React.FocusEvent<HTMLInputElement>) => {
+    
     const cep = e.target.value.replace(/\D/g, '');
     if (cep.length === 8) {
       setIsCepLoading(true);
@@ -240,11 +241,19 @@ const Clients = () => {
     );
   }, [processedClients, searchTerm]);
 
-  // SISTEMA DE DESEMPACOTAMENTO DE DADOS (IMPEDE A PERDA DO PIX)
+// SISTEMA DE DESEMPACOTAMENTO DE DADOS (IMPEDE A PERDA DO PIX)
   const handleOpenModal = (client?: any, defaultTab: 'dados' | 'financeiro' | 'analise' = 'dados') => {
     setModalTab(defaultTab); 
     if (client) {
       setEditingId(client.id);
+      
+      // AUTO-DETECTA SE É PF OU PJ
+      if (client.cpf && client.cpf.length > 14) {
+          setClientType('PJ');
+      } else {
+          setClientType('PF');
+      }
+
       const savedChecklist = client.checklist || [];
       const restoredItems = initialChecklist.map(item => ({ ...item, checked: savedChecklist.includes(item.id) }));
       setChecklistItems(restoredItems);
@@ -278,6 +287,7 @@ const Clients = () => {
       });
     } else {
       setEditingId(null);
+      setClientType('PF'); // Garante que novo cliente comece como PF
       setChecklistItems(initialChecklist);
       setFormData({ 
           name: '', cpf: '', rg: '', email: '', phone: '', cep: '', address: '', number: '', neighborhood: '', city: '', state: '', 
@@ -396,17 +406,60 @@ const Clients = () => {
 
         {modalTab === 'dados' ? (
             <form onSubmit={handleSave} className="space-y-4">
+                
+                {/* BOTÕES DE SELEÇÃO PF / PJ */}
+                <div className="flex bg-slate-100 p-1 rounded-xl">
+                    <button 
+                        type="button" 
+                        onClick={() => setClientType('PF')} 
+                        className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${clientType === 'PF' ? 'bg-white text-slate-800 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                        Pessoa Física (PF)
+                    </button>
+                    <button 
+                        type="button" 
+                        onClick={() => setClientType('PJ')} 
+                        className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${clientType === 'PJ' ? 'bg-white text-slate-800 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                        Empresa (PJ)
+                    </button>
+                </div>
+
                 <div className="bg-slate-50 p-4 rounded-xl border space-y-3">
-                    <input required placeholder="Nome Completo" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full p-2.5 border rounded-lg" />
+                    <input 
+                        required 
+                        placeholder={clientType === 'PF' ? "Nome Completo" : "Razão Social / Nome Fantasia"} 
+                        value={formData.name} 
+                        onChange={e => setFormData({...formData, name: e.target.value})} 
+                        className="w-full p-2.5 border rounded-lg font-bold text-slate-800" 
+                    />
                     <div className="grid grid-cols-2 gap-3">
-                        <input required placeholder="CPF" value={formData.cpf} onChange={e => {
-                            const val = maskCPF(e.target.value);
-                            setFormData(prev => {
-                                const autoSync = prev.pixKeyType === 'CPF' && (!prev.pixKey || prev.pixKey === prev.cpf);
-                                return { ...prev, cpf: val, ...(autoSync ? { pixKey: val } : {}) };
-                            });
-                        }} className="w-full p-2.5 border rounded-lg" />
-                        <input placeholder="RG" value={formData.rg} onChange={e => setFormData({...formData, rg: maskRG(e.target.value)})} className="w-full p-2.5 border rounded-lg" />
+                        <input 
+                            required 
+                            placeholder={clientType === 'PF' ? "CPF" : "CNPJ"} 
+                            value={formData.cpf} 
+                            onChange={e => {
+                                const val = clientType === 'PF' ? maskCPF(e.target.value) : maskCNPJ(e.target.value);
+                                setFormData(prev => {
+                                    const autoSync = (prev.pixKeyType === 'CPF' || prev.pixKeyType === 'CNPJ') && (!prev.pixKey || prev.pixKey === prev.cpf);
+                                    return { 
+                                        ...prev, 
+                                        cpf: val, 
+                                        ...(autoSync ? { pixKey: val, pixKeyType: clientType === 'PF' ? 'CPF' : 'CNPJ' } : {}) 
+                                    };
+                                });
+                            }} 
+                            className="w-full p-2.5 border rounded-lg font-mono text-sm" 
+                        />
+                        <input 
+                            placeholder={clientType === 'PF' ? "RG (Opcional)" : "Inscrição Estadual (Opcional)"} 
+                            value={formData.rg} 
+                            onChange={e => {
+                                const val = clientType === 'PF' ? maskRG(e.target.value) : e.target.value.toUpperCase();
+                                setFormData({...formData, rg: val});
+                            }} 
+                            className="w-full p-2.5 border rounded-lg text-sm uppercase" 
+                        />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                         <input placeholder="Nacionalidade" value={formData.nationality} onChange={e => setFormData({...formData, nationality: e.target.value})} className="w-full p-2.5 border rounded-lg" />

@@ -628,12 +628,21 @@ func loansHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(results)
 	case http.MethodPost:
-		var l Loan
-		json.NewDecoder(r.Body).Decode(&l)
+		// 1. Lemos o pacote bruto enviado pelo React
+		bodyBytes, _ := io.ReadAll(r.Body)
 
-		// Lógica de ID Sequencial (ex: 0227)
+		var l Loan
+		json.Unmarshal(bodyBytes, &l)
+
+		// 2. A MARRETA: Extraímos o ID à força caso o Go tenha ignorado na etapa anterior
+		var raw map[string]interface{}
+		json.Unmarshal(bodyBytes, &raw)
+		if customID, ok := raw["id"].(string); ok && customID != "" {
+			l.ID = customID
+		}
+
+		// 3. Se mesmo assim estiver vazio (o usuário não digitou nada), gera automático
 		if l.ID == "" {
-			// Busca o maior ID numérico existente ignorando hashes aleatórios antigos
 			opts := options.FindOne().SetSort(bson.M{"id": -1})
 			var lastLoan Loan
 			err := loanCollection.FindOne(ctx, bson.M{"id": bson.M{"$regex": "^[0-9]+$"}}, opts).Decode(&lastLoan)

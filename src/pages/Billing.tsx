@@ -558,6 +558,50 @@ const Billing = () => {
     setSummary({ overdue: totalOverdue, received: totalProfit, today: totalTodayValue });
   }, [loans, collectionDate]);
 
+  // --- MATEMÁTICA REVERSA PARA CONTRATOS ANTIGOS (MIGRAÇÃO) ---
+  useEffect(() => {
+      if (!formData.isMigration) return;
+
+      const amount = parseFloat(formData.amount) || 0;
+      const manualJuros = parseFloat(formData.manualInstallmentInterest) || 0;
+
+      if (amount > 0 && manualJuros > 0) {
+          let taxPerPeriod = 0;
+
+          if (formData.interestType === 'SIMPLE') {
+              const initCap = parseFloat(formData.initialPaidCapital) || 0;
+              const balance = Math.max(0, amount - initCap);
+              if (balance > 0) {
+                  taxPerPeriod = (manualJuros / balance) * 100;
+              }
+          } else {
+              taxPerPeriod = (manualJuros / amount) * 100;
+          }
+
+          if (taxPerPeriod > 0) {
+              let monthlyRate = taxPerPeriod;
+              if (formData.frequency === 'SEMANAL') monthlyRate = taxPerPeriod * 4;
+              else if (formData.frequency === 'DIARIO') monthlyRate = taxPerPeriod * 30;
+
+              const formattedRate = monthlyRate.toFixed(2);
+              
+              if (formData.interestRate !== formattedRate) {
+                  setFormData(prev => ({ ...prev, interestRate: formattedRate }));
+              }
+          }
+      } else if (manualJuros === 0 && formData.interestRate !== '') {
+          setFormData(prev => ({ ...prev, interestRate: '' }));
+      }
+  }, [
+      formData.isMigration,
+      formData.amount,
+      formData.manualInstallmentInterest,
+      formData.initialPaidCapital,
+      formData.interestType,
+      formData.frequency
+  ]);
+
+  // --- SIMULAÇÃO FINANCEIRA ---
   useEffect(() => {
     const amount = parseFloat(formData.amount) || 0; 
     const rateMonthly = parseFloat(formData.interestRate) || 0; 
@@ -636,7 +680,6 @@ const Billing = () => {
         setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false }); 
     }
   }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency, formData.isMigration, formData.manualInstallmentCapital, formData.manualInstallmentInterest, formData.initialPaidCapital, formData.initialPaidInterest]);
-
   useEffect(() => {
       setSelectedIds([]);
   }, [searchTerm, statusFilter, filterStart, filterEnd]);
@@ -680,19 +723,32 @@ const Billing = () => {
   const tableTotals = useMemo(() => {
       let capSum = 0;
       let intSum = 0;
-      let instSum = 0;
+      let expectedProfitSum = 0;
       let count = 0;
 
       filteredLoans.forEach(loan => {
           if (selectedIds.includes(loan.id)) {
               capSum += Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
               intSum += (loan.totalPaidInterest || 0);
-              instSum += loan.installmentValue;
+              
+              // Lógica para somar apenas o LUCRO ESPERADO do contrato
+              let profit = loan.projectedProfit || 0;
+              
+              // Fallback caso seja um contrato antigo sem o projectedProfit salvo
+              if (!loan.projectedProfit) {
+                  if (loan.interestType === 'SIMPLE') {
+                      profit = loan.installmentValue; // Em simples, a parcela é 100% juros/lucro
+                  } else {
+                      profit = (loan.installmentValue * loan.installments) - loan.amount;
+                  }
+              }
+              
+              expectedProfitSum += Math.max(0, profit);
               count++;
           }
       });
 
-      return { capital: capSum, interest: intSum, installments: instSum, count };
+      return { capital: capSum, interest: intSum, expectedProfit: expectedProfitSum, count };
   }, [filteredLoans, selectedIds]);
 
   const handleOpenPayment = (loan: Loan) => {
@@ -1211,9 +1267,34 @@ const Billing = () => {
             affiliateName: formData.hasAffiliate ? formData.affiliateName : '', affiliateFee: formData.hasAffiliate ? parseFloat(formData.affiliateFee) : 0, affiliateNotes: formData.hasAffiliate ? formData.affiliateNotes : ''
         };
 
-        await loanService.create(newLoan);
-        fetchLoans(); closeLoanFlow();
-    } catch (err) { alert("Erro ao salvar."); } finally { setIsSaving(false); }
+        // --- BYPASS: ENVIANDO O ID À FORÇA PARA O SERVIDOR ---
+        const sessionStr = localStorage.getItem('lms_active_session');
+        let token = '';
+        if (sessionStr) {
+            try { token = JSON.parse(sessionStr).token; } catch (e) {}
+        }
+        
+        const response = await fetch(`${getApiUrl}/api/loans`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(newLoan)
+        });
+        
+        if (!response.ok) {
+            throw new Error("Falha ao salvar no banco de dados");
+        }
+
+        fetchLoans(); 
+        closeLoanFlow();
+    } catch (err) { 
+        console.error(err);
+        alert("Erro ao salvar o contrato."); 
+    } finally { 
+        setIsSaving(false); 
+    }
   };
 
   const handleDelete = async (id: string) => { if (confirm('Deseja excluir?')) { try { await loanService.delete(id); fetchLoans(); setIsDetailsOpen(false); } catch (err) { alert("Erro ao excluir."); } } };
@@ -1586,14 +1667,15 @@ const Billing = () => {
                     <td colSpan={5} className="p-4 text-right font-bold text-slate-500 uppercase tracking-widest text-xs">
                         Soma dos Selecionados ({tableTotals.count} contratos):
                     </td>
-                    <td className="p-4 text-right font-black text-slate-800 text-lg">
+                    <td className="p-4 text-right font-black text-slate-800 text-lg" title="Soma do Saldo Devedor (Capital)">
                         R$ {formatMoney(tableTotals.capital)}
                     </td>
-                    <td className="p-4 text-right font-black text-green-600 text-lg">
+                    <td className="p-4 text-right font-black text-green-600 text-lg" title="Soma dos Juros já recebidos">
                         R$ {formatMoney(tableTotals.interest)}
                     </td>
-                    <td className="p-4 text-right font-black text-slate-600 text-lg">
-                        R$ {formatMoney(tableTotals.installments)}
+                    <td className="p-4 text-right font-black text-blue-600 text-lg" title="Soma do Lucro/Juros esperado dos contratos">
+                        R$ {formatMoney(tableTotals.expectedProfit)}
+                        <span className="block text-[9px] text-slate-400 font-bold mt-1 uppercase">Lucro Esperado</span>
                     </td>
                     <td colSpan={2}></td>
                 </tr>
