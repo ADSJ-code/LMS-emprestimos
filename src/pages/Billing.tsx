@@ -1267,25 +1267,8 @@ const Billing = () => {
             affiliateName: formData.hasAffiliate ? formData.affiliateName : '', affiliateFee: formData.hasAffiliate ? parseFloat(formData.affiliateFee) : 0, affiliateNotes: formData.hasAffiliate ? formData.affiliateNotes : ''
         };
 
-        // --- BYPASS: ENVIANDO O ID À FORÇA PARA O SERVIDOR ---
-        const sessionStr = localStorage.getItem('lms_active_session');
-        let token = '';
-        if (sessionStr) {
-            try { token = JSON.parse(sessionStr).token; } catch (e) {}
-        }
-        
-        const response = await fetch(`${getApiUrl}/api/loans`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify(newLoan)
-        });
-        
-        if (!response.ok) {
-            throw new Error("Falha ao salvar no banco de dados");
-        }
+// Usando a rota inteligente que sabe se é localhost ou nuvem
+        await loanService.create(newLoan as any);
 
         fetchLoans(); 
         closeLoanFlow();
