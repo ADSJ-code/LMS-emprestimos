@@ -25,6 +25,7 @@ const Dashboard = () => {
   const [tierFilters, setTierFilters] = useState({ capital: 'all', profit: 'all', overdue: 'all' });
 
   const [loading, setLoading] = useState(false);
+  const [searchTerm, setSearchTerm] = useState(''); // Estado para a busca no Dashboard solicitado
   const [selectedRange, setSelectedRange] = useState<'low' | 'mid' | 'high' | 'capital' | 'profit' | 'overdue' | 'active' | 'clients_contracts' | null>(null);
   const [allLoans, setAllLoans] = useState<Loan[]>([]);
   const [allClients, setAllClients] = useState<Client[]>([]);
@@ -135,7 +136,6 @@ const Dashboard = () => {
       return { totalOverdue, missedCount };
   };
 
-  // --- MOTOR CENTRAL DE FILTRAGEM E PROJEÇÃO ---
   const fetchAndCalculate = async () => {
     setLoading(true);
     try {
@@ -191,7 +191,6 @@ const Dashboard = () => {
       let totalGloballyActive = 0;
       
       const filteredContext: any[] = [];
-      const isFluxo = viewMode === 'fluxo' && period !== 'todos';
       const pad = (n: number) => n.toString().padStart(2, '0');
 
       safeLoans.forEach((loan: any) => {
@@ -207,11 +206,9 @@ const Dashboard = () => {
         const breakdown = calculateInstallmentBreakdown(loan);
         const { totalOverdue, missedCount } = getLoanDetails(loan);
         
-        // Lucro real restante = Todo o lucro - (lucro das parcelas que já estão em atraso)
         const remProfit = calculateRemainingProfit(loan);
         const futureProfitTotal = Math.max(0, remProfit - (missedCount * breakdown.interest));
         
-        // Capital real restante = Todo o capital - (capital das parcelas que já estão em atraso)
         const capBalance = calculateCapitalBalance(loan);
         const futureCapitalTotal = Math.max(0, capBalance - (missedCount * breakdown.capital));
 
@@ -225,9 +222,9 @@ const Dashboard = () => {
 
         if (!startFilter || !endFilter) {
             hasMatch = true;
-            capToAdd = futureCapitalTotal;  // Somente o capital que NÃO está atrasado
-            profToAdd = futureProfitTotal;  // Somente lucro futuro
-            overToAdd = totalOverdue;       // Bola de neve das atrasadas
+            capToAdd = futureCapitalTotal;
+            profToAdd = futureProfitTotal;
+            overToAdd = totalOverdue;
         } else {
             const limit = loan.interestType === 'SIMPLE' ? 60 : (loan.installments || 1);
             for (let i = 0; i < limit; i++) {
@@ -237,7 +234,6 @@ const Dashboard = () => {
                     const realStatus = getLoanRealStatus(loan);
                     const isOverdueInstallment = currentDue < today || (i === 0 && realStatus === 'Atrasado');
 
-                    // Separando o que é lucro/capital futuro do que é atraso dentro deste período (Acaba com a duplicidade!)
                     if (isOverdueInstallment) {
                         const baseAmount = (i === 0 && realStatus === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
                         const dateStr = `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`;
@@ -276,7 +272,6 @@ const Dashboard = () => {
 
             const tier = loan.interestRate < 10 ? 'low' : loan.interestRate <= 15 ? 'mid' : 'high';
 
-            // Alimentando os acumuladores dos Cards
             capAcc.all += capToAdd;
             capAcc[tier] += capToAdd;
 
@@ -286,15 +281,10 @@ const Dashboard = () => {
             overAcc.all += overToAdd;
             overAcc[tier] += overToAdd;
 
-            // Alimentando o gráfico de pizza (Agora sem duplicidade para Global e Filtro)
-            let capGraph = capToAdd;
-            let profGraph = profToAdd;
+            if (tier === 'low') { rLowCap += capToAdd; rLowProf += profToAdd; } 
+            else if (tier === 'mid') { rMidCap += capToAdd; rMidProf += profToAdd; } 
+            else { rHighCap += capToAdd; rHighProf += profToAdd; }
 
-            if (tier === 'low') { rLowCap += capGraph; rLowProf += profGraph; } 
-            else if (tier === 'mid') { rMidCap += capGraph; rMidProf += profGraph; } 
-            else { rHighCap += capGraph; rHighProf += profGraph; }
-
-            // Alimentando a Tabela de Detalhes
             if (period !== 'todos' && slices.length > 0) {
                 slices.forEach(slice => {
                     filteredContext.push({ 
@@ -422,9 +412,11 @@ const Dashboard = () => {
       });
   }, [filteredLoansContext, allLoans, selectedRange, tierFilters]);
 
+  // LÓGICA DE AGRUPAMENTO E BUSCA DINÂMICA (NOME, CPF, CONTRATO)
   const activeContractsByClient = useMemo(() => {
       if (selectedRange !== 'clients_contracts') return [];
       const map = new Map();
+      
       allLoans.forEach(l => {
           if (l.status === 'Pago' || l.status === 'Quitado') return;
           if (!map.has(l.client)) map.set(l.client, { name: l.client, contracts: [], totalCapital: 0, totalProfit: 0 });
@@ -434,12 +426,28 @@ const Dashboard = () => {
           const breakdown = calculateInstallmentBreakdown(l);
           const { missedCount } = getLoanDetails(l);
           
-          // O detalhamento do cliente agora também respeita a retirada de duplicidade
           c.totalCapital += Math.max(0, calculateCapitalBalance(l) - (missedCount * breakdown.capital));
           c.totalProfit += Math.max(0, calculateRemainingProfit(l) - (missedCount * breakdown.interest));
       });
-      return Array.from(map.values()).sort((a,b) => b.contracts.length - a.contracts.length);
-  }, [allLoans, selectedRange]);
+
+      const result = Array.from(map.values());
+
+      if (!searchTerm) return result.sort((a, b) => b.contracts.length - a.contracts.length);
+
+      const term = searchTerm.toLowerCase();
+      return result.filter(c => {
+          // Busca o CPF do cliente na lista global para comparar
+          const clientInfo = allClients.find(cli => cli.name === c.name);
+          const cpfLimpo = clientInfo?.cpf ? clientInfo.cpf.replace(/\D/g, '') : '';
+          const buscaCpf = term.replace(/\D/g, '');
+
+          const matchNome = c.name.toLowerCase().includes(term);
+          const matchCpf = buscaCpf && cpfLimpo.includes(buscaCpf);
+          const matchContrato = c.contracts.some((cnt: any) => cnt.id.toString().includes(term));
+
+          return matchNome || matchCpf || matchContrato;
+      }).sort((a, b) => b.contracts.length - a.contracts.length);
+  }, [allLoans, allClients, selectedRange, searchTerm]);
 
   const rangeTitles = {
       low: 'Taxa Baixa (< 10%)', mid: 'Taxa Média (10% - 15%)', high: 'Taxa Alta (> 15%)',
@@ -451,8 +459,6 @@ const Dashboard = () => {
        sessionStorage.setItem('searchClient', clientName);
        navigate('/billing');
   }
-
-  const isFluxoAtivo = viewMode === 'fluxo' && period !== 'todos';
 
   return (
     <Layout>
@@ -503,11 +509,32 @@ const Dashboard = () => {
       {selectedRange ? (
           <div className="animate-in slide-in-from-right-10 duration-300">
               <header className="mb-6 flex items-center gap-4">
-                  <button onClick={() => setSelectedRange(null)} className="p-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors shadow-sm"><ArrowLeft size={20}/></button>
+                  <button onClick={() => { setSelectedRange(null); setSearchTerm(''); }} className="p-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors shadow-sm"><ArrowLeft size={20}/></button>
                   <div><h2 className="text-2xl font-bold text-slate-800">{rangeTitles[selectedRange]}</h2><p className="text-slate-500">Detalhamento dos valores baseados na sua seleção.</p></div>
               </header>
               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
                   
+                  {/* BARRA DE PESQUISA INTERNA DO DASHBOARD */}
+                  {selectedRange === 'clients_contracts' && (
+                      <div className="p-4 border-b bg-slate-50/50">
+                          <div className="relative max-w-md">
+                              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                              <input 
+                                  type="text" 
+                                  placeholder="Buscar por nome, CPF ou ID do contrato..." 
+                                  value={searchTerm}
+                                  onChange={(e) => setSearchTerm(e.target.value)}
+                                  className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500/20 shadow-sm text-sm"
+                              />
+                              {searchTerm && (
+                                  <button onClick={() => setSearchTerm('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                                      <X size={14} />
+                                  </button>
+                              )}
+                          </div>
+                      </div>
+                  )}
+
                   {selectedRange === 'clients_contracts' ? (
                       <table className="w-full text-left">
                           <thead>
@@ -527,7 +554,7 @@ const Dashboard = () => {
                                           <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold">{c.contracts.length} ativos</span>
                                       </td>
                                       <td className="p-4 text-center text-[10px] text-slate-400 font-mono tracking-widest">
-                                          {c.contracts.map((cnt: any) => cnt.id.substring(0,6)).join(', ')}
+                                          {c.contracts.map((cnt: any) => cnt.id).join(', ')}
                                       </td>
                                       <td className="p-4 text-right font-bold text-slate-700">R$ {formatMoney(c.totalCapital)}</td>
                                       <td className="p-4 text-right font-bold text-green-600">R$ {formatMoney(c.totalProfit)}</td>
@@ -704,7 +731,7 @@ const Dashboard = () => {
                     <p className="text-2xl font-black text-slate-800 mb-3">{formatMoney(metrics.atrasoGeral[tierFilters.overdue as keyof typeof defaultTiers])}</p>
                 </div>
                 
-                {/* Novo Card Global de Clientes e Contratos */}
+                {/* CARD GLOBAL DE CLIENTES E CONTRATOS ATIVOS */}
                 <div onClick={() => setSelectedRange('clients_contracts')} className="bg-slate-900 p-6 rounded-xl shadow-lg text-white relative overflow-hidden cursor-pointer hover:bg-slate-800 transition-all group">
                     <div className="absolute right-0 top-0 opacity-10 p-2 group-hover:scale-110 transition-transform"><Users size={64} /></div>
                     <h3 className="text-slate-300 text-xs font-bold uppercase mb-1 flex items-center gap-1"><Briefcase size={12}/> Clientes & Contratos</h3>

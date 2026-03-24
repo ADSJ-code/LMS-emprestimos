@@ -612,6 +612,8 @@ func userDetailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// --- LÓGICA DE ID SEQUENCIAL APLICADA AQUI ---
+
 func loansHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -628,9 +630,24 @@ func loansHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var l Loan
 		json.NewDecoder(r.Body).Decode(&l)
+
+		// Lógica de ID Sequencial (ex: 0227)
 		if l.ID == "" {
-			l.ID = primitive.NewObjectID().Hex()
+			// Busca o maior ID numérico existente ignorando hashes aleatórios antigos
+			opts := options.FindOne().SetSort(bson.M{"id": -1})
+			var lastLoan Loan
+			err := loanCollection.FindOne(ctx, bson.M{"id": bson.M{"$regex": "^[0-9]+$"}}, opts).Decode(&lastLoan)
+
+			nextNum := 1
+			if err == nil {
+				if val, err := strconv.Atoi(lastLoan.ID); err == nil {
+					nextNum = val + 1
+				}
+			}
+			// Formata com 4 dígitos (ex: "0001", "0227")
+			l.ID = fmt.Sprintf("%04d", nextNum)
 		}
+
 		loanCollection.InsertOne(ctx, l)
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(l)
@@ -825,6 +842,22 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 
 // --- WhatsApp Controller e Service (Mantendo Original) ---
 
+type CreateInstance struct {
+	Name  string `json:"name"`
+	Phone string `json:"phone"`
+}
+
+type InstanceData struct {
+	InstanceName string `json:"instanceName"`
+	InstanceID   string `json:"instanceId"`
+	Status       string `json:"status"`
+	ApiKey       string `json:"apikey"`
+}
+
+type InstanceResponse struct {
+	Instance InstanceData `json:"instance"`
+}
+
 type WhatsappController struct{ svc WhatsappService }
 
 func NewWhatsappController(s WhatsappService) *WhatsappController { return &WhatsappController{svc: s} }
@@ -985,27 +1018,4 @@ func (s *whatsappService) DisconnectInstance(ctx context.Context, name string) e
 	client := &http.Client{Timeout: 10 * time.Second}
 	client.Do(req)
 	return nil
-}
-
-type ProfileStatus struct {
-	Status string `json:"status"`
-	SetAt  string `json:"setAt"`
-}
-type Integration struct {
-	Integration       string `json:"integration"`
-	Token             string `json:"token"`
-	WebhookWaBusiness string `json:"webhook_wa_business"`
-}
-type InstanceData struct {
-	InstanceName string `json:"instanceName"`
-	InstanceID   string `json:"instanceId"`
-	Status       string `json:"status"`
-	ApiKey       string `json:"apikey"`
-}
-type InstanceResponse struct {
-	Instance InstanceData `json:"instance"`
-}
-type CreateInstance struct {
-	Name  string `json:"name"`
-	Phone string `json:"phone"`
 }
