@@ -177,11 +177,13 @@ const Billing = () => {
       hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: ''
   });
   
-  useEffect(() => {
+useEffect(() => {
     if (formData.client && availableClients.length > 0) {
         const clientProfile = availableClients.find(c => c.name === formData.client);
         
         let pKey = '';
+        let bName = '';
+
         if (clientProfile) {
             const obs = clientProfile.observations || '';
             const metaMatch = obs.match(/\[META:(.*?)\]/);
@@ -189,26 +191,27 @@ const Billing = () => {
                 try {
                     const meta = JSON.parse(metaMatch[1]);
                     pKey = meta.pixKey || '';
+                    bName = meta.bn || meta.bankName || '';
                 } catch (e) {}
-            } else {
-                pKey = (clientProfile as any).pixKey || '';
-            }
+            } 
+            if (!pKey) pKey = (clientProfile as any).pixKey || '';
+            if (!bName) bName = (clientProfile as any).bankName || '';
         }
 
         const lastLoan = loans
           .filter(l => l.client === formData.client)
           .sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime())[0];
 
-        const defaultBank = (clientProfile as any)?.bankName || lastLoan?.clientBank || '';
+        const defaultBank = bName || lastLoan?.clientBank || '';
+        const defaultPix = pKey || lastLoan?.paymentMethod || '';
 
         setFormData(prev => ({
             ...prev,
             clientBank: defaultBank, 
-            paymentMethod: pKey || lastLoan?.paymentMethod || ''
+            paymentMethod: defaultPix
         }));
     }
-  }, [formData.client, availableClients]);
-
+  }, [formData.client, availableClients, loans]);
   const filteredClientsForSelect = useMemo(() => {
       return availableClients.filter(c => 
         c.name.toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
@@ -1014,10 +1017,12 @@ const Billing = () => {
       } catch (e) { alert("Erro ao salvar acordo."); }
   };
 
-  const handleOpenEditContract = (loan: Loan) => {
+const handleOpenEditContract = (loan: Loan) => {
       setSelectedLoan(loan);
       
-      let displayInstallment = loan.installmentValue.toString();
+      // Força a exibição inicial para 2 casas decimais
+      let displayInstallment = Number(loan.installmentValue || 0).toFixed(2);
+      
       if (loan.interestType === 'SIMPLE') {
           let periodRate = loan.interestRate / 100;
           if (loan.frequency === 'SEMANAL') periodRate = periodRate / 4;
@@ -1046,7 +1051,40 @@ const Billing = () => {
       setOpenMenuId(null);
   };
 
-  const confirmEditContract = async () => {
+// Efeito para recalcular a parcela em tempo real durante a edição (Simples e Price)
+  useEffect(() => {
+      if (isEditContractModalOpen && selectedLoan) {
+          const newAmount = parseFloat(editContractData.amount) || 0;
+          const newRate = parseFloat(editContractData.interestRate) || 0;
+          const newInstallments = parseInt(editContractData.installments) || 1;
+          
+          let periodRate = newRate / 100;
+          if (selectedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
+          else if (selectedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
+
+          let calculatedInstallment = 0;
+
+          if (selectedLoan.interestType === 'SIMPLE') {
+              const currentBalance = Math.max(0, newAmount - (selectedLoan.totalPaidCapital || 0));
+              calculatedInstallment = currentBalance * periodRate;
+          } else {
+              // Fórmula PRICE
+              if (periodRate === 0) {
+                  calculatedInstallment = newAmount / newInstallments;
+              } else {
+                  calculatedInstallment = newAmount * ( (periodRate * Math.pow(1 + periodRate, newInstallments)) / (Math.pow(1 + periodRate, newInstallments) - 1) );
+              }
+          }
+
+          // Corta para 2 casas decimais obrigatoriamente
+          const newInstallmentValue = calculatedInstallment.toFixed(2);
+
+          if (editContractData.installmentValue !== newInstallmentValue && calculatedInstallment > 0) {
+              setEditContractData((prev: any) => ({ ...prev, installmentValue: newInstallmentValue }));
+          }
+      }
+  }, [editContractData.amount, editContractData.interestRate, editContractData.installments, isEditContractModalOpen, selectedLoan]);
+const confirmEditContract = async () => {
       if (!selectedLoan || !editContractData.id) return;
       
       if (editContractData.id !== selectedLoan.id && loans.some(l => l.id === editContractData.id)) {
@@ -1055,14 +1093,28 @@ const Billing = () => {
       }
       
       const isSimple = selectedLoan.interestType === 'SIMPLE';
+      const newAmount = parseFloat(editContractData.amount) || selectedLoan.amount;
+      const newInterestRate = parseFloat(editContractData.interestRate) || selectedLoan.interestRate;
+      
+      let newInstallmentValue = parseFloat(editContractData.installmentValue) || selectedLoan.installmentValue;
+
+      // Garantia final de recálculo antes de salvar
+      if (isSimple) {
+          let periodRate = newInterestRate / 100;
+          if (selectedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
+          else if (selectedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
+          
+          const currentBalance = Math.max(0, newAmount - (selectedLoan.totalPaidCapital || 0));
+          newInstallmentValue = currentBalance * periodRate;
+      }
 
       const updatedLoan = { 
           ...selectedLoan, 
           id: editContractData.id,
-          amount: parseFloat(editContractData.amount) || selectedLoan.amount,
-          interestRate: parseFloat(editContractData.interestRate) || selectedLoan.interestRate,
+          amount: newAmount,
+          interestRate: newInterestRate,
           installments: isSimple ? 1 : (parseInt(editContractData.installments) || selectedLoan.installments),
-          installmentValue: isSimple ? selectedLoan.installmentValue : (parseFloat(editContractData.installmentValue) || selectedLoan.installmentValue),
+          installmentValue: newInstallmentValue,
           startDate: editContractData.startDate, 
           nextDue: editContractData.nextDue,
           fineRate: parseFloat(editContractData.fineRate) || 0,

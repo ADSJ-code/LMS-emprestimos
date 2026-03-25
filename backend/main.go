@@ -212,12 +212,14 @@ type User struct {
 }
 
 type CompanySettings struct {
-	Name    string `json:"name" bson:"name"`
-	CNPJ    string `json:"cnpj" bson:"cnpj"`
-	PixKey  string `json:"pixKey" bson:"pixKey"`
-	Email   string `json:"email" bson:"email"`
-	Phone   string `json:"phone" bson:"phone"`
-	Address string `json:"address" bson:"address"`
+	Name     string `json:"name" bson:"name"`
+	CNPJ     string `json:"cnpj" bson:"cnpj"`
+	PixKey   string `json:"pixKey" bson:"pixKey"`
+	Email    string `json:"email" bson:"email"`
+	Phone    string `json:"phone" bson:"phone"`
+	Address  string `json:"address" bson:"address"`
+	City     string `json:"city"`
+	BankName string `json:"bankName"`
 }
 
 type SystemSettings struct {

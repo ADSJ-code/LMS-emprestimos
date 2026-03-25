@@ -330,11 +330,12 @@ export const settingsService = {
         };
     }
   },
-  save: async (settings: any) => {
+save: async (settings: any) => {
     let payload = settings;
     if (!settings.company && settings.name) {
          payload = {
-             company: { name: settings.name, cnpj: settings.cnpj, pixKey: settings.pixKey, email: settings.email, phone: settings.phone, address: settings.address },
+             // O "...settings" faz o sistema enviar TODOS os campos preenchidos, sem jogar nada fora!
+             company: { ...settings }, 
              system: { autoBackup: settings.autoBackup || false, requireLogin: true, warningDays: settings.warningDays || 3 }
          };
     }
