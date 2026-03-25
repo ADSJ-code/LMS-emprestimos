@@ -815,8 +815,10 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 func logsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
 	switch r.Method {
 	case http.MethodGet:
+		// Busca todos os logs do banco de dados (Sincronia total)
 		cursor, _ := logCollection.Find(ctx, bson.M{})
 		var res []LogEntry
 		cursor.All(ctx, &res)
@@ -824,6 +826,24 @@ func logsHandler(w http.ResponseWriter, r *http.Request) {
 			res = []LogEntry{}
 		}
 		json.NewEncoder(w).Encode(res)
+
+	case http.MethodPost:
+		// Recebe uma nova ação do Frontend e grava no MongoDB
+		var entry LogEntry
+		if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+			http.Error(w, "Dados inválidos", http.StatusBadRequest)
+			return
+		}
+
+		// Garante um ID único e o registro da hora certa
+		entry.ID = primitive.NewObjectID().Hex()
+		if entry.Timestamp.IsZero() {
+			entry.Timestamp = time.Now()
+		}
+
+		logCollection.InsertOne(ctx, entry)
+		w.WriteHeader(http.StatusCreated)
+
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}

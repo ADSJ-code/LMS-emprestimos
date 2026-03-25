@@ -47,16 +47,18 @@ const History = () => {
     } catch (e) { return isoString; }
   };
 
-  const fetchAndGenerateLogs = async () => {
+const fetchAndGenerateLogs = async () => {
     setIsLoading(true);
     try {
+      // Agora o sistema confia apenas no servidor (Sincronia Total)
       let backendLogs: any[] = [];
-      try { backendLogs = await historyService.getLogs(); } catch (e) {}
+      try { 
+          backendLogs = await historyService.getLogs(); 
+      } catch (e) {
+          console.error("Erro ao buscar histórico do servidor:", e);
+      }
       
-      let localLogs: any[] = [];
-      try { localLogs = JSON.parse(localStorage.getItem('lms_blackbox_logs') || '[]'); } catch (e) {}
-
-      const mapLog = (l: any): Log => {
+      const mappedLogs = backendLogs.map((l: any): Log => {
           const actionName = l.action || 'Ação Desconhecida';
           const details = l.details || l.target || '';
           
@@ -69,26 +71,13 @@ const History = () => {
             rawDate: l.timestamp || new Date().toISOString(),
             type: determineLogType(actionName, details)
           };
-      };
-
-      const mappedLocal = localLogs.map((l: any) => mapLog(l));
-      const mappedBackend = backendLogs.map((l: any) => mapLog(l));
-
-      const uniqueLogs: Log[] = [];
-      const signatures = new Set();
-      
-      [...mappedLocal, ...mappedBackend].forEach(log => {
-          const sig = `${log.rawDate}-${log.action}-${log.target}`;
-          if (!signatures.has(sig)) {
-              uniqueLogs.push(log);
-              signatures.add(sig);
-          }
       });
 
-      uniqueLogs.sort((a, b) => new Date(b.rawDate).getTime() - new Date(a.rawDate).getTime());
-      setLogs(uniqueLogs);
+      // Ordenar: os registros mais novos no topo
+      mappedLogs.sort((a, b) => new Date(b.rawDate).getTime() - new Date(a.rawDate).getTime());
+      setLogs(mappedLogs);
     } catch (err) {
-      console.error(err);
+      console.error("Falha ao processar histórico:", err);
     } finally {
         setIsLoading(false);
     }
