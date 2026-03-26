@@ -245,6 +245,11 @@ type PaymentRecord struct {
 	OriginalDueDate string  `json:"originalDueDate,omitempty" bson:"originalDueDate,omitempty"`
 }
 
+type MultiDate struct {
+	Day    int     `json:"day" bson:"day"`
+	Amount float64 `json:"amount" bson:"amount"`
+}
+
 type Loan struct {
 	ID                  string          `json:"id" bson:"id"`
 	Client              string          `json:"client" bson:"client"`
@@ -275,6 +280,7 @@ type Loan struct {
 	AffiliateName       string          `json:"affiliateName,omitempty" bson:"affiliateName,omitempty"`
 	AffiliateFee        float64         `json:"affiliateFee,omitempty" bson:"affiliateFee,omitempty"`
 	AffiliateNotes      string          `json:"affiliateNotes,omitempty" bson:"affiliateNotes,omitempty"`
+	MultiDates          []MultiDate     `json:"multiDates,omitempty" bson:"multiDates,omitempty"`
 }
 
 type ClientDoc struct {

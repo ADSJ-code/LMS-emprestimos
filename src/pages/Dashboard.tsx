@@ -85,7 +85,7 @@ const Dashboard = () => {
     return new Date(year, month - 1, day);
   };
 
-  const calculateRemainingProfit = (loan: Loan) => {
+ const calculateRemainingProfit = (loan: Loan) => {
       const amount = Number(loan.amount) || 0;
       const installments = Number(loan.installments) || 0;
       const installmentValue = Number(loan.installmentValue) || 0;
@@ -93,9 +93,14 @@ const Dashboard = () => {
       
       let totalExpectedInterest = Number(loan.projectedProfit) || 0;
       if (totalExpectedInterest <= 0) {
-          if (loan.interestType === 'SIMPLE') totalExpectedInterest = installmentValue * (installments || 1);
-          else totalExpectedInterest = Math.max(0, (installmentValue * installments) - amount);
+          if (loan.interestType === 'SIMPLE') {
+              // No "Só Juros", o lucro é a parcela atual multiplicada pelas parcelas (ou 1 se for recorrente)
+              totalExpectedInterest = installmentValue * (installments || 1);
+          } else {
+              totalExpectedInterest = Math.max(0, (installmentValue * installments) - amount);
+          }
       }
+      // Se já houver lucro pago via histórico, subtraímos do total projetado
       return Math.max(0, totalExpectedInterest - paidInterest);
   };
 
@@ -195,117 +200,95 @@ const Dashboard = () => {
 
       safeLoans.forEach((loan: any) => {
         const isPaid = loan.status === 'Pago' || loan.status === 'Quitado';
-        
         if (!isPaid) {
             totalGloballyActive++;
             activeDebtors.add(loan.client);
         }
-        
         if (isPaid) return;
 
         const breakdown = calculateInstallmentBreakdown(loan);
         const { totalOverdue, missedCount } = getLoanDetails(loan);
-        
         const remProfit = calculateRemainingProfit(loan);
-        const futureProfitTotal = Math.max(0, remProfit - (missedCount * breakdown.interest));
         
+        const futureProfitTotal = Math.max(0, remProfit - (missedCount * breakdown.interest));
         const capBalance = calculateCapitalBalance(loan);
         const futureCapitalTotal = Math.max(0, capBalance - (missedCount * breakdown.capital));
 
         let currentDue = parseLocalDate(loan.nextDue);
-        
         let hasMatch = false;
         let capToAdd = 0;
         let profToAdd = 0;
         let overToAdd = 0;
         let slices: any[] = []; 
 
-        if (!startFilter || !endFilter) {
-            hasMatch = true;
-            capToAdd = futureCapitalTotal;
-            profToAdd = futureProfitTotal;
-            overToAdd = totalOverdue;
-        } else {
-            const limit = loan.interestType === 'SIMPLE' ? 60 : (loan.installments || 1);
-            for (let i = 0; i < limit; i++) {
-                if (currentDue >= startFilter && currentDue <= endFilter) {
-                    hasMatch = true;
-                    
-                    const realStatus = getLoanRealStatus(loan);
-                    const isOverdueInstallment = currentDue < today || (i === 0 && realStatus === 'Atrasado');
+        const isMulti = loan.multiDates && loan.multiDates.length > 0;
+        const limit = loan.interestType === 'SIMPLE' ? 60 : (loan.installments || 1);
 
-                    if (isOverdueInstallment) {
-                        const baseAmount = (i === 0 && realStatus === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
-                        const dateStr = `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`;
-                        overToAdd += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+        for (let i = 0; i < limit; i++) {
+            // Verificação segura para o TypeScript
+            const inRange = !startFilter || !endFilter || (currentDue >= startFilter && currentDue <= endFilter);
+            
+            if (inRange) {
+                hasMatch = true;
+                const realStatus = getLoanRealStatus(loan);
+                const isOverdueInstallment = currentDue < today || (i === 0 && realStatus === 'Atrasado');
+
+                if (isOverdueInstallment) {
+                    const baseAmount = (i === 0 && realStatus === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
+                    const dateStr = `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`;
+                    overToAdd += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+                } else if (isMulti) {
+                    loan.multiDates.forEach((md: any, idx: number) => {
+                        const sliceDate = new Date(currentDue.getFullYear(), currentDue.getMonth(), md.day);
                         
-                        slices.push({
-                            date: `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`,
-                            capital: 0, 
-                            interest: 0, 
-                            index: i,
-                            isOverdue: true
-                        });
-                    } else {
-                        capToAdd += breakdown.capital;
-                        profToAdd += breakdown.interest;
+                        // Verificação segura para fatias
+                        const sliceInRange = !startFilter || !endFilter || (sliceDate >= startFilter && sliceDate <= endFilter);
                         
-                        slices.push({
-                            date: `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`,
-                            capital: breakdown.capital,
-                            interest: breakdown.interest,
-                            index: i,
-                            isOverdue: false
-                        });
-                    }
+                        if (sliceInRange) {
+                            const ratio = breakdown.interest / (breakdown.total || 1);
+                            const sInt = md.amount * ratio;
+                            const sCap = md.amount - sInt;
+                            capToAdd += sCap;
+                            profToAdd += sInt;
+                            slices.push({ date: sliceDate.toISOString(), capital: sCap, interest: sInt, index: `${i}-${idx}`, isSlice: true });
+                        }
+                    });
+                } else {
+                    capToAdd += breakdown.capital;
+                    profToAdd += breakdown.interest;
+                    slices.push({ date: currentDue.toISOString(), capital: breakdown.capital, interest: breakdown.interest, index: i, isSlice: false });
                 }
-                if (currentDue > endFilter) break;
-
-                if (loan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
-                else if (loan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
-                else currentDue.setMonth(currentDue.getMonth() + 1);
             }
+            
+            // Trava de segurança para o loop não ser infinito
+            if (startFilter && endFilter && currentDue > endFilter) break;
+            
+            if (loan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
+            else if (loan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
+            else currentDue.setMonth(currentDue.getMonth() + 1);
         }
 
         if (hasMatch) {
             uniqueMatchedContracts.add(loan.id);
-
             const tier = loan.interestRate < 10 ? 'low' : loan.interestRate <= 15 ? 'mid' : 'high';
-
-            capAcc.all += capToAdd;
-            capAcc[tier] += capToAdd;
-
-            profAcc.all += profToAdd;
-            profAcc[tier] += profToAdd;
-
-            overAcc.all += overToAdd;
-            overAcc[tier] += overToAdd;
+            capAcc.all += capToAdd; capAcc[tier] += capToAdd;
+            profAcc.all += profToAdd; profAcc[tier] += profToAdd;
+            overAcc.all += overToAdd; overAcc[tier] += overToAdd;
 
             if (tier === 'low') { rLowCap += capToAdd; rLowProf += profToAdd; } 
             else if (tier === 'mid') { rMidCap += capToAdd; rMidProf += profToAdd; } 
             else { rHighCap += capToAdd; rHighProf += profToAdd; }
 
-            if (period !== 'todos' && slices.length > 0) {
-                slices.forEach(slice => {
-                    filteredContext.push({ 
-                        ...loan, 
-                        uniqueSliceId: `${loan.id}-slice-${slice.index}`,
-                        projectedDate: slice.date,
-                        projectedCapitalForPeriod: slice.capital, 
-                        projectedInterestForPeriod: slice.interest,
-                        isOverdueSlice: slice.isOverdue
-                    });
-                });
-            } else {
+            slices.forEach(s => {
                 filteredContext.push({ 
                     ...loan, 
-                    uniqueSliceId: loan.id,
-                    projectedDate: loan.nextDue,
-                    projectedCapitalForPeriod: capToAdd, 
-                    projectedInterestForPeriod: profToAdd,
-                    isOverdueSlice: getLoanRealStatus(loan) === 'Atrasado'
+                    uniqueSliceId: `${loan.id}-${s.index}`,
+                    isActualSlice: s.isSlice, 
+                    projectedDate: s.date,
+                    projectedCapitalForPeriod: s.capital, 
+                    projectedInterestForPeriod: s.interest
                 });
-            }
+            });
         }
       });
 
@@ -382,7 +365,7 @@ const Dashboard = () => {
               if (tierFilters.overdue === 'high') passTier = l.interestRate > 15;
 
               return isOverdue && contextIds.has(l.id) && passTier;
-          });
+          }).sort((a, b) => a.client.localeCompare(b.client)); // ORDENAÇÃO ALFABÉTICA (A-Z) APLICADA AQUI
       }
 
       return filteredLoansContext.filter(l => {
@@ -409,10 +392,9 @@ const Dashboard = () => {
           if (selectedRange === 'mid') return l.interestRate >= 10 && l.interestRate <= 15;
           if (selectedRange === 'high') return l.interestRate > 15;
           return false;
-      });
+      }).sort((a, b) => a.client.localeCompare(b.client)); // ORDENAÇÃO ALFABÉTICA (A-Z) APLICADA AQUI
   }, [filteredLoansContext, allLoans, selectedRange, tierFilters]);
-
-  // LÓGICA DE AGRUPAMENTO E BUSCA DINÂMICA (NOME, CPF, CONTRATO)
+// LÓGICA DE AGRUPAMENTO E BUSCA DINÂMICA (NOME, CPF, CONTRATO)
   const activeContractsByClient = useMemo(() => {
       if (selectedRange !== 'clients_contracts') return [];
       const map = new Map();
@@ -432,7 +414,8 @@ const Dashboard = () => {
 
       const result = Array.from(map.values());
 
-      if (!searchTerm) return result.sort((a, b) => b.contracts.length - a.contracts.length);
+      // Ordenação Alfabética (A-Z) quando não há busca
+      if (!searchTerm) return result.sort((a, b) => a.name.localeCompare(b.name));
 
       const term = searchTerm.toLowerCase();
       return result.filter(c => {
@@ -446,9 +429,9 @@ const Dashboard = () => {
           const matchContrato = c.contracts.some((cnt: any) => cnt.id.toString().includes(term));
 
           return matchNome || matchCpf || matchContrato;
-      }).sort((a, b) => b.contracts.length - a.contracts.length);
+      // Ordenação Alfabética (A-Z) quando há busca
+      }).sort((a, b) => a.name.localeCompare(b.name));
   }, [allLoans, allClients, selectedRange, searchTerm]);
-
   const rangeTitles = {
       low: 'Taxa Baixa (< 10%)', mid: 'Taxa Média (10% - 15%)', high: 'Taxa Alta (> 15%)',
       capital: 'Detalhamento de Capital', profit: 'Detalhamento de Lucro', overdue: 'Contratos em Atraso (Bola de Neve)', active: 'Carteira de Contratos no Filtro',
@@ -593,26 +576,15 @@ const Dashboard = () => {
                                           </td>
                                           
                                           <td className="p-4 text-center text-sm font-medium">
-                                              {selectedRange === 'overdue' ? (
-                                                  <>
-                                                      <div className="flex items-center justify-center gap-1 text-red-600 font-bold">
-                                                          <Calendar size={12}/>
-                                                          {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
-                                                      </div>
-                                                      <div className="text-[9px] text-red-400 font-bold uppercase tracking-wider mt-0.5">Pendente</div>
-                                                  </>
-                                              ) : period === 'todos' ? (
-                                                  <>
-                                                      {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
-                                                      <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Atual</div>
-                                                  </>
-                                              ) : (
-                                                  <>
-                                                      {parseLocalDate(loan.projectedDate).toLocaleDateString('pt-BR')}
-                                                      {loan.isOverdueSlice && <div className="text-[9px] text-red-500 font-bold uppercase tracking-wider mt-0.5">(Já em Atraso)</div>}
-                                                  </>
-                                              )}
-                                          </td>
+    <div className="flex items-center justify-center gap-1 font-bold text-slate-700">
+        <Calendar size={12} className="text-blue-500"/>
+        {new Date(loan.projectedDate).toLocaleDateString('pt-BR')}
+    </div>
+    {/* A etiqueta azul agora depende apenas deste campo que criamos no motor */}
+    {loan.isActualSlice && (
+        <div className="text-[10px] text-blue-600 font-black uppercase tracking-tighter mt-1 bg-blue-50 px-1 rounded inline-block">Fatia da Parcela</div>
+    )}
+</td>
 
                                           <td className="p-4 text-center font-bold text-slate-600">{loan.interestRate}%</td>
                                           

@@ -203,33 +203,46 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client, setti
     addText(`1.3 O Valor do Mútuo deverá ser restituído em sua integralidade pelo MUTUÁRIO ao MUTUANTE, respeitando-se os juros e correção pactuados na cláusula 1.2 acima, até o término do prazo de vigência do presente contrato, qual seja, até o pagamento da parcela.`);
     addText(`1.4 Caso o MUTUÁRIO deixe de pagar integralmente o Valor do Mútuo e seus acessórios no prazo estipulado na cláusula 1.3 acima, o saldo devedor corrigido na data do término de referido prazo ficará sujeito a juros moratórios à taxa de 20% (vinte por cento) ao ano, multa de mora na ordem de 3% (três por cento) sobre o valor atualizado do débito e correção monetária.`);
 
-    y += 5;
+y += 5;
     addText("Cláusula Segunda – DO PRAZO DE VIGÊNCIA", true);
     
     const totalInst = getOriginalInstallmentsCount(loan);
     const isSimple = loan.interestType === 'SIMPLE';
     let baseDate = new Date(loan.nextDue || loan.startDate);
     baseDate.setMinutes(baseDate.getMinutes() + baseDate.getTimezoneOffset());
+    
+    const hasMultiDates = loan.multiDates && loan.multiDates.length > 0;
+    const targetDay = hasMultiDates ? Math.max(...loan.multiDates!.map(m => m.day)) : baseDate.getDate();
+    
     let datesText = "";
     for (let i = 1; i <= totalInst; i++) {
         const pDate = new Date(baseDate);
-        if (loan.frequency === 'SEMANAL') pDate.setDate(baseDate.getDate() + (7 * (i - 1)));
-        else if (loan.frequency === 'DIARIO') pDate.setDate(baseDate.getDate() + (1 * (i - 1)));
-        else pDate.setMonth(baseDate.getMonth() + (i - 1));
+        if (hasMultiDates) pDate.setDate(targetDay); // Força a usar o maior dia do multi-data
+        
+        if (loan.frequency === 'SEMANAL') pDate.setDate(pDate.getDate() + (7 * (i - 1)));
+        else if (loan.frequency === 'DIARIO') pDate.setDate(pDate.getDate() + (1 * (i - 1)));
+        else pDate.setMonth(pDate.getMonth() + (i - 1));
+        
         datesText += pDate.toLocaleDateString('pt-BR') + (i === totalInst ? "" : ", ");
     }
 
-    // CORREÇÃO: "UM REAL" para "UMA" e pluralização de "parcela(s)"
     const instTextNum = totalInst.toString().padStart(2, '0');
     const instTextExt = numeroParaExtensoParcelas(totalInst).toUpperCase();
     const palavraParcela = totalInst === 1 ? "parcela" : "parcelas";
     const totalRepayment = isSimple ? (Number(loan.amount) * (1 + (loan.interestRate / 100))) : (loan.installmentValue || 0);
 
-    addText(`2.1. O presente Contrato entra em vigor na data de sua assinatura, e sua vigência perdurará nas seguintes datas: ${datesText} de cada mês a contar dessa data, findo o qual o MUTUÁRIO deverá efetuar a restituição ao MUTUANTE do Valor do Mútuo, acrescido da taxa de remuneração, perfazendo o em ${instTextNum} (${instTextExt}) ${palavraParcela} no valor de ${formatMoney(totalRepayment)} ( ${valorParaExtenso(totalRepayment).toUpperCase()} ), através de transferência para a conta corrente do MUTUANTE, ${lenderBank} NA QUAL A CHAVE PIX É O CNPJ: ${lenderCNPJ}, sob pena de, independentemente de qualquer notificação, judicial ou extrajudicial, ficar constituído em mora, autorizada a aplicação de sanções previstas na cláusula 1.4.`);
-    addText("2.2. Poderão as Partes prorrogar o prazo de vigência deste Contrato, mediante aditamento ao presente subscrito por elas juntamente com duas testemunhas.");
+    // TEXTO INTELIGENTE (SEM DETALHAR MULTI-DATA)
+    let textoVigencia = "";
+    if (isSimple) {
+        textoVigencia = `A vigência perdurará com pagamentos mensais contínuos de juros, com vencimento todo dia ${targetDay} de cada mês`;
+    } else if (totalInst === 1) {
+        textoVigencia = `A vigência perdurará até a data exata de ${datesText.replace(', ', '')}`;
+    } else {
+        textoVigencia = `A vigência perdurará nas seguintes datas: ${datesText}`;
+    }
 
-    y += 5;
-    addText("Cláusula Terceira – DAS DISPOSIÇÕES GERAIS", true);
+    addText(`2.1. O presente Contrato entra em vigor na data de sua assinatura. ${textoVigencia}, findo o qual o MUTUÁRIO deverá efetuar a restituição ao MUTUANTE do Valor do Mútuo, acrescido da taxa de remuneração, perfazendo o total em ${instTextNum} (${instTextExt}) ${palavraParcela} no valor de ${formatMoney(totalRepayment)} (${valorParaExtenso(totalRepayment).toUpperCase()}), através de transferência para a conta corrente do MUTUANTE, ${lenderBank} NA QUAL A CHAVE PIX É O CNPJ: ${lenderCNPJ}, sob pena de ficar constituído em mora, autorizada a aplicação das sanções previstas na cláusula 1.4.`);
+    addText("2.2. Poderão as Partes prorrogar o prazo de vigência deste Contrato, mediante aditamento ao presente subscrito por elas juntamente com duas testemunhas.");    addText("Cláusula Terceira – DAS DISPOSIÇÕES GERAIS", true);
     addText("3.1. O MUTUÁRIO arcará com todos e quaisquer tributos e despesas de qualquer natureza incidentes sobre ou decorrentes da presente avença, bem como arcará com os demais custos e despesas dela decorrentes.");
     addText("3.2. Todas as obrigações assumidas neste Contrato são irretratáveis e irrevogáveis.");
     addText("3.3. O MUTUÁRIO não poderá ceder quaisquer de seus direitos, interesses ou obrigações estabelecidas no presente Contrato sem o prévio consentimento por escrito do MUTUANTE, e qualquer tentativa de cessão do presente Contrato sem o mencionado consentimento será considerada nula e sem efeito.");
@@ -295,11 +308,19 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client, set
 
     for (let i = 1; i <= totalInst; i++) {
         if (i % 2 !== 0 && i > 1) doc.addPage();
-        const startY = (i % 2 === 0) ? 148.5 : 10;
-        const pDate = new Date(baseDate);
-        if (loan.frequency === 'SEMANAL') pDate.setDate(baseDate.getDate() + (7 * (i - 1)));
-        else if (loan.frequency === 'DIARIO') pDate.setDate(baseDate.getDate() + (1 * (i - 1)));
-        else pDate.setMonth(baseDate.getMonth() + (i - 1));
+const startY = (i % 2 === 0) ? 148.5 : 10;
+        
+        const hasMultiDates = loan.multiDates && loan.multiDates.length > 0;
+        let pDate = new Date(baseDate);
+        
+        if (hasMultiDates) {
+            const maxDay = Math.max(...loan.multiDates!.map(m => m.day));
+            pDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + (i - 1), maxDay);
+        } else {
+            if (loan.frequency === 'SEMANAL') pDate.setDate(baseDate.getDate() + (7 * (i - 1)));
+            else if (loan.frequency === 'DIARIO') pDate.setDate(baseDate.getDate() + (1 * (i - 1)));
+            else pDate.setMonth(baseDate.getMonth() + (i - 1));
+        }
 
         const val = loan.interestType === 'SIMPLE' ? (Number(loan.amount) * (1 + (loan.interestRate / 100))) : loan.installmentValue;
 
@@ -315,7 +336,6 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client, set
         doc.text(`Vencimento: ${pDate.getDate()} de ${MESES_EXTENSO[pDate.getMonth()]} de ${pDate.getFullYear()}`, 185, startY + 12, { align: "right" });
 
         doc.setFont("times", "bold"); doc.text(`R$  ${formatMoney(val).replace('R$', '').trim()}`, 185, startY + 22, { align: 'right' });
-
         doc.setFont("times", "normal");
         const diaExt = DIAS_EXTENSO[pDate.getDate()];
         const anoExt = ANOS_EXTENSO[pDate.getFullYear()] || pDate.getFullYear().toString();

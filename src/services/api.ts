@@ -11,6 +11,12 @@ export interface PaymentRecord {
   originalDueDate?: string; 
 }
 
+// NOVA INTERFACE PARA O PAGAMENTO MÚLTIPLO
+export interface MultiDate {
+  day: number;
+  amount: number;
+}
+
 export interface Loan {
   id: string;
   client: string;
@@ -41,6 +47,7 @@ export interface Loan {
   guarantorName?: string;
   guarantorCPF?: string;
   guarantorAddress?: string;
+  multiDates?: MultiDate[]; // NOVO CAMPO ADICIONADO
 }
 
 export interface ClientDoc {
