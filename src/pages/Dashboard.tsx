@@ -85,7 +85,51 @@ const Dashboard = () => {
     return new Date(year, month - 1, day);
   };
 
- const calculateRemainingProfit = (loan: Loan) => {
+  // --- O NOVO MOTOR BLINDADO (Importado do Billing) ---
+  const getSyncedBreakdown = (loan: Loan | null) => {
+    if (!loan) return { interest: 0, capital: 0, total: 0 };
+    
+    if (loan.interestType === 'SIMPLE') {
+        const dueDate = new Date(loan.nextDue);
+        const cycleStart = new Date(dueDate);
+        cycleStart.setMonth(cycleStart.getMonth() - 1);
+        cycleStart.setHours(23, 59, 59, 999);
+
+        let capitalPaidInThisCycle = 0;
+        if (loan.history) {
+            loan.history.forEach(h => {
+                const hDate = new Date(h.date);
+                if (hDate > cycleStart && !h.note?.includes('[CICLO COMPLETADO]')) {
+                    capitalPaidInThisCycle += (Number(h.capitalPaid) || 0);
+                }
+            });
+        }
+
+        const principalAtStartOfMonth = (Number(loan.amount) - (Number(loan.totalPaidCapital) || 0)) + capitalPaidInThisCycle;
+        let periodRate = Number(loan.interestRate) / 100;
+        if (loan.frequency === 'SEMANAL') periodRate /= 4;
+        else if (loan.frequency === 'DIARIO') periodRate /= 30;
+
+        const dynamicInterest = principalAtStartOfMonth * periodRate;
+        let extraAcordo = 0;
+        if (loan.status === 'Acordo' && (Number(loan.agreementValue) || 0) > 0) extraAcordo = Number(loan.agreementValue);
+        
+        return { interest: dynamicInterest + extraAcordo, capital: 0, total: dynamicInterest + extraAcordo };
+    } else {
+        const totalReceivable = Number(loan.amount) + (Number(loan.projectedProfit) || 0);
+        const originalInstallments = Math.max(1, Math.round(totalReceivable / (Number(loan.installmentValue) || 1)));
+        const flatInterest = (Number(loan.projectedProfit) || 0) / originalInstallments;
+        const flatCapital = Number(loan.installmentValue) - flatInterest;
+        let extraAcordo = 0;
+        if (loan.status === 'Acordo' && (Number(loan.agreementValue) || 0) > 0) extraAcordo = Number(loan.agreementValue);
+        return { interest: Math.max(0, flatInterest) + extraAcordo, capital: Math.max(0, flatCapital), total: Number(loan.installmentValue) + extraAcordo };
+    }
+  };
+
+  const calculateRemainingProfit = (loan: Loan) => {
+      // CORREÇÃO: "Só Juros" o lucro a receber é SEMPRE e APENAS o juros do mês atual.
+      if (loan.interestType === 'SIMPLE') return getSyncedBreakdown(loan).interest;
+
       const amount = Number(loan.amount) || 0;
       const installments = Number(loan.installments) || 0;
       const installmentValue = Number(loan.installmentValue) || 0;
@@ -93,14 +137,8 @@ const Dashboard = () => {
       
       let totalExpectedInterest = Number(loan.projectedProfit) || 0;
       if (totalExpectedInterest <= 0) {
-          if (loan.interestType === 'SIMPLE') {
-              // No "Só Juros", o lucro é a parcela atual multiplicada pelas parcelas (ou 1 se for recorrente)
-              totalExpectedInterest = installmentValue * (installments || 1);
-          } else {
-              totalExpectedInterest = Math.max(0, (installmentValue * installments) - amount);
-          }
+          totalExpectedInterest = Math.max(0, (installmentValue * installments) - amount);
       }
-      // Se já houver lucro pago via histórico, subtraímos do total projetado
       return Math.max(0, totalExpectedInterest - paidInterest);
   };
 
@@ -112,13 +150,16 @@ const Dashboard = () => {
       let count = 0;
       
       const realStatus = getLoanRealStatus(loan);
-      const baseAmount = realStatus === 'Acordo' ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
-      const remainingInstallments = loan.interestType === 'SIMPLE' ? 999 : (loan.installments || 1);
+      const breakdown = getSyncedBreakdown(loan);
+      const baseAmount = loan.interestType === 'SIMPLE' ? breakdown.total : (realStatus === 'Acordo' ? Number(loan.installmentValue) + Number(loan.agreementValue || 0) : Number(loan.installmentValue));
+      
+      // CORREÇÃO: No "Só Juros" a parcela não se acumula, ele pune apenas a ativa atual.
+      const remainingInstallments = loan.interestType === 'SIMPLE' ? 1 : (loan.installments || 1);
       const pad = (n: number) => n.toString().padStart(2, '0');
       
       while (tempDue < today) {
           const dateStr = `${tempDue.getFullYear()}-${pad(tempDue.getMonth() + 1)}-${pad(tempDue.getDate())}`;
-          totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+          totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), Number(loan.amount || 0));
           missedCount++;
           
           if (realStatus === 'Acordo') break; 
@@ -159,7 +200,8 @@ const Dashboard = () => {
       setAllLoans(safeLoans); 
       setAllClients(clients || []);
       
-      const today = getToday();
+      const today = new Date();
+      today.setHours(0,0,0,0);
       
       let startFilter: Date | null = null;
       let endFilter: Date | null = null;
@@ -206,7 +248,7 @@ const Dashboard = () => {
         }
         if (isPaid) return;
 
-        const breakdown = calculateInstallmentBreakdown(loan);
+        const breakdown = getSyncedBreakdown(loan);
         const { totalOverdue, missedCount } = getLoanDetails(loan);
         const remProfit = calculateRemainingProfit(loan);
         
@@ -222,15 +264,15 @@ const Dashboard = () => {
         let slices: any[] = []; 
 
         const isMulti = loan.multiDates && loan.multiDates.length > 0;
-        const limit = loan.interestType === 'SIMPLE' ? 60 : (loan.installments || 1);
+        const limit = loan.interestType === 'SIMPLE' ? 1 : (loan.installments || 1);
 
         for (let i = 0; i < limit; i++) {
-            // Verificação segura para o TypeScript
+            // Verificação de período segura contra erros de 'null'
             const inRange = !startFilter || !endFilter || (currentDue >= startFilter && currentDue <= endFilter);
             
             if (inRange) {
                 hasMatch = true;
-                const realStatus = getLoanRealStatus(loan);
+                const realStatus = loan.status;
                 const isOverdueInstallment = currentDue < today || (i === 0 && realStatus === 'Atrasado');
 
                 if (isOverdueInstallment) {
@@ -240,8 +282,6 @@ const Dashboard = () => {
                 } else if (isMulti) {
                     loan.multiDates.forEach((md: any, idx: number) => {
                         const sliceDate = new Date(currentDue.getFullYear(), currentDue.getMonth(), md.day);
-                        
-                        // Verificação segura para fatias
                         const sliceInRange = !startFilter || !endFilter || (sliceDate >= startFilter && sliceDate <= endFilter);
                         
                         if (sliceInRange) {
@@ -259,10 +299,7 @@ const Dashboard = () => {
                     slices.push({ date: currentDue.toISOString(), capital: breakdown.capital, interest: breakdown.interest, index: i, isSlice: false });
                 }
             }
-            
-            // Trava de segurança para o loop não ser infinito
             if (startFilter && endFilter && currentDue > endFilter) break;
-            
             if (loan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
             else if (loan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
             else currentDue.setMonth(currentDue.getMonth() + 1);
@@ -279,21 +316,32 @@ const Dashboard = () => {
             else if (tier === 'mid') { rMidCap += capToAdd; rMidProf += profToAdd; } 
             else { rHighCap += capToAdd; rHighProf += profToAdd; }
 
-            slices.forEach(s => {
+            // Se for visão "Todos", consolida o contrato em 1 linha só. Se tiver filtro de data, detalha mês a mês.
+            if (period === 'todos') {
                 filteredContext.push({ 
                     ...loan, 
-                    uniqueSliceId: `${loan.id}-${s.index}`,
-                    isActualSlice: s.isSlice, 
-                    projectedDate: s.date,
-                    projectedCapitalForPeriod: s.capital, 
-                    projectedInterestForPeriod: s.interest
+                    uniqueSliceId: loan.id,
+                    isActualSlice: false, 
+                    projectedDate: loan.nextDue,
+                    projectedCapitalForPeriod: capToAdd, 
+                    projectedInterestForPeriod: profToAdd
                 });
-            });
+            } else {
+                slices.forEach(s => {
+                    filteredContext.push({ 
+                        ...loan, 
+                        uniqueSliceId: `${loan.id}-${s.index}`,
+                        isActualSlice: s.isSlice, 
+                        projectedDate: s.date,
+                        projectedCapitalForPeriod: s.capital, 
+                        projectedInterestForPeriod: s.interest
+                    });
+                });
+            }
         }
       });
 
       setFilteredLoansContext(filteredContext);
-
       setMetrics({
         capitalNaRua: capAcc,
         lucroProjetado: profAcc,
@@ -308,8 +356,7 @@ const Dashboard = () => {
 
       const activities = [...safeLoans].sort((a, b) => new Date(b.nextDue).getTime() - new Date(a.nextDue).getTime()).slice(0, 6).map((loan: any) => {
         const dueDate = parseLocalDate(loan.nextDue);
-        const realStatus = getLoanRealStatus(loan);
-        const isOverdue = dueDate < today && realStatus !== 'Quitado';
+        const isOverdue = dueDate < today && loan.status !== 'Pago' && loan.status !== 'Quitado';
         return {
           id: loan.id,
           type: isOverdue ? 'atraso' : 'novo_contrato',
@@ -320,7 +367,8 @@ const Dashboard = () => {
       });
       setRecentActivities(activities);
 
-    } catch (error) { console.error(error); } finally { setLoading(false); }
+    } catch (error) { console.error(error); } 
+    finally { setLoading(false); }
   };
 
   useEffect(() => { 
@@ -576,15 +624,29 @@ const Dashboard = () => {
                                           </td>
                                           
                                           <td className="p-4 text-center text-sm font-medium">
-    <div className="flex items-center justify-center gap-1 font-bold text-slate-700">
-        <Calendar size={12} className="text-blue-500"/>
-        {new Date(loan.projectedDate).toLocaleDateString('pt-BR')}
-    </div>
-    {/* A etiqueta azul agora depende apenas deste campo que criamos no motor */}
-    {loan.isActualSlice && (
-        <div className="text-[10px] text-blue-600 font-black uppercase tracking-tighter mt-1 bg-blue-50 px-1 rounded inline-block">Fatia da Parcela</div>
-    )}
-</td>
+                                              {selectedRange === 'overdue' ? (
+                                                  <>
+                                                      <div className="flex items-center justify-center gap-1 text-red-600 font-bold">
+                                                          <Calendar size={12}/>
+                                                          {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
+                                                      </div>
+                                                      <div className="text-[9px] text-red-400 font-bold uppercase tracking-wider mt-0.5">Pendente</div>
+                                                  </>
+                                              ) : (
+                                                  <>
+                                                      <div className="flex items-center justify-center gap-1 font-bold text-slate-700">
+                                                          <Calendar size={12} className="text-blue-500"/>
+                                                          {parseLocalDate(loan.projectedDate || loan.nextDue).toLocaleDateString('pt-BR')}
+                                                      </div>
+                                                      {/* Selo de Raio-X vindo do Motor */}
+        {loan.isActualSlice && (
+            <div className="text-[10px] text-blue-600 font-black uppercase tracking-tighter mt-1 bg-blue-50 px-1 rounded inline-block">Fatia da Parcela</div>
+        )}
+        {parseLocalDate(loan.projectedDate || loan.nextDue) < getToday() && getLoanRealStatus(loan) === 'Atrasado' && (
+            <div className="text-[9px] text-red-500 font-bold uppercase tracking-wider mt-0.5">(Vencimento em Atraso)</div>
+        )}       </>
+                                              )}
+                                          </td>
 
                                           <td className="p-4 text-center font-bold text-slate-600">{loan.interestRate}%</td>
                                           
