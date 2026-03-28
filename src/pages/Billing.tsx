@@ -768,6 +768,7 @@ const Billing = () => {
       let capSum = 0;
       let intSum = 0;
       let expectedProfitSum = 0;
+      let installmentSum = 0; // NOVA VARIÁVEL AQUI
       let count = 0;
 
       filteredLoans.forEach(loan => {
@@ -775,6 +776,9 @@ const Billing = () => {
               intSum += (loan.totalPaidInterest || 0);
               const isSimple = loan.interestType === 'SIMPLE';
               const breakdown = getSyncedBreakdown(loan);
+              
+              // SOMA DA PARCELA FIXA
+              installmentSum += isSimple ? breakdown.total : Number(loan.installmentValue || 0);
               
               if (filterStart && filterEnd && statusFilter !== 'PagosNoPeriodo') {
                   const dueDate = new Date(loan.nextDue.split('T')[0]);
@@ -799,9 +803,8 @@ const Billing = () => {
           }
       });
 
-      return { capital: capSum, interest: intSum, expectedProfit: expectedProfitSum, count };
+      return { capital: capSum, interest: intSum, expectedProfit: expectedProfitSum, installment: installmentSum, count };
   }, [filteredLoans, selectedIds, filterStart, filterEnd, statusFilter]);
-
   const handleOpenPayment = (loan: Loan) => {
     setSelectedLoan(loan);
     const now = new Date();
@@ -1842,9 +1845,9 @@ const finalMultiDates = formData.isMultiDate ? formData.multiDates.map(md => {
                     <td className="p-4 text-right font-black text-green-600 text-lg" title="Soma dos Juros já recebidos">
                         R$ {formatMoney(tableTotals.interest)}
                     </td>
-                    <td className="p-4 text-right font-black text-blue-600 text-lg" title="Soma do Lucro/Juros esperado dos contratos">
-                        R$ {formatMoney(tableTotals.expectedProfit)}
-                        <span className="block text-[9px] text-slate-400 font-bold mt-1 uppercase">Lucro Esperado</span>
+                    <td className="p-4 text-right font-black text-slate-500 text-lg" title="Soma das Parcelas Fixas">
+                        R$ {formatMoney(tableTotals.installment)}
+                        <span className="block text-[9px] text-slate-400 font-bold mt-1 uppercase">Total Parcelas</span>
                     </td>
                     <td colSpan={2}></td>
                 </tr>

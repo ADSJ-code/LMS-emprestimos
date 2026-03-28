@@ -29,7 +29,7 @@ const Clients = () => {
   
   const [globalMetricModal, setGlobalMetricModal] = useState<'base' | 'ativos' | 'emprestado' | 'lucro' | null>(null);
   const [isCepLoading, setIsCepLoading] = useState(false);
-  const [clientType, setClientType] = useState<'PF' | 'PJ'>('PF'); // NOVO ESTADO AQUI
+  const [clientType, setClientType] = useState<'PF' | 'PJ'>('PF');
 
   const [formData, setFormData] = useState<Partial<Client> & {justification?: string, 
     checklist?: string[],
@@ -241,7 +241,7 @@ const Clients = () => {
     );
   }, [processedClients, searchTerm]);
 
-// SISTEMA DE DESEMPACOTAMENTO DE DADOS (IMPEDE A PERDA DO PIX)
+  // SISTEMA DE DESEMPACOTAMENTO DE DADOS (IMPEDE A PERDA DO PIX E DADOS ANTIGOS)
   const handleOpenModal = (client?: any, defaultTab: 'dados' | 'financeiro' | 'analise' = 'dados') => {
     setModalTab(defaultTab); 
     if (client) {
@@ -261,11 +261,12 @@ const Clients = () => {
       let displayObs = client.observations || '';
       let metaData: any = {};
 
-      const metaMatch = displayObs.match(/\[META:(.*?)\]/);
+      // REGEX BLINDADA PARA LER CORRETAMENTE O JSON DO BANCO
+      const metaMatch = displayObs.match(/\[META:(\{.*\})\]/);
       if (metaMatch) {
           try {
               metaData = JSON.parse(metaMatch[1]);
-              displayObs = displayObs.replace(/\[META:.*?\]/g, '').trim();
+              displayObs = displayObs.replace(/\[META:\{.*\}\]/g, '').trim();
           } catch (e) {}
       }
 
@@ -276,14 +277,14 @@ const Clients = () => {
           checklist: savedChecklist,
           observations: displayObs,
           
-          nationality: metaData.nat || client.nationality || 'Brasileiro(a)', 
-          maritalStatus: metaData.mar || client.maritalStatus || 'SOLTEIRO(A)',
-          houseType: metaData.ht || client.houseType || 'CASA', 
-          block: metaData.bl || client.block || '', 
-          floor: metaData.fl || client.floor || '',
-          pixKeyType: metaData.pixType || client.pixKeyType || 'CPF', 
+          nationality: metaData.nat || metaData.nationality || client.nationality || 'Brasileiro(a)', 
+          maritalStatus: metaData.mar || metaData.maritalStatus || client.maritalStatus || 'SOLTEIRO(A)',
+          houseType: metaData.ht || metaData.houseType || client.houseType || 'CASA', 
+          block: metaData.bl || metaData.block || client.block || '', 
+          floor: metaData.fl || metaData.floor || client.floor || '',
+          pixKeyType: metaData.pixType || metaData.pixKeyType || client.pixKeyType || 'CPF', 
           pixKey: metaData.pixKey || client.pixKey || '',
-          bankName: metaData.bn || client.bankName || ''
+          bankName: metaData.bn || metaData.bankName || client.bankName || ''
       });
     } else {
       setEditingId(null);
@@ -307,7 +308,10 @@ const Clients = () => {
     try {
       const checkedIds = checklistItems.filter(i => i.checked).map(i => i.id);
       
-      let cleanObs = (formData.observations || '').replace(/\[META:.*?\]/g, '').trim();
+      let cleanObs = (formData.observations || '').replace(/\[META:\{.*\}\]/g, '').trim();
+      // Dupla garantia contra lixo residual antigo
+      cleanObs = cleanObs.replace(/\[META:.*?\]/g, '').trim();
+
       const meta = {
           pixType: formData.pixKeyType, pixKey: formData.pixKey,
           nat: formData.nationality, mar: formData.maritalStatus,
@@ -490,7 +494,7 @@ const Clients = () => {
                         <input 
                             list="bank-options"
                             placeholder="Digite ou selecione o banco..."
-                            value={formData.bankName} 
+                            value={formData.bankName || ''} 
                             onChange={e => setFormData({...formData, bankName: e.target.value})} 
                             className="w-full p-2.5 border rounded-lg bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-slate-900/5"
                         />
