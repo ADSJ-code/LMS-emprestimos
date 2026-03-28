@@ -1139,12 +1139,22 @@ const handleOpenEditContract = (loan: Loan) => {
       setOpenMenuId(null);
   };
 
+// Efeito para recalcular a parcela em tempo real durante a edição (Simples e Price)
   useEffect(() => {
       if (isEditContractModalOpen && selectedLoan) {
           const newAmount = parseFloat(editContractData.amount) || 0;
           const newRate = parseFloat(editContractData.interestRate) || 0;
           const newInstallments = parseInt(editContractData.installments) || 1;
           
+          // BLINDAGEM: Só recalcula se o usuário alterar os dados base. 
+          // Isso protege contratos migrados com valores de parcela customizados.
+          const isSameAsOriginal = 
+              newAmount === selectedLoan.amount && 
+              newRate === selectedLoan.interestRate && 
+              newInstallments === (selectedLoan.interestType === 'SIMPLE' ? 1 : selectedLoan.installments);
+
+          if (isSameAsOriginal) return; 
+
           let periodRate = newRate / 100;
           if (selectedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
           else if (selectedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
@@ -1155,6 +1165,7 @@ const handleOpenEditContract = (loan: Loan) => {
               const currentBalance = Math.max(0, newAmount - (selectedLoan.totalPaidCapital || 0));
               calculatedInstallment = currentBalance * periodRate;
           } else {
+              // Fórmula PRICE
               if (periodRate === 0) {
                   calculatedInstallment = newAmount / newInstallments;
               } else {
@@ -1162,6 +1173,7 @@ const handleOpenEditContract = (loan: Loan) => {
               }
           }
 
+          // Corta para 2 casas decimais obrigatoriamente
           const newInstallmentValue = calculatedInstallment.toFixed(2);
 
           if (editContractData.installmentValue !== newInstallmentValue && calculatedInstallment > 0) {
@@ -1169,7 +1181,6 @@ const handleOpenEditContract = (loan: Loan) => {
           }
       }
   }, [editContractData.amount, editContractData.interestRate, editContractData.installments, isEditContractModalOpen, selectedLoan]);
-
 const confirmEditContract = async () => {
       if (!selectedLoan || !editContractData.id) return;
       
