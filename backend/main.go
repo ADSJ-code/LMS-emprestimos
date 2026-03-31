@@ -962,16 +962,23 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 }
 
 func DefinirMensagemComDetalhes(delayLevel int, name string, lateDays int, updatedAmount float64, dateVencimento string) string {
-	valorFormatado := fmt.Sprintf("R$ %.2f", updatedAmount)
+	// Formatando para o padrão brasileiro de moeda (vírgula)
+	valorFormatado := fmt.Sprintf("%.2f", updatedAmount)
+	valorFormatado = strings.Replace(valorFormatado, ".", ",", 1)
+
+	// Pegando apenas o primeiro nome para ficar mais amigável
+	primeiroNome := strings.Split(strings.TrimSpace(name), " ")[0]
+	primeiroNome = strings.ToUpper(primeiroNome)
+
+	mensagemPadrao := fmt.Sprintf("Olá, *%s*! Tudo bem?\n\nPassando para lembrar do vencimento da sua parcela no valor de R$ %s no dia %s.\n\nQualquer dúvida, estamos à disposição!", primeiroNome, valorFormatado, dateVencimento)
+
 	switch delayLevel {
 	case 1:
-		return fmt.Sprintf("Olá, *%s*! Notamos que o seu pagamento ainda não consta no sistema.\n• Valor: %s\n• Atraso: %d dia(s)", name, valorFormatado, lateDays)
-	case 2:
-		return fmt.Sprintf("Olá, *%s*! Passando para lembrar do vencimento da sua parcela no valor de *%s* no dia %s.", name, valorFormatado, dateVencimento)
+		return fmt.Sprintf("Olá, *%s*!\n\nNotamos que o seu pagamento ainda não consta em nosso sistema.\n\n📌 *Detalhes:*\n• Valor: R$ %s\n• Atraso: %d dia(s)\n\nCaso já tenha efetuado o pagamento, por favor desconsidere esta mensagem.", primeiroNome, valorFormatado, lateDays)
 	case 3:
-		return fmt.Sprintf("🚨 NOTIFICAÇÃO URGENTE - %s, o débito de %s está em fase avançada de atraso (%d dias).", name, valorFormatado, lateDays)
+		return fmt.Sprintf("🚨 *AVISO DE ATRASO*\n\n*%s*, o débito de R$ %s está em fase avançada de atraso (%d dias). Por favor, entre em contato conosco o mais breve possível para regularizarmos a situação.", primeiroNome, valorFormatado, lateDays)
 	default:
-		return "Olá! Identificamos uma pendência em seu cadastro na Credit Now."
+		return mensagemPadrao
 	}
 }
 

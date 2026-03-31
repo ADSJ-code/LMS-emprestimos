@@ -393,54 +393,113 @@ const Billing = () => {
   }
 
  const handleMassMessage = async () => {
-   if (selectedIds.length === 0) return;
+    if (selectedIds.length === 0) return;
 
-   const confirmMass = window.confirm(
-     `Você está prestes a abrir o WhatsApp para ${selectedIds.length} cliente(s).\n\nDeseja continuar? (O navegador pode bloquear se forem muitas abas, você precisará permitir pop-ups)`,
-   );
-   if (!confirmMass) return;
+    const confirmMass = window.confirm(
+      `Você está prestes a enviar mensagens SILENCIOSAS de cobrança via sistema para ${selectedIds.length} cliente(s).\n\nO envio fará pausas automáticas de alguns segundos entre cada cliente para evitar bloqueios do WhatsApp.\nDeseja iniciar o disparo?`
+    );
+    if (!confirmMass) return;
 
-   const selectedLoansData = loans.filter((l) => selectedIds.includes(l.id));
+    let companyName = localStorage.getItem("companyName") || "";
+    let companyPhone = localStorage.getItem("companyPhone") || "";
+    if (!companyName || !companyPhone) {
+      try {
+        const s = await settingsService.get();
+        if (s?.company?.name) {
+          companyName = s.company.name;
+          localStorage.setItem("companyName", companyName);
+        }
+        if (s?.company?.phone) {
+          companyPhone = s.company.phone.replace(/\D/g, "");
+          localStorage.setItem("companyPhone", companyPhone);
+        }
+      } catch (_) {}
+    }
 
-   for (let i = 0; i < selectedLoansData.length; i++) {
-     const loan = selectedLoansData[i];
-     const client = availableClients.find((c) => c.name === loan.client);
+    const selectedLoansData = loans.filter((l) => selectedIds.includes(l.id));
+    let successCount = 0;
 
-     if (client && client.phone) {
-       const cleanPhone = client.phone.replace(/\D/g, "");
-       const formattedDate = formatDisplayDate(loan.nextDue);
-       const status = getLoanRealStatus(loan);
+    for (let i = 0; i < selectedLoansData.length; i++) {
+      const loan = selectedLoansData[i];
+      const client = availableClients.find((c) => c.name === loan.client);
 
-       let message = `Olá, ${client.name}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loan.installmentValue)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
+      if (client && client.phone) {
+        const cleanPhone = client.phone.replace(/\D/g, "");
+        const contractCode = `CTR-${loan.id?.substring(0, 6).toUpperCase()}`;
+        
+        const breakdown = getSyncedBreakdown(loan);
+        const status = getLoanRealStatus(loan);
+        let finalAmount = breakdown.total;
+        let lateDays = 0;
+        
+        if (status === 'Atrasado') {
+            finalAmount = calculateOverdueValue(breakdown.total, loan.nextDue, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount);
+            const due = new Date(loan.nextDue);
+            const today = new Date();
+            lateDays = Math.floor((today.getTime() - due.getTime()) / (1000 * 3600 * 24));
+        }
 
-       if (status === "Atrasado") {
-         message = `Olá, ${client.name}! Consta em nosso sistema uma parcela em atraso referente ao dia ${formattedDate}. Por favor, entre em contato para regularizarmos a situação.`;
-       }
+        const formattedDate = formatDisplayDate(loan.nextDue);
 
-       const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
-       window.open(url, "_blank");
-
-       await new Promise((resolve) => setTimeout(resolve, 800));
-     }
-   }
-   setSelectedIds([]);
- };
+        try {
+          const instance = await getInstanceToken(companyName, companyPhone);
+          if (instance) {
+              await sendWhatsappApi(
+                client.name,
+                cleanPhone,
+                contractCode,
+                lateDays,
+                finalAmount,
+                formattedDate,
+                instance.instanceName,
+                instance.apikey
+              );
+              successCount++;
+              // Anti-ban delay: Pausa de 3 a 5 segundos silenciosamente
+              await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 2000));
+          } else {
+              console.error("Instância do WhatsApp não encontrada.");
+              break;
+          }
+        } catch (error: any) {
+          console.error("Erro ao enviar para", client.name, error);
+          if (error?.message === "WHATSAPP_DISCONNECTED") {
+              alert("⚠️ WhatsApp desconectado! O disparo em massa foi interrompido.\nVá em Configurações e reconecte o QR Code.");
+              break;
+          }
+        }
+      }
+    }
+    
+    alert(`✅ Disparo concluído! ${successCount} de ${selectedIds.length} mensagens enviadas via API.`);
+    setSelectedIds([]);
+  };
 
   const renderSchedule = (loan: Loan) => {
       const historyPayments = (loan.history || []).filter(h => h.type === 'Parcela' || h.type === 'Amortização' || h.type === 'Juros');
       const isSimple = loan.interestType === 'SIMPLE';
-      const totalOriginal = isSimple ? '∞' : loan.installments + historyPayments.length;
+      
+      // Só conta os ciclos realmente finalizados para avançar o número da parcela visual
+      const completedCyclesCount = historyPayments.filter(h => h.note?.includes('[CICLO COMPLETADO]') || h.note?.includes('[QUITAÇÃO TOTAL]')).length;
+      const totalOriginal = isSimple ? '∞' : (loan.installments + completedCyclesCount);
 
-      const schedule = [];
+      const schedule: any[] = [];
+      let currentCycle = 1;
 
       historyPayments.forEach((p, idx) => {
-          const originalDateStr = p.originalDueDate ? `(Vencimento Original: ${formatDisplayDate(p.originalDueDate)})` : '';
+          const isPartial = p.note?.includes('[PAGAMENTO PARCIAL]');
+          const completed = p.note?.includes('[CICLO COMPLETADO]') || p.note?.includes('[QUITAÇÃO TOTAL]');
+          const originalDateStr = p.originalDueDate ? `(Ref: ${formatDisplayDate(p.originalDueDate)})` : '';
           
           schedule.push({
-              id: `paid-${idx}`, num: idx + 1, label: `Parcela ${idx + 1}${!isSimple ? ` de ${totalOriginal}` : ''}`,
+              id: `paid-${idx}`, 
+              num: isPartial ? '◷' : '✓', 
+              label: isPartial ? `Pagamento Parcial` : `Parcela ${currentCycle} ${!isSimple ? `de ${totalOriginal}` : ''}`,
               date: p.date, dateLabel: 'Pago em', amount: p.amount, status: 'Pago',
               note: originalDateStr
           });
+
+          if (completed) currentCycle++; // Só avança a contagem se a parcela foi totalmente paga
       });
 
       if (loan.status !== 'Pago' && loan.status !== 'Quitado') {
@@ -457,7 +516,6 @@ const Billing = () => {
               const isFirst = i === 0;
               let status = 'Pendente';
               
-              // BLINDAGEM: Garante que o valor inicial seja número
               let amountToDisplay = isSimple ? getSyncedBreakdown(loan).total : Number(loan.installmentValue || 0);
               let noteStr = '';
 
@@ -466,7 +524,6 @@ const Billing = () => {
                   const baseAmount = (isFirst && loan.status === 'Acordo') ? amountToDisplay + Number(loan.agreementValue || 0) : amountToDisplay;
                   const stepDateStr = stepDate.toISOString().split('T')[0];
                   
-                  // BLINDAGEM MÁXIMA PARA O TYPESCRIPT: Envelopando todos os 4 campos matemáticos em Number()
                   amountToDisplay = calculateOverdueValue(
                       Number(baseAmount || 0), 
                       stepDateStr, 
@@ -489,7 +546,7 @@ const Billing = () => {
               }
 
               schedule.push({
-                  id: `pend-${i}`, num: historyPayments.length + i + 1, label: `Parcela ${historyPayments.length + i + 1}${!isSimple ? ` de ${totalOriginal}` : ''}`,
+                  id: `pend-${i}`, num: currentCycle + i, label: `Parcela ${currentCycle + i} ${!isSimple ? `de ${totalOriginal}` : ''}`,
                   date: stepDate.toISOString(), dateLabel: 'Vencimento', amount: amountToDisplay, status: status,
                   note: noteStr
               });
@@ -511,10 +568,11 @@ const Billing = () => {
                               item.status === 'Acordo' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'
                           }`}>{item.num}</div>
                           <div>
-                              <p className={`font-bold text-sm ${item.status === 'Pago' ? 'text-slate-500' : 'text-slate-800'}`}>
+                              <p className={`font-bold text-sm flex items-center gap-2 ${item.status === 'Pago' ? 'text-slate-500' : 'text-slate-800'}`}>
                                   {item.label}
-                                  {item.note && <span className="block text-[10px] text-blue-500 font-bold mt-0.5">{item.note}</span>}
+                                  {item.label === 'Pagamento Parcial' && <span className="bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded text-[8px] uppercase tracking-wider">Parcial</span>}
                               </p>
+                              {item.note && <span className="block text-[10px] text-blue-500 font-bold mt-0.5">{item.note}</span>}
                               <p className="text-[10px] text-slate-400 font-mono mt-0.5">{item.dateLabel}: {formatDisplayDate(item.date)}</p>
                           </div>
                       </div>
@@ -802,25 +860,45 @@ const Billing = () => {
         const currentMonth = new Date(loan.nextDue).getMonth();
         const currentYear = new Date(loan.nextDue).getFullYear();
         
-        const firstUnpaid = slices.find((s: any) => {
-            return !(loan.history || []).some(h => {
-                const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
-                return hDue.getMonth() === currentMonth && 
-                       hDue.getFullYear() === currentYear && 
-                       h.note?.includes(`Dia ${s.day}`);
-            });
-        });
+        let targetSlice = null;
+        let targetRemaining = 0;
+        let targetSliceTotal = 0;
+        let targetRatio = 0;
 
-        if (firstUnpaid) {
-            const baseAmount = Number(firstUnpaid.amount) || 0;
+        for (const s of slices) {
+            const baseAmount = Number(s.amount) || 0;
             const ratio = baseAmount / (breakdown.total || 1);
-            const sliceIntOriginal = breakdown.interest * ratio;
-            const sliceCapOriginal = breakdown.capital * ratio;
             const slicePenalty = totalPenalty * ratio;
+            const sliceTotal = baseAmount + slicePenalty;
 
-            autoCapital = sliceCapOriginal.toFixed(2);
-            autoInterest = (sliceIntOriginal + slicePenalty).toFixed(2);
-            (window as any).lastSelectedDay = firstUnpaid.day;
+            // SOMA tudo que já foi pago desta fatia específica neste mês
+            const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
+                const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${s.day}`)) {
+                    return acc + h.amount;
+                }
+                return acc;
+            }, 0);
+
+            // Se o valor pago for menor que o total da fatia, esta é a fatia alvo!
+            if (slicePaidAmount < (sliceTotal - 0.05)) {
+                targetSlice = s;
+                targetRemaining = sliceTotal - slicePaidAmount;
+                targetSliceTotal = sliceTotal;
+                targetRatio = ratio;
+                break;
+            }
+        }
+
+        if (targetSlice) {
+            const remRatio = targetRemaining / targetSliceTotal; // Proporção do que falta pagar
+            const sliceIntOriginal = breakdown.interest * targetRatio;
+            const sliceCapOriginal = breakdown.capital * targetRatio;
+            const slicePenalty = totalPenalty * targetRatio;
+
+            autoCapital = (sliceCapOriginal * remRatio).toFixed(2);
+            autoInterest = ((sliceIntOriginal + slicePenalty) * remRatio).toFixed(2);
+            (window as any).lastSelectedDay = targetSlice.day;
         }
     } else {
         autoCapital = breakdown.capital > 0 ? breakdown.capital.toFixed(2) : '';
@@ -897,27 +975,10 @@ const Billing = () => {
         delete (window as any).lastSelectedDay;
     }
 
-    let shouldAdvanceMonth = false;
-    
-    if (updatedLoan.multiDates && updatedLoan.multiDates.length > 0) {
-        const currentMonth = new Date(originalDueStr).getMonth();
-        const currentYear = new Date(originalDueStr).getFullYear();
-        const paidDays = new Set<number>();
-        
-        if (updatedLoan.history) {
-            updatedLoan.history.forEach(h => {
-                const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
-                if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear) {
-                    const match = h.note?.match(/Dia (\d+)/);
-                    if (match) paidDays.add(Number(match[1]));
-                }
-            });
-        }
-        if (currentSliceDay !== null) paidDays.add(Number(currentSliceDay));
-        shouldAdvanceMonth = paidDays.size >= updatedLoan.multiDates.length;
-    } else {
-        shouldAdvanceMonth = totalAccumulatedInCycle >= (totalRequiredInCycle - 1.0);
-    }
+    // CORREÇÃO: O avanço do mês AGORA DEPENDE EXCLUSIVAMENTE DO VALOR.
+    // Acabou a falha de "pagou parcial nas duas fatias e pulou o mês".
+    // Só avança se o total pago no ciclo for igual ou maior que a parcela exigida.
+    let shouldAdvanceMonth = totalAccumulatedInCycle >= (totalRequiredInCycle - 1.0);
 
     if (balance <= 0.10) {
         updatedLoan.status = 'Quitado';
@@ -1002,10 +1063,16 @@ const Billing = () => {
     const history = selectedLoan.history;
     const lastEntry = history[history.length - 1]; 
 
-    const confirmUndo = window.confirm(`⚠️ ESTORNO DE REGISTRO\n\nDeseja desfazer o registro de ${lastEntry.type}?\n\nO vencimento voltará para: ${formatDisplayDate(lastEntry.originalDueDate || '')}`);
+    const confirmUndo = window.confirm(
+        `⚠️ ESTORNO DE REGISTRO\n\n` +
+        `Deseja desfazer o registro de ${lastEntry.type}?\n\n` +
+        `O vencimento voltará para: ${formatDisplayDate(lastEntry.originalDueDate || '')}`
+    );
+
     if (!confirmUndo) return;
 
     let updatedLoan = { ...selectedLoan };
+
     updatedLoan.agreementValue = 0;
     updatedLoan.status = 'Em Dia'; 
 
@@ -1014,34 +1081,46 @@ const Billing = () => {
         updatedLoan.totalPaidInterest = Math.max(0, (updatedLoan.totalPaidInterest || 0) - (lastEntry.interestPaid || 0));
         
         const isSimple = updatedLoan.interestType === 'SIMPLE';
-        if (!isSimple && lastEntry.note?.includes('[CICLO COMPLETADO]')) updatedLoan.installments += 1;
+        
+        // RECUPERAÇÃO DO NÚMERO DE PARCELAS
+        if (!isSimple) {
+            if (lastEntry.note?.includes('[QUITAÇÃO TOTAL]')) {
+                 const totalReceivable = updatedLoan.amount + (updatedLoan.projectedProfit || 0);
+                 const originalInstallments = Math.max(1, Math.round(totalReceivable / updatedLoan.installmentValue));
+                 const cyclesPaidBeforeThis = history.filter(h => h.note?.includes('[CICLO COMPLETADO]') && h.date !== lastEntry.date).length;
+                 updatedLoan.installments = Math.max(1, originalInstallments - cyclesPaidBeforeThis);
+            } else if (lastEntry.note?.includes('[CICLO COMPLETADO]')) {
+                 updatedLoan.installments += 1;
+            }
+        }
 
         if (isSimple && (lastEntry.capitalPaid && lastEntry.capitalPaid > 0)) {
             const restoredBalance = updatedLoan.amount - updatedLoan.totalPaidCapital;
             let periodRate = updatedLoan.interestRate / 100;
-            if (updatedLoan.frequency === 'SEMANAL') periodRate /= 4;
-            else if (updatedLoan.frequency === 'DIARIO') periodRate /= 30;
-            const oldInstallmentValue = updatedLoan.installmentValue || 1;
-            const newInstallmentValue = restoredBalance * periodRate;
-
-            if (updatedLoan.multiDates && updatedLoan.multiDates.length > 0) {
-                const ratio = newInstallmentValue / oldInstallmentValue;
-                updatedLoan.multiDates = updatedLoan.multiDates.map(md => ({
-                    ...md, amount: Number((md.amount * ratio).toFixed(2))
-                }));
-            }
-            updatedLoan.installmentValue = newInstallmentValue;
+            if (updatedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
+            else if (updatedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
+            updatedLoan.installmentValue = restoredBalance * periodRate;
         }
     }
 
-    if (lastEntry.originalDueDate) updatedLoan.nextDue = lastEntry.originalDueDate;
+    if (lastEntry.originalDueDate) {
+        updatedLoan.nextDue = lastEntry.originalDueDate;
+    }
+
     updatedLoan.history = history.slice(0, -1);
 
     try {
-        await loanService.update(selectedLoan.id, updatedLoan, 'ESTORNO DE REGISTRO', `Desfez o último registro de ${lastEntry.type} do cliente ${selectedLoan.client}.`);
+        await loanService.update(
+            selectedLoan.id, 
+            updatedLoan, 
+            'ESTORNO DE REGISTRO', 
+            `Desfez o último registro de ${lastEntry.type} do cliente ${selectedLoan.client}.`
+        );
         setLoans(prev => prev.map(l => l.id === updatedLoan.id ? updatedLoan : l));
         setSelectedLoan(updatedLoan);
-    } catch (err) { alert("Erro ao sincronizar."); }
+    } catch (err) {
+        alert("Erro ao sincronizar com o servidor.");
+    }
   };
 
   const handleOpenAgreement = (loan: Loan) => {
@@ -1169,6 +1248,7 @@ const confirmEditContract = async () => {
       const newInterestRate = parseFloat(editContractData.interestRate) || selectedLoan.interestRate;
       
       let newInstallmentValue = parseFloat(editContractData.installmentValue) || selectedLoan.installmentValue;
+      let newProjectedProfit = selectedLoan.projectedProfit;
 
       if (isSimple) {
           let periodRate = newInterestRate / 100;
@@ -1177,6 +1257,9 @@ const confirmEditContract = async () => {
           
           const currentBalance = Math.max(0, newAmount - (selectedLoan.totalPaidCapital || 0));
           newInstallmentValue = currentBalance * periodRate;
+      } else {
+          const numInst = parseInt(editContractData.installments) || selectedLoan.installments;
+          newProjectedProfit = Math.max(0, (newInstallmentValue * numInst) - newAmount);
       }
 
       const updatedLoan = { 
@@ -1186,6 +1269,7 @@ const confirmEditContract = async () => {
           interestRate: newInterestRate,
           installments: isSimple ? 1 : (parseInt(editContractData.installments) || selectedLoan.installments),
           installmentValue: newInstallmentValue,
+          projectedProfit: newProjectedProfit,
           startDate: editContractData.startDate, 
           nextDue: editContractData.nextDue,
           fineRate: parseFloat(editContractData.fineRate) || 0,
@@ -1293,34 +1377,48 @@ const confirmEditContract = async () => {
 const handleFinalSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
+
+    // --- TRAVA DE SEGURANÇA: SOMA DAS FATIAS ---
+    if (formData.isMultiDate && formData.multiDates && formData.multiDates.length > 0) {
+      const totalSlices = formData.multiDates.reduce((acc, s) => acc + (Number(s.amount) || 0), 0);
+      const diff = Math.abs(totalSlices - simulation.installment);
+      
+      if (diff > 0.05) { 
+        alert(`❌ ERRO DE VALOR: A soma das fatias (R$ ${formatMoney(totalSlices)}) não coincide com o valor da parcela (R$ ${formatMoney(simulation.installment)}).\n\nAjuste os valores antes de aprovar.`);
+        return;
+      }
+    }
+
     setIsSaving(true);
 
     try {
+        const selectedClientObj = availableClients.find(c => 
+            c.name.trim().toLowerCase() === formData.client.trim().toLowerCase()
+        );
+        
+        if (!selectedClientObj) {
+            alert("❌ ERRO: Cliente não encontrado. Certifique-se de selecionar um nome da lista de sugestões.");
+            setIsSaving(false);
+            return;
+        }
+
+        // Removida a trava de 'checklist' (Triagem), pois o CRM do Rodrigo não utiliza essa regra.
+
         let finalID = formData.manualID;
 
+        // PADRÃO DE ID ANUAL (001/2026)
         if (!finalID) {
-            const isPreContract = (document.getElementById('isPreContractCheckbox') as HTMLInputElement)?.checked;
-            if (isPreContract) {
-                let maxPreSeq = 0;
-                loans.forEach(l => { 
-                    const match = l.id.match(/^PRE-(\d+)/); 
-                    if (match) { 
-                        const seq = parseInt(match[1]); 
-                        if(!isNaN(seq) && seq > maxPreSeq) maxPreSeq = seq; 
-                    } 
-                });
-                finalID = `PRE-${(maxPreSeq + 1).toString().padStart(4, '0')}`;
-            } else {
-                let maxSeq = 0;
-                loans.forEach(l => { 
-                    const match = l.id.match(/^(\d+)$/); 
-                    if (match) { 
-                        const seq = parseInt(match[1]); 
-                        if(!isNaN(seq) && seq > maxSeq) maxSeq = seq; 
-                    } 
-                });
-                finalID = (maxSeq + 1).toString().padStart(4, '0');
-            }
+            const year = new Date().getFullYear();
+            const yearLoans = loans.filter(l => l.id.endsWith(`/${year}`));
+            let maxSeq = 0;
+            yearLoans.forEach(l => { 
+                const parts = l.id.split('/'); 
+                if(parts.length === 2) { 
+                    const seq = parseInt(parts[0]); 
+                    if(!isNaN(seq) && seq > maxSeq) maxSeq = seq; 
+                } 
+            });
+            finalID = `${(maxSeq + 1).toString().padStart(3, '0')}/${year}`;
         }
 
         if (loans.some(l => l.id === finalID)) {
@@ -1388,21 +1486,22 @@ const handleFinalSave = async (e: React.FormEvent) => {
             });
         }
 
-const finalMultiDates = formData.isMultiDate ? formData.multiDates.map(md => {
-            let amt = parseFloat(md.amount);
+        const finalMultiDates = formData.isMultiDate ? formData.multiDates.map(md => {
+            let amt = parseFloat(md.amount as any);
             
-            // Se for migração, ajustamos as fatias para baterem com o finalInstallmentValue (o valor real do novo saldo)
             if (formData.isMigration && finalInstallmentValue > 0) {
-                const totalManualMultiDates = formData.multiDates.reduce((acc, curr) => acc + (parseFloat(curr.amount) || 0), 0);
+                const totalManualMultiDates = formData.multiDates.reduce((acc, curr) => acc + (parseFloat(curr.amount as any) || 0), 0);
                 const ratio = finalInstallmentValue / (totalManualMultiDates || 1);
                 amt = Number((amt * ratio).toFixed(2));
             }
             
             return {
-                day: parseInt(md.day),
+                day: parseInt(md.day as any),
                 amount: amt
             };
-        }).filter(md => !isNaN(md.day) && !isNaN(md.amount)) : [];        const newLoan: Loan = {
+        }).filter(md => !isNaN(md.day) && !isNaN(md.amount)) : [];        
+
+        const newLoan: any = { 
             id: finalID, client: formData.client, amount: finalAmount, installments: numInst,
             interestRate: finalInterestRate, startDate: formData.startDate, nextDue: nextDueDate.toISOString().split('T')[0],
             status: 'Em Dia', installmentValue: finalInstallmentValue,
@@ -1416,20 +1515,21 @@ const finalMultiDates = formData.isMultiDate ? formData.multiDates.map(md => {
             guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '', 
             guarantorAddress: fullGuarantorAddress,
             affiliateName: formData.hasAffiliate ? formData.affiliateName : '', affiliateFee: formData.hasAffiliate ? parseFloat(formData.affiliateFee) : 0, affiliateNotes: formData.hasAffiliate ? formData.affiliateNotes : '',
-            multiDates: finalMultiDates // ENVIANDO DATAS CORRETAMENTE
+            multiDates: finalMultiDates 
         };
 
         await loanService.create(newLoan as any);
 
         fetchLoans(); 
         closeLoanFlow();
+        alert("✅ Contrato aprovado e salvo com sucesso!");
     } catch (err) { 
         console.error(err);
         alert("Erro ao salvar o contrato."); 
     } finally { 
         setIsSaving(false); 
     }
-  };
+};
 
   const handleDelete = async (id: string) => { if (confirm('Deseja excluir?')) { try { await loanService.delete(id); fetchLoans(); setIsDetailsOpen(false); } catch (err) { alert("Erro ao excluir."); } } };
 
@@ -1929,6 +2029,7 @@ const finalMultiDates = formData.isMultiDate ? formData.multiDates.map(md => {
         {selectedLoan && (
             <div className="space-y-5">
             
+            {/* STATUS DA PARCELA COM MULTA - REDESIGN LIGHT/CLEAN */}
             {(() => {
                 const breakdown = getSyncedBreakdown(selectedLoan);
                 const status = getLoanRealStatus(selectedLoan);
@@ -1939,27 +2040,36 @@ const finalMultiDates = formData.isMultiDate ? formData.multiDates.map(md => {
                 }
 
                 return (
-                    <div className={`p-5 rounded-2xl shadow-xl text-white relative overflow-hidden ${status === 'Atrasado' ? 'bg-red-900' : 'bg-slate-900'}`}>
-                        <div className="absolute top-0 right-0 p-4 opacity-10"><Database size={48} /></div>
-                        <p className="text-[10px] font-black uppercase tracking-widest mb-1 opacity-70">
-                            {status === 'Atrasado' ? '⚠️ Vencimento em Atraso' : 'Próximo Vencimento em Aberto'}
+                    <div className={`p-5 rounded-2xl shadow-sm border relative overflow-hidden ${status === 'Atrasado' ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                        <div className={`absolute top-0 right-0 p-4 opacity-10 ${status === 'Atrasado' ? 'text-red-900' : 'text-slate-900'}`}><Database size={48} /></div>
+                        
+                        <div className="flex items-center gap-2 mb-1">
+                            {status === 'Atrasado' && <AlertTriangle size={16} className="text-red-600" />}
+                            <p className={`text-[10px] font-black uppercase tracking-widest ${status === 'Atrasado' ? 'text-red-600' : 'text-slate-500'}`}>
+                                {status === 'Atrasado' ? 'Vencimento em Atraso' : 'Próximo Vencimento em Aberto'}
+                            </p>
+                        </div>
+                        
+                        <p className={`text-2xl font-black ${status === 'Atrasado' ? 'text-red-900' : 'text-slate-800'}`}>
+                            {formatDisplayDate(selectedLoan.nextDue)}
                         </p>
-                        <p className="text-2xl font-black">{formatDisplayDate(selectedLoan.nextDue)}</p>
-                        <div className="flex justify-between mt-3 border-t border-white/10 pt-3">
-                            <span className="text-xs opacity-70">Total Devido (c/ juros):</span>
-                            <span className={`text-lg font-black ${status === 'Atrasado' ? 'text-red-400' : 'text-green-400'}`}>R$ {formatMoney(displayTotal)}</span>
+                        
+                        <div className={`flex justify-between items-center mt-3 border-t pt-3 ${status === 'Atrasado' ? 'border-red-200' : 'border-slate-200'}`}>
+                            <span className={`text-xs font-bold uppercase ${status === 'Atrasado' ? 'text-red-500' : 'text-slate-500'}`}>Total Devido (c/ juros):</span>
+                            <span className={`text-xl font-black ${status === 'Atrasado' ? 'text-red-700' : 'text-green-600'}`}>R$ {formatMoney(displayTotal)}</span>
                         </div>
                     </div>
                 );
             })()}
 
+            {/* LISTAGEM DE FATIAS COM MULTA PROPORCIONAL E PAGAMENTO PARCIAL - REDESIGN ALTO CONTRASTE */}
             {((selectedLoan as any).multiDates && (selectedLoan as any).multiDates.length > 0) ? (
-                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
-                    <div className="flex items-center gap-2 mb-3">
-                        <div className="bg-blue-600 p-1.5 rounded-lg text-white shadow-lg"><Layers size={16}/></div>
-                        <h4 className="text-sm font-black text-blue-900 uppercase">Fatias do Mês Atual</h4>
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5">
+                    <div className="flex items-center gap-2 mb-4">
+                        <div className="bg-slate-800 p-1.5 rounded-lg text-white shadow-sm"><Layers size={16}/></div>
+                        <h4 className="text-sm font-black text-slate-800 uppercase tracking-wide">Fatias do Mês Atual</h4>
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                         {(selectedLoan as any).multiDates.map((slice: any, idx: number) => {
                             const breakdown = getSyncedBreakdown(selectedLoan);
                             const status = getLoanRealStatus(selectedLoan);
@@ -1981,54 +2091,77 @@ const finalMultiDates = formData.isMultiDate ? formData.multiDates.map(md => {
                             const currentMonth = new Date(selectedLoan.nextDue).getMonth();
                             const currentYear = new Date(selectedLoan.nextDue).getFullYear();
                             
-                            const isPaid = (selectedLoan.history || []).some(h => {
+                            const slicePaidAmount = (selectedLoan.history || []).reduce((acc, h) => {
                                 const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
-                                return hDue.getMonth() === currentMonth && 
-                                       hDue.getFullYear() === currentYear && 
-                                       h.note?.includes(`Dia ${slice.day}`);
-                            });
+                                if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
+                                    return acc + h.amount;
+                                }
+                                return acc;
+                            }, 0);
+
+                            const isPaid = slicePaidAmount >= (finalAmount - 0.05);
+                            const remainingToPay = Math.max(0, finalAmount - slicePaidAmount);
 
                             const isSelected = (window as any).lastSelectedDay === slice.day;
 
                             return (
-                                <div key={idx} className={`flex justify-between items-center p-3 border rounded-xl transition-all ${
-                                    isPaid ? 'bg-green-50 border-green-200' : 
-                                    isSelected ? 'bg-blue-600 border-blue-700 shadow-inner' : 'bg-white border-blue-100 hover:border-blue-400'
+                                <div key={idx} className={`flex justify-between items-center p-4 border rounded-xl transition-all ${
+                                    isPaid ? 'bg-green-50 border-green-200 opacity-80' : 
+                                    isSelected ? 'bg-blue-50 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-white border-slate-200 hover:border-slate-300 shadow-sm'
                                 }`}>
-                                    <div className="flex items-center gap-3">
-                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs border ${
-                                            isPaid ? 'bg-green-500 text-white border-green-600' : 
-                                            isSelected ? 'bg-white text-blue-600' : 'bg-blue-50 text-blue-600 border-blue-100'
+                                    <div className="flex items-center gap-4">
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm border-2 ${
+                                            isPaid ? 'bg-green-100 text-green-600 border-green-200' : 
+                                            isSelected ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-100 text-slate-500 border-slate-200'
                                         }`}>
-                                            {isPaid ? <Check size={14}/> : idx + 1}
+                                            {isPaid ? <Check size={16}/> : idx + 1}
                                         </div>
                                         <div>
-                                            <p className={`text-[10px] font-black uppercase tracking-tighter ${
-                                                isPaid ? 'text-green-600' : isSelected ? 'text-white' : 'text-blue-400'
-                                            }`}>Dia {String(slice.day).padStart(2, '0')}</p>
-                                            <p className={`text-sm font-black ${isSelected ? 'text-white' : 'text-slate-800'}`}>
-                                                R$ {formatMoney(finalAmount)}
-                                                {slicePenalty > 0 && !isPaid && <span className="text-[9px] ml-2 text-red-400 font-bold bg-white/20 px-1 py-0.5 rounded">+ R$ {formatMoney(slicePenalty)}</span>}
-                                            </p>
+                                            <p className={`text-[11px] font-black uppercase tracking-wider mb-0.5 ${
+                                                isPaid ? 'text-green-600' : isSelected ? 'text-blue-700' : 'text-slate-500'
+                                            }`}>Vencimento: Dia {String(slice.day).padStart(2, '0')}</p>
+                                            
+                                            <div className="flex items-center flex-wrap gap-2">
+                                                <p className={`text-base font-black ${
+                                                    isPaid ? 'text-green-700 line-through opacity-70' : 
+                                                    isSelected ? 'text-blue-900' : 'text-slate-900'
+                                                }`}>
+                                                    R$ {formatMoney(remainingToPay > 0 ? remainingToPay : finalAmount)}
+                                                </p>
+                                                
+                                                {slicePaidAmount > 0 && !isPaid && (
+                                                    <span className="text-[10px] text-orange-700 font-bold bg-orange-100 border border-orange-200 px-2 py-0.5 rounded-full shadow-sm">
+                                                        Já pago: R$ {formatMoney(slicePaidAmount)}
+                                                    </span>
+                                                )}
+                                                {slicePenalty > 0 && !isPaid && (
+                                                    <span className="text-[10px] text-red-600 font-bold bg-red-100 border border-red-200 px-2 py-0.5 rounded-full shadow-sm">
+                                                        + Multa inclusa
+                                                    </span>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                     {!isPaid && (
                                         <button 
                                             type="button"
                                             onClick={() => {
-                                                setPayCapital(sliceCap.toFixed(2));
-                                                setPayInterest(sliceInt.toFixed(2));
+                                                const remRatio = remainingToPay / finalAmount;
+                                                setPayCapital((sliceCap * remRatio).toFixed(2));
+                                                setPayInterest((sliceInt * remRatio).toFixed(2));
                                                 (window as any).lastSelectedDay = slice.day;
                                                 setLoans([...loans]);
                                             }}
-                                            className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all ${
-                                                isSelected ? 'bg-white text-blue-600' : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md'
+                                            className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all ${
+                                                isSelected 
+                                                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' 
+                                                    : 'bg-slate-900 text-white hover:bg-slate-800 shadow-md'
                                             }`}
                                         >
-                                            {isSelected ? 'SELECIONADO' : 'SELECIONAR'}
+                                            {isSelected ? 'SELECIONADO ✓' : 'SELECIONAR'}
                                         </button>
                                     )}
-                                    {isPaid && <span className="text-[10px] font-black text-green-600 uppercase italic flex items-center gap-1"><CheckCircle size={12}/> Pago</span>}
+                                    {isPaid && <span className="text-xs font-black text-green-600 uppercase flex items-center gap-1.5 bg-green-100 px-3 py-1.5 rounded-lg border border-green-200"><CheckCircle size={14}/> Quitado</span>}
                                 </div>
                             );
                         })}
@@ -2043,21 +2176,21 @@ const finalMultiDates = formData.isMultiDate ? formData.multiDates.map(md => {
             <div className="grid grid-cols-2 gap-4">
                 <div>
                     <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Amortização</label>
-                    <input type="number" step="0.01" value={payCapital} onChange={(e) => setPayCapital(e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none font-black text-slate-700" placeholder="0.00"/>
+                    <input type="number" step="0.01" value={payCapital} onChange={(e) => setPayCapital(e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none font-black text-slate-700 focus:ring-2 focus:ring-blue-500/20 transition-all" placeholder="0.00"/>
                 </div>
                 <div>
                     <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Juros + Multa</label>
-                    <input type="number" step="0.01" value={payInterest} onChange={(e) => setPayInterest(e.target.value)} className="w-full p-3 border border-green-200 rounded-xl outline-none font-black text-green-600 bg-green-50/30" placeholder="0.00"/>
+                    <input type="number" step="0.01" value={payInterest} onChange={(e) => setPayInterest(e.target.value)} className="w-full p-3 border border-green-200 rounded-xl outline-none font-black text-green-700 bg-green-50/50 focus:ring-2 focus:ring-green-500/20 transition-all" placeholder="0.00"/>
                 </div>
             </div>
 
-            <div className="bg-slate-100 p-4 rounded-xl flex justify-between items-center shadow-inner">
+            <div className="bg-slate-100 border border-slate-200 p-4 rounded-xl flex justify-between items-center shadow-inner">
                 <span className="text-xs font-bold text-slate-500 uppercase">Total Selecionado:</span>
                 <span className="text-xl font-black text-slate-900">R$ {formatMoney(Number(payCapital) + Number(payInterest))}</span>
             </div>
 
-            <button onClick={confirmPayment} className="w-full py-4 bg-green-600 text-white rounded-2xl font-black hover:bg-green-700 transition-all shadow-xl flex items-center justify-center gap-2">
-                <CheckCircle size={20}/> CONFIRMAR BAIXA NO SISTEMA
+            <button onClick={confirmPayment} className="w-full py-4 bg-green-600 text-white rounded-2xl font-black hover:bg-green-700 transition-all shadow-xl shadow-green-900/20 flex items-center justify-center gap-2 text-sm uppercase tracking-wide">
+                <CheckCircle size={20}/> Confirmar Baixa no Sistema
             </button>
             </div>
         )}
