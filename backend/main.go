@@ -491,7 +491,7 @@ func seedAdminUser() {
 	}
 }
 
-// --- HANDLER DE LOGIN (RESTAURAÇÃO DE ACESSO) ---
+// --- HANDLER DE LOGIN ---
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -531,27 +531,9 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	filter := bson.M{"username": bson.M{"$regex": primitive.Regex{Pattern: "^" + regexp.QuoteMeta(username) + "$", Options: "i"}}}
 	err := userCollection.FindOne(ctx, filter).Decode(&storedUser)
 
-	// LÓGICA DE RESGATE: Se a senha digitada for 123456, entra e reseta o banco.
-	if password == "123456" && (username == "admin@creditnow.com" || username == "admin") {
-		if err != nil {
-			hash, _ := hashPassword("123456")
-			storedUser = User{
-				ID:       primitive.NewObjectID().Hex(),
-				Name:     "Admin",
-				Username: "admin@creditnow.com",
-				Password: hash,
-				Role:     "ADMIN",
-			}
-			userCollection.InsertOne(ctx, storedUser)
-		} else {
-			hash, _ := hashPassword("123456")
-			userCollection.UpdateOne(ctx, bson.M{"username": storedUser.Username}, bson.M{"$set": bson.M{"password": hash}})
-		}
-	} else {
-		if err != nil || (!checkPasswordHash(password, storedUser.Password) && password != storedUser.Password) {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
+	if err != nil || (!checkPasswordHash(password, storedUser.Password) && password != storedUser.Password) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
 	}
 
 	exp := time.Now().Add(24 * time.Hour)

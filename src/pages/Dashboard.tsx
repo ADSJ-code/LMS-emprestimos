@@ -4,7 +4,7 @@ import {
   Users, AlertTriangle, TrendingUp, Plus, 
   Search, FileText, ArrowRight, Calendar, Activity, 
   Briefcase, PieChart, RefreshCw, ArrowLeft, Filter,
-  UserCheck, Bell, X, Clock, CalendarDays, ChevronDown, CheckCircle
+  UserCheck, Bell, BellRing, X, Clock, CalendarDays, ChevronDown, CheckCircle
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { calculateOverdueValue, formatMoney, calculateCapitalBalance, calculateInstallmentBreakdown } from '../utils/finance';
@@ -30,11 +30,12 @@ const Dashboard = () => {
   const [allLoans, setAllLoans] = useState<Loan[]>([]);
   const [allClients, setAllClients] = useState<Client[]>([]);
   
-  const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
+const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
 
   // --- ESTADOS DO MODAL VENCIMENTOS ---
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
-  
+  const [isDailyAlertOpen, setIsDailyAlertOpen] = useState(false);
+  const [todaysLoans, setTodaysLoans] = useState<Loan[]>([]);  
   const [maturityDate, setMaturityDate] = useState(() => {
       const d = new Date();
       const offset = d.getTimezoneOffset() * 60000;
@@ -375,6 +376,45 @@ const Dashboard = () => {
       if (period !== 'personalizado') fetchAndCalculate();
   }, [period, viewMode]);
 
+  // --- LÓGICA DO POP-UP DIÁRIO (VENCIMENTOS DE HOJE) ---
+  useEffect(() => {
+      const today = new Date();
+      const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+      
+      const dueToday = allLoans.filter(l => {
+         const dStr = l.nextDue.split('T')[0];
+         return dStr === todayStr && l.status !== 'Pago' && l.status !== 'Quitado';
+      });
+      setTodaysLoans(dueToday);
+  }, [allLoans]);
+
+  useEffect(() => {
+      if (todaysLoans.length > 0) {
+          const todayStr = new Date().toISOString().split('T')[0];
+          const lastPopupDate = localStorage.getItem('lastDailyPopupDate');
+          
+          if (lastPopupDate !== todayStr) {
+              setIsDailyAlertOpen(true);
+              localStorage.setItem('lastDailyPopupDate', todayStr);
+          }
+      }
+  }, [todaysLoans]);
+
+  useEffect(() => {
+      const handleFocus = () => {
+          if (todaysLoans.length > 0) {
+              const todayStr = new Date().toISOString().split('T')[0];
+              const lastPopupDate = localStorage.getItem('lastDailyPopupDate');
+              if (lastPopupDate !== todayStr) {
+                  setIsDailyAlertOpen(true);
+                  localStorage.setItem('lastDailyPopupDate', todayStr);
+              }
+          }
+      };
+      window.addEventListener('focus', handleFocus);
+      return () => window.removeEventListener('focus', handleFocus);
+  }, [todaysLoans]);
+  // ----------------------------------------------------
   useEffect(() => {
       if (period === 'personalizado' && customStart && customEnd) {
           const timeout = setTimeout(() => fetchAndCalculate(), 500);
@@ -493,8 +533,48 @@ const Dashboard = () => {
 
   return (
     <Layout>
-      {showWelcomeModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+      {isDailyAlertOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
+             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 border border-slate-200">
+                 <div className="bg-slate-900 p-5 flex justify-between items-center">
+                     <div className="flex items-center gap-2 text-white font-bold"><BellRing className="text-yellow-400" size={20}/> <span>Vencimentos de Hoje</span></div>
+                     <button onClick={() => setIsDailyAlertOpen(false)} className="text-white/50 hover:text-white transition-colors"><X size={24}/></button>
+                 </div>
+                 <div className="p-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                     {todaysLoans.length === 0 ? (
+                         <div className="text-center py-8">
+                             <CheckCircle size={48} className="mx-auto text-green-500 mb-2 opacity-50"/>
+                             <p className="text-slate-500 font-medium">Nenhum vencimento para hoje!</p>
+                         </div>
+                     ) : (
+                         <div className="space-y-3">
+                             <p className="text-xs font-bold uppercase text-slate-400 mb-2">Clientes para cobrar:</p>
+                             {todaysLoans.map(l => (
+                                 <div key={l.id} className="flex justify-between items-center p-4 bg-slate-50 border border-slate-100 rounded-xl hover:bg-blue-50 hover:border-blue-100 transition-all cursor-pointer group" onClick={() => goToBillingWithSearch(l.client)}>
+                                     <div className="flex items-center gap-3">
+                                         <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-slate-700 font-bold border border-slate-200 shadow-sm">{l.client.charAt(0)}</div>
+                                         <div>
+                                             <p className="font-bold text-slate-800 text-sm group-hover:text-blue-700">{l.client}</p>
+                                             <p className="text-[10px] text-slate-400 font-mono">Contrato: {l.id}</p>
+                                         </div>
+                                     </div>
+                                     <div className="text-right">
+                                         <p className="font-black text-green-600 text-sm">R$ {formatMoney(l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue))}</p>
+                                         <p className="text-[10px] text-slate-400 uppercase font-bold">Cobrar</p>
+                                     </div>
+                                 </div>
+                             ))}
+                         </div>
+                     )}
+                 </div>
+                 <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end">
+                      <button onClick={() => setIsDailyAlertOpen(false)} className="px-6 py-2 bg-slate-900 text-white rounded-xl text-sm font-bold shadow-lg hover:bg-slate-800 transition-all">Entendido</button>
+                 </div>
+             </div>
+        </div>
+      )}
+
+      {showWelcomeModal && (          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
               <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95">
                   <div className="bg-slate-900 p-6 flex justify-between items-center">
                       <div>
