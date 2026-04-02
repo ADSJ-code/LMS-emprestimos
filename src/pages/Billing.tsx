@@ -2355,17 +2355,68 @@ const handleFinalSave = async (e: React.FormEvent) => {
                 </div>
 
                 {!formData.isMigration && (
-                    <>
-                        <div className="grid grid-cols-3 gap-4">
-                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
-                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
-                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" value={formData.interestType === 'SIMPLE' ? 1 : formData.installments} disabled={formData.interestType === 'SIMPLE'} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 disabled:bg-slate-100 disabled:text-slate-400" placeholder=""/></div>
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label>
+                                <input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label>
+                                <input required type="number" value={formData.interestType === 'SIMPLE' ? 1 : formData.installments} disabled={formData.interestType === 'SIMPLE'} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 disabled:bg-slate-100 disabled:text-slate-400" placeholder=""/>
+                            </div>
                         </div>
+                        
+                        <div className="grid grid-cols-2 gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl shadow-inner">
+                            <div>
+                                <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1 leading-tight">Taxa Mensal (%)</label>
+                                <input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl outline-none font-bold text-slate-700 focus:ring-2 focus:ring-blue-500/20" placeholder="Ex: 5.5"/>
+                            </div>
+                            <div>
+                                <label className="block text-[10px] font-black uppercase text-blue-600 mb-1 leading-tight">Ou Juros Total Desejado (R$)</label>
+                                <input 
+                                    type="number" 
+                                    step="0.01" 
+                                    placeholder="Ex: 410.00 (Calcula a %)"
+                                    onChange={e => {
+                                        const jurosTarget = parseFloat(e.target.value) || 0;
+                                        const cap = parseFloat(formData.amount) || 0;
+                                        const parcelas = formData.interestType === 'SIMPLE' ? 1 : (parseInt(formData.installments) || 1);
+                                        
+                                        if (cap > 0 && jurosTarget >= 0) {
+                                            if (formData.interestType === 'SIMPLE' || parcelas === 1) {
+                                                const taxa = (jurosTarget / cap) * 100;
+                                                // Trava a exibição em 2 casas decimais
+                                                setFormData({...formData, interestRate: taxa.toFixed(2)});
+                                            } else {
+                                                // Motor de Busca Binária para achar a % na Tabela Price
+                                                let low = 0.0;
+                                                let high = 100.0; 
+                                                let bestRate = 0;
+                                                for (let i = 0; i < 40; i++) {
+                                                    let mid = (low + high) / 2;
+                                                    let r = mid / 100;
+                                                    let pmt = cap * ((r * Math.pow(1 + r, parcelas)) / (Math.pow(1 + r, parcelas) - 1));
+                                                    let totalInt = (pmt * parcelas) - cap;
+                                                    if (totalInt < jurosTarget) low = mid;
+                                                    else high = mid;
+                                                    bestRate = mid;
+                                                }
+                                                // Trava a exibição em 2 casas decimais
+                                                setFormData({...formData, interestRate: bestRate.toFixed(2)});
+                                            }
+                                        }
+                                    }}
+                                    className="w-full p-3 border border-blue-300 rounded-xl outline-none font-black text-blue-700 bg-blue-50 focus:ring-2 focus:ring-blue-500/20 shadow-sm" 
+                                />
+                            </div>
+                        </div>
+
                         <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl mb-4">
                             <input type="checkbox" id="interestType" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" />
                             <label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros)</label>
                         </div>
-                    </>
+                    </div>
                 )}
 
                 {formData.frequency === 'MENSAL' && (

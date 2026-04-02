@@ -618,20 +618,17 @@ func loansHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(results)
 	case http.MethodPost:
-		// 1. Lemos o pacote bruto enviado pelo React
 		bodyBytes, _ := io.ReadAll(r.Body)
 
 		var l Loan
 		json.Unmarshal(bodyBytes, &l)
 
-		// 2. A MARRETA: Extraímos o ID à força caso o Go tenha ignorado na etapa anterior
 		var raw map[string]interface{}
 		json.Unmarshal(bodyBytes, &raw)
 		if customID, ok := raw["id"].(string); ok && customID != "" {
 			l.ID = customID
 		}
 
-		// 3. Se mesmo assim estiver vazio (o usuário não digitou nada), gera automático
 		if l.ID == "" {
 			opts := options.FindOne().SetSort(bson.M{"id": -1})
 			var lastLoan Loan
@@ -643,7 +640,6 @@ func loansHandler(w http.ResponseWriter, r *http.Request) {
 					nextNum = val + 1
 				}
 			}
-			// Formata com 4 dígitos (ex: "0001", "0227")
 			l.ID = fmt.Sprintf("%04d", nextNum)
 		}
 
@@ -806,7 +802,6 @@ func logsHandler(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		// Busca todos os logs do banco de dados (Sincronia total)
 		cursor, _ := logCollection.Find(ctx, bson.M{})
 		var res []LogEntry
 		cursor.All(ctx, &res)
@@ -816,14 +811,12 @@ func logsHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(res)
 
 	case http.MethodPost:
-		// Recebe uma nova ação do Frontend e grava no MongoDB
 		var entry LogEntry
 		if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
 			http.Error(w, "Dados inválidos", http.StatusBadRequest)
 			return
 		}
 
-		// Garante um ID único e o registro da hora certa
 		entry.ID = primitive.NewObjectID().Hex()
 		if entry.Timestamp.IsZero() {
 			entry.Timestamp = time.Now()
@@ -859,7 +852,7 @@ func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// --- WhatsApp Controller e Service (Mantendo Original) ---
+// --- WhatsApp Controller e Service ---
 
 type CreateInstance struct {
 	Name  string `json:"name"`
@@ -894,8 +887,14 @@ func (ctrl *WhatsappController) EnviarMensagem(w http.ResponseWriter, r *http.Re
 		ApiKey         string  `json:"apiKey"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-	ctrl.svc.SendMessage(r.Context(), body.UserConectado, body.Phone, body.Message, body.Delay, body.Name, body.LateDays, body.UpdatedAmount, body.DateVencimento, body.ApiKey)
-	w.WriteHeader(200)
+
+	err := ctrl.svc.SendMessage(r.Context(), body.UserConectado, body.Phone, body.Message, body.Delay, body.Name, body.LateDays, body.UpdatedAmount, body.DateVencimento, body.ApiKey)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (ctrl *WhatsappController) VerInstancias(w http.ResponseWriter, r *http.Request) {
@@ -953,11 +952,29 @@ func (s *whatsappService) SendMessage(ctx context.Context, userConectado string,
 		"textMessage": map[string]string{"text": message},
 	}
 	b, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(b))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(b))
+	if err != nil {
+		return fmt.Errorf("falha ao criar requisição HTTP: %v", err)
+	}
+
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("apikey", apiKey)
+
 	client := &http.Client{Timeout: 10 * time.Second}
-	client.Do(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Erro ao contactar Evolution API: %v", err)
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("Evolution API recusou o envio (Status %d): %s", resp.StatusCode, string(bodyBytes))
+		return fmt.Errorf("Evolution API error (%d): %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	log.Printf("✅ Mensagem enviada via API para %s", phoneLimpo)
 	return nil
 }
 
@@ -970,16 +987,13 @@ func DefinirMensagemComDetalhes(delayLevel int, name string, lateDays int, updat
 	primeiroNome := strings.Split(strings.TrimSpace(name), " ")[0]
 	primeiroNome = strings.ToUpper(primeiroNome)
 
-	mensagemPadrao := fmt.Sprintf("Olá, *%s*! Tudo bem?\n\nPassando para lembrar do vencimento da sua parcela no valor de R$ %s no dia %s.\n\nQualquer dúvida, estamos à disposição!", primeiroNome, valorFormatado, dateVencimento)
-
-	switch delayLevel {
-	case 1:
-		return fmt.Sprintf("Olá, *%s*!\n\nNotamos que o seu pagamento ainda não consta em nosso sistema.\n\n📌 *Detalhes:*\n• Valor: R$ %s\n• Atraso: %d dia(s)\n\nCaso já tenha efetuado o pagamento, por favor desconsidere esta mensagem.", primeiroNome, valorFormatado, lateDays)
-	case 3:
+	// Se tiver dias de atraso (lateDays > 0), a mensagem muda automaticamente para a de cobrança
+	if lateDays > 0 {
 		return fmt.Sprintf("🚨 *AVISO DE ATRASO*\n\n*%s*, o débito de R$ %s está em fase avançada de atraso (%d dias). Por favor, entre em contato conosco o mais breve possível para regularizarmos a situação.", primeiroNome, valorFormatado, lateDays)
-	default:
-		return mensagemPadrao
 	}
+
+	// Se estiver em dia, manda o lembrete de vencimento
+	return fmt.Sprintf("Olá, *%s*! Tudo bem?\n\nPassando para lembrar do vencimento da sua parcela no valor de R$ %s no dia %s.\n\nQualquer dúvida, estamos à disposição!", primeiroNome, valorFormatado, dateVencimento)
 }
 
 func (s *whatsappService) ViewInstances(ctx context.Context) ([]InstanceResponse, error) {
