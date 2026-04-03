@@ -25,12 +25,12 @@ const Dashboard = () => {
   const [tierFilters, setTierFilters] = useState({ capital: 'all', profit: 'all', overdue: 'all' });
 
   const [loading, setLoading] = useState(false);
-  const [searchTerm, setSearchTerm] = useState(''); // Estado para a busca no Dashboard solicitado
+  const [searchTerm, setSearchTerm] = useState(''); 
   const [selectedRange, setSelectedRange] = useState<'low' | 'mid' | 'high' | 'capital' | 'profit' | 'overdue' | 'active' | 'clients_contracts' | null>(null);
   const [allLoans, setAllLoans] = useState<Loan[]>([]);
   const [allClients, setAllClients] = useState<Client[]>([]);
   
-const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
+  const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
 
   // --- ESTADOS DO MODAL VENCIMENTOS ---
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
@@ -86,63 +86,6 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
     return new Date(year, month - 1, day);
   };
 
-  // --- O NOVO MOTOR BLINDADO (Importado do Billing) ---
-  const getSyncedBreakdown = (loan: Loan | null) => {
-    if (!loan) return { interest: 0, capital: 0, total: 0 };
-    
-    if (loan.interestType === 'SIMPLE') {
-        const dueDate = new Date(loan.nextDue);
-        const cycleStart = new Date(dueDate);
-        cycleStart.setMonth(cycleStart.getMonth() - 1);
-        cycleStart.setHours(23, 59, 59, 999);
-
-        let capitalPaidInThisCycle = 0;
-        if (loan.history) {
-            loan.history.forEach(h => {
-                const hDate = new Date(h.date);
-                if (hDate > cycleStart && !h.note?.includes('[CICLO COMPLETADO]')) {
-                    capitalPaidInThisCycle += (Number(h.capitalPaid) || 0);
-                }
-            });
-        }
-
-        const principalAtStartOfMonth = (Number(loan.amount) - (Number(loan.totalPaidCapital) || 0)) + capitalPaidInThisCycle;
-        let periodRate = Number(loan.interestRate) / 100;
-        if (loan.frequency === 'SEMANAL') periodRate /= 4;
-        else if (loan.frequency === 'DIARIO') periodRate /= 30;
-
-        const dynamicInterest = principalAtStartOfMonth * periodRate;
-        let extraAcordo = 0;
-        if (loan.status === 'Acordo' && (Number(loan.agreementValue) || 0) > 0) extraAcordo = Number(loan.agreementValue);
-        
-        return { interest: dynamicInterest + extraAcordo, capital: 0, total: dynamicInterest + extraAcordo };
-    } else {
-        const totalReceivable = Number(loan.amount) + (Number(loan.projectedProfit) || 0);
-        const originalInstallments = Math.max(1, Math.round(totalReceivable / (Number(loan.installmentValue) || 1)));
-        const flatInterest = (Number(loan.projectedProfit) || 0) / originalInstallments;
-        const flatCapital = Number(loan.installmentValue) - flatInterest;
-        let extraAcordo = 0;
-        if (loan.status === 'Acordo' && (Number(loan.agreementValue) || 0) > 0) extraAcordo = Number(loan.agreementValue);
-        return { interest: Math.max(0, flatInterest) + extraAcordo, capital: Math.max(0, flatCapital), total: Number(loan.installmentValue) + extraAcordo };
-    }
-  };
-
-  const calculateRemainingProfit = (loan: Loan) => {
-      // CORREÇÃO: "Só Juros" o lucro a receber é SEMPRE e APENAS o juros do mês atual.
-      if (loan.interestType === 'SIMPLE') return getSyncedBreakdown(loan).interest;
-
-      const amount = Number(loan.amount) || 0;
-      const installments = Number(loan.installments) || 0;
-      const installmentValue = Number(loan.installmentValue) || 0;
-      const paidInterest = Number(loan.totalPaidInterest) || 0;
-      
-      let totalExpectedInterest = Number(loan.projectedProfit) || 0;
-      if (totalExpectedInterest <= 0) {
-          totalExpectedInterest = Math.max(0, (installmentValue * installments) - amount);
-      }
-      return Math.max(0, totalExpectedInterest - paidInterest);
-  };
-
   const getLoanDetails = (loan: Loan) => {
       const today = getToday();
       let tempDue = parseLocalDate(loan.nextDue);
@@ -151,10 +94,9 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
       let count = 0;
       
       const realStatus = getLoanRealStatus(loan);
-      const breakdown = getSyncedBreakdown(loan);
+      const breakdown = calculateInstallmentBreakdown(loan);
       const baseAmount = loan.interestType === 'SIMPLE' ? breakdown.total : (realStatus === 'Acordo' ? Number(loan.installmentValue) + Number(loan.agreementValue || 0) : Number(loan.installmentValue));
       
-      // CORREÇÃO: No "Só Juros" a parcela não se acumula, ele pune apenas a ativa atual.
       const remainingInstallments = loan.interestType === 'SIMPLE' ? 1 : (loan.installments || 1);
       const pad = (n: number) => n.toString().padStart(2, '0');
       
@@ -249,14 +191,10 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
         }
         if (isPaid) return;
 
-        const breakdown = getSyncedBreakdown(loan);
+        // O MOTOR CENTRAL PUXANDO DO FINANCE.TS (Fim das discrepâncias)
+        const breakdown = calculateInstallmentBreakdown(loan);
         const { totalOverdue, missedCount } = getLoanDetails(loan);
-        const remProfit = calculateRemainingProfit(loan);
         
-        const futureProfitTotal = Math.max(0, remProfit - (missedCount * breakdown.interest));
-        const capBalance = calculateCapitalBalance(loan);
-        const futureCapitalTotal = Math.max(0, capBalance - (missedCount * breakdown.capital));
-
         let currentDue = parseLocalDate(loan.nextDue);
         let hasMatch = false;
         let capToAdd = 0;
@@ -268,7 +206,6 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
         const limit = loan.interestType === 'SIMPLE' ? 1 : (loan.installments || 1);
 
         for (let i = 0; i < limit; i++) {
-            // Verificação de período segura contra erros de 'null'
             const inRange = !startFilter || !endFilter || (currentDue >= startFilter && currentDue <= endFilter);
             
             if (inRange) {
@@ -286,9 +223,11 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
                         const sliceInRange = !startFilter || !endFilter || (sliceDate >= startFilter && sliceDate <= endFilter);
                         
                         if (sliceInRange) {
-                            const ratio = breakdown.interest / (breakdown.total || 1);
-                            const sInt = md.amount * ratio;
+                            // Calcula a proporção dessa fatia sobre a parcela
+                            const ratio = breakdown.total > 0 ? (md.amount / breakdown.total) : 0;
+                            const sInt = breakdown.interest * ratio;
                             const sCap = md.amount - sInt;
+                            
                             capToAdd += sCap;
                             profToAdd += sInt;
                             slices.push({ date: sliceDate.toISOString(), capital: sCap, interest: sInt, index: `${i}-${idx}`, isSlice: true });
@@ -309,6 +248,11 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
         if (hasMatch) {
             uniqueMatchedContracts.add(loan.id);
             const tier = loan.interestRate < 10 ? 'low' : loan.interestRate <= 15 ? 'mid' : 'high';
+            
+            // Corrige arredondamentos absurdos
+            capToAdd = Math.round(capToAdd * 100) / 100;
+            profToAdd = Math.round(profToAdd * 100) / 100;
+
             capAcc.all += capToAdd; capAcc[tier] += capToAdd;
             profAcc.all += profToAdd; profAcc[tier] += profToAdd;
             overAcc.all += overToAdd; overAcc[tier] += overToAdd;
@@ -317,15 +261,19 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
             else if (tier === 'mid') { rMidCap += capToAdd; rMidProf += profToAdd; } 
             else { rHighCap += capToAdd; rHighProf += profToAdd; }
 
-            // Se for visão "Todos", consolida o contrato em 1 linha só. Se tiver filtro de data, detalha mês a mês.
             if (period === 'todos') {
+                // VISAO SALDO GLOBAL: Usa o total pendente do contrato ignorando as parcelas do fluxo
+                const globalRemainingCapital = calculateCapitalBalance(loan);
+                const expectedTotalProfit = Number(loan.projectedProfit) || Math.max(0, (loan.installmentValue * loan.installments) - loan.amount);
+                const globalRemainingProfit = Math.max(0, expectedTotalProfit - (Number(loan.totalPaidInterest) || 0));
+
                 filteredContext.push({ 
                     ...loan, 
                     uniqueSliceId: loan.id,
                     isActualSlice: false, 
                     projectedDate: loan.nextDue,
-                    projectedCapitalForPeriod: capToAdd, 
-                    projectedInterestForPeriod: profToAdd
+                    projectedCapitalForPeriod: globalRemainingCapital, 
+                    projectedInterestForPeriod: loan.interestType === 'SIMPLE' ? breakdown.interest : globalRemainingProfit
                 });
             } else {
                 slices.forEach(s => {
@@ -341,6 +289,31 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
             }
         }
       });
+
+      // Recalcula o saldo global quando o filtro é 'todos' para bater a conta redonda!
+      if (period === 'todos') {
+          capAcc = { all: 0, low: 0, mid: 0, high: 0 };
+          profAcc = { all: 0, low: 0, mid: 0, high: 0 };
+          rLowCap = 0; rMidCap = 0; rHighCap = 0;
+          rLowProf = 0; rMidProf = 0; rHighProf = 0;
+
+          safeLoans.forEach((loan:any) => {
+              if (loan.status === 'Pago' || loan.status === 'Quitado') return;
+              
+              const gCap = calculateCapitalBalance(loan);
+              const gExpected = Number(loan.projectedProfit) || Math.max(0, (loan.installmentValue * loan.installments) - loan.amount);
+              const gProf = loan.interestType === 'SIMPLE' ? calculateInstallmentBreakdown(loan).interest : Math.max(0, gExpected - (Number(loan.totalPaidInterest) || 0));
+              
+              const tier = loan.interestRate < 10 ? 'low' : loan.interestRate <= 15 ? 'mid' : 'high';
+              
+              capAcc.all += gCap; capAcc[tier] += gCap;
+              profAcc.all += gProf; profAcc[tier] += gProf;
+              
+              if (tier === 'low') { rLowCap += gCap; rLowProf += gProf; } 
+              else if (tier === 'mid') { rMidCap += gCap; rMidProf += gProf; } 
+              else { rHighCap += gCap; rHighProf += gProf; }
+          });
+      }
 
       setFilteredLoansContext(filteredContext);
       setMetrics({
@@ -415,6 +388,7 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
       return () => window.removeEventListener('focus', handleFocus);
   }, [todaysLoans]);
   // ----------------------------------------------------
+  
   useEffect(() => {
       if (period === 'personalizado' && customStart && customEnd) {
           const timeout = setTimeout(() => fetchAndCalculate(), 500);
@@ -453,7 +427,7 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
               if (tierFilters.overdue === 'high') passTier = l.interestRate > 15;
 
               return isOverdue && contextIds.has(l.id) && passTier;
-          }).sort((a, b) => a.client.localeCompare(b.client)); // ORDENAÇÃO ALFABÉTICA (A-Z) APLICADA AQUI
+          }).sort((a, b) => a.client.localeCompare(b.client));
       }
 
       return filteredLoansContext.filter(l => {
@@ -480,9 +454,9 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
           if (selectedRange === 'mid') return l.interestRate >= 10 && l.interestRate <= 15;
           if (selectedRange === 'high') return l.interestRate > 15;
           return false;
-      }).sort((a, b) => a.client.localeCompare(b.client)); // ORDENAÇÃO ALFABÉTICA (A-Z) APLICADA AQUI
+      }).sort((a, b) => a.client.localeCompare(b.client));
   }, [filteredLoansContext, allLoans, selectedRange, tierFilters]);
-// LÓGICA DE AGRUPAMENTO E BUSCA DINÂMICA (NOME, CPF, CONTRATO)
+
   const activeContractsByClient = useMemo(() => {
       if (selectedRange !== 'clients_contracts') return [];
       const map = new Map();
@@ -493,21 +467,18 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
           const c = map.get(l.client);
           c.contracts.push(l);
           
-          const breakdown = calculateInstallmentBreakdown(l);
-          const { missedCount } = getLoanDetails(l);
-          
-          c.totalCapital += Math.max(0, calculateCapitalBalance(l) - (missedCount * breakdown.capital));
-          c.totalProfit += Math.max(0, calculateRemainingProfit(l) - (missedCount * breakdown.interest));
+          c.totalCapital += calculateCapitalBalance(l);
+          const gExpected = Number(l.projectedProfit) || Math.max(0, (l.installmentValue * l.installments) - l.amount);
+          const gProf = l.interestType === 'SIMPLE' ? calculateInstallmentBreakdown(l).interest : Math.max(0, gExpected - (Number(l.totalPaidInterest) || 0));
+          c.totalProfit += gProf;
       });
 
       const result = Array.from(map.values());
 
-      // Ordenação Alfabética (A-Z) quando não há busca
       if (!searchTerm) return result.sort((a, b) => a.name.localeCompare(b.name));
 
       const term = searchTerm.toLowerCase();
       return result.filter(c => {
-          // Busca o CPF do cliente na lista global para comparar
           const clientInfo = allClients.find(cli => cli.name === c.name);
           const cpfLimpo = clientInfo?.cpf ? clientInfo.cpf.replace(/\D/g, '') : '';
           const buscaCpf = term.replace(/\D/g, '');
@@ -517,9 +488,9 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
           const matchContrato = c.contracts.some((cnt: any) => cnt.id.toString().includes(term));
 
           return matchNome || matchCpf || matchContrato;
-      // Ordenação Alfabética (A-Z) quando há busca
       }).sort((a, b) => a.name.localeCompare(b.name));
   }, [allLoans, allClients, selectedRange, searchTerm]);
+
   const rangeTitles = {
       low: 'Taxa Baixa (< 10%)', mid: 'Taxa Média (10% - 15%)', high: 'Taxa Alta (> 15%)',
       capital: 'Detalhamento de Capital', profit: 'Detalhamento de Lucro', overdue: 'Contratos em Atraso (Bola de Neve)', active: 'Carteira de Contratos no Filtro',
@@ -559,8 +530,8 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
                                          </div>
                                      </div>
                                      <div className="text-right">
-                                         <p className="font-black text-green-600 text-sm">R$ {formatMoney(l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue))}</p>
-                                         <p className="text-[10px] text-slate-400 uppercase font-bold">Cobrar</p>
+                                         <p className="font-black text-green-600 text-sm">R$ {formatMoney(l.interestType === 'SIMPLE' ? calculateInstallmentBreakdown(l).total : Number(l.installmentValue))}</p>
+                                         <p className="text-[10px] text-slate-400 uppercase font-bold">Parcela Fixa</p>
                                      </div>
                                  </div>
                              ))}
@@ -625,7 +596,6 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
               </header>
               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
                   
-                  {/* BARRA DE PESQUISA INTERNA DO DASHBOARD */}
                   {selectedRange === 'clients_contracts' && (
                       <div className="p-4 border-b bg-slate-50/50">
                           <div className="relative max-w-md">
@@ -683,10 +653,10 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
                                   </th>
                                   <th className="p-4 text-center">Taxa (%)</th>
                                   <th className="p-4 text-right">
-                                      {selectedRange === 'overdue' ? 'Valor Original (Atrasado)' : period !== 'todos' ? 'Capital da Parcela' : 'Capital a Receber'}
+                                      {selectedRange === 'overdue' ? 'Valor Original (Atrasado)' : period !== 'todos' ? 'Capital da Parcela' : 'Capital Restante'}
                                   </th>
                                   <th className="p-4 text-right text-green-600">
-                                      {selectedRange === 'overdue' ? '-' : period !== 'todos' ? 'Juros da Parcela' : 'Lucro a Receber'}
+                                      {selectedRange === 'overdue' ? '-' : period !== 'todos' ? 'Juros da Parcela' : 'Lucro Restante'}
                                   </th>
                                   {selectedRange === 'overdue' && <th className="p-4 text-right text-red-600">Bola de Neve (Atualizado)</th>}
                                   <th className="p-4 text-center">Status</th>
@@ -718,13 +688,13 @@ const [filteredLoansContext, setFilteredLoansContext] = useState<any[]>([]);
                                                           <Calendar size={12} className="text-blue-500"/>
                                                           {parseLocalDate(loan.projectedDate || loan.nextDue).toLocaleDateString('pt-BR')}
                                                       </div>
-                                                      {/* Selo de Raio-X vindo do Motor */}
-        {loan.isActualSlice && (
-            <div className="text-[10px] text-blue-600 font-black uppercase tracking-tighter mt-1 bg-blue-50 px-1 rounded inline-block">Fatia da Parcela</div>
-        )}
-        {parseLocalDate(loan.projectedDate || loan.nextDue) < getToday() && getLoanRealStatus(loan) === 'Atrasado' && (
-            <div className="text-[9px] text-red-500 font-bold uppercase tracking-wider mt-0.5">(Vencimento em Atraso)</div>
-        )}       </>
+                                                      {loan.isActualSlice && (
+                                                          <div className="text-[10px] text-blue-600 font-black uppercase tracking-tighter mt-1 bg-blue-50 px-1 rounded inline-block">Fatia da Parcela</div>
+                                                      )}
+                                                      {parseLocalDate(loan.projectedDate || loan.nextDue) < getToday() && getLoanRealStatus(loan) === 'Atrasado' && (
+                                                          <div className="text-[9px] text-red-500 font-bold uppercase tracking-wider mt-0.5">(Vencimento em Atraso)</div>
+                                                      )}       
+                                                  </>
                                               )}
                                           </td>
 

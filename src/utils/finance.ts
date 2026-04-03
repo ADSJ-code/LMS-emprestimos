@@ -1,10 +1,18 @@
 import { Loan } from '../services/api';
 
+// Garante que o valor sempre será tratado como número, independente se veio do banco como string.
 export const formatMoney = (value: number | undefined | null | string): string => {
   if (value === undefined || value === null || value === '') return "0,00";
   const num = typeof value === 'string' ? parseFloat(value) : value;
   if (isNaN(num)) return "0,00";
   return num.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+// Transforma string em número de forma segura (Impede que "20000" quebre a soma)
+const safeNumber = (val: any): number => {
+    if (val === undefined || val === null) return 0;
+    const parsed = Number(val);
+    return isNaN(parsed) ? 0 : parsed;
 };
 
 export const calculateOverdueValue = (
@@ -16,7 +24,7 @@ export const calculateOverdueValue = (
   totalAmount?: number, // NOVO: Valor do capital total que o Billing está enviando (ex: R$ 1000)
   screenData?: { payCapital: string, payInterest: string } // NOVO
 ): number => {
-  if (status !== 'Atrasado' && status !== 'Acordo') return amount;
+  if (status !== 'Atrasado' && status !== 'Acordo') return safeNumber(amount);
 
   // CORREÇÃO DEFINITIVA DE FUSO HORÁRIO (FALSO ATRASO)
   // Separa a data de vencimento de forma limpa
@@ -32,25 +40,29 @@ export const calculateOverdueValue = (
   const [ty, tm, td] = localTodayStr.split('-').map(Number);
   const today = new Date(ty, tm - 1, td);
 
-  if (today <= due) return amount;
+  if (today <= due) return safeNumber(amount);
 
   const diffTime = Math.abs(today.getTime() - due.getTime());
   const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-  const baseForCalculation = (totalAmount && totalAmount > 0) ? totalAmount : 0;
+  const baseForCalculation = (totalAmount && safeNumber(totalAmount) > 0) ? safeNumber(totalAmount) : 0;
 
-  const safeFine = (finePercent || 0);
+  const safeFine = safeNumber(finePercent);
   const fineValue = baseForCalculation * (safeFine / 100);
 
-  const safeMora = (moraPercent || 0);
+  const safeMora = safeNumber(moraPercent);
   const dailyInterestRate = (safeMora / 100); 
   const interestValue = baseForCalculation * (dailyInterestRate * days);
 
-  return amount + fineValue + interestValue;
+  return safeNumber(amount) + fineValue + interestValue;
 };
 
 export const calculateCapitalBalance = (loan: Loan): number => {
-    const balance = loan.amount - (loan.totalPaidCapital || 0);
+    // Blindagem pesada contra string
+    const amount = safeNumber(loan.amount);
+    const paid = safeNumber(loan.totalPaidCapital);
+    const balance = amount - paid;
+    
     return balance > 0.10 ? balance : 0;
 };
 
@@ -71,9 +83,11 @@ export const calculateInstallmentBreakdown = (
         return { interest: 0, capital: 0, total: 0 };
     }
 
+    const pmt = safeNumber(loan.installmentValue);
+    
     // Modalidade 1: Pagamento Mínimo (Só Juros)
     if (loan.interestType === 'SIMPLE') {
-        let periodicRate = (loan.interestRate || 0) / 100;
+        let periodicRate = safeNumber(loan.interestRate) / 100;
         
         if (loan.frequency === 'SEMANAL') periodicRate = periodicRate / 4;
         else if (loan.frequency === 'DIARIO') periodicRate = periodicRate / 30;
@@ -85,82 +99,39 @@ export const calculateInstallmentBreakdown = (
         return { capital: 0, interest: roundedInterest, total: roundedInterest };
     }
 
-    // Chave Mestra
-    const mode = localStorage.getItem('amortizationMode') || 'LINEAR'; 
-
-    const pmt = Number(loan.installmentValue) || 0;
-    const installments = Number(loan.installments) || 1; // Fator atualizado a cada pagamento
-    const originalAmount = Number(loan.amount) || 0;
+    // Modalidade 2: Price / Linear Fixa
+    // CÁLCULO DIRETO E FIXO (Evita as distorções dos "R$ 659,95")
     
-    // Calcula o lucro projetado original do contrato
-    const expectedTotalInterest = Number(loan.projectedProfit) > 0 
-        ? Number(loan.projectedProfit) 
-        : Math.max(0, (pmt * installments) - originalAmount);
+    const originalAmount = safeNumber(loan.amount);
+    
+    // Calcula o lucro total esperado que foi fixado na criação do contrato
+    const expectedTotalInterest = safeNumber(loan.projectedProfit) > 0 
+        ? safeNumber(loan.projectedProfit) 
+        : Math.max(0, (pmt * (loan.installments || 1)) - originalAmount);
 
-    if (mode === 'LINEAR') {
-        // ==========================================
-        // MODO RODRIGO (CORRIGIDO): Divide o SALDO pelas PARCELAS RESTANTES
-        // Isso garante que todo mês a fatia seja idêntica, mesmo após pagar.
-        // ==========================================
-        const remainingProfit = Math.max(0, expectedTotalInterest - (Number(loan.totalPaidInterest) || 0));
-        
-        let capitalPart = currentCapitalBalance / installments;
-        let interestPart = remainingProfit / installments;
+    // No modo Rodrigo (Parcelas Cúbicas Fixas), o Capital é SEMPRE a parcela menos os juros
+    // Só descobrimos quantas parcelas originais o contrato tinha para fazer a divisão cravada
+    const totalReceivable = originalAmount + expectedTotalInterest;
+    let originalInstallmentsCount = Math.round(totalReceivable / pmt);
+    if (originalInstallmentsCount < 1 || isNaN(originalInstallmentsCount)) originalInstallmentsCount = 1;
 
-        // Ajuste fino para não dar diferença de centavos em relação à parcela
-        if (Math.abs((capitalPart + interestPart) - pmt) > 0.05) {
-            interestPart = pmt - capitalPart;
-        }
+    let flatInterest = expectedTotalInterest / originalInstallmentsCount;
+    let flatCapital = pmt - flatInterest;
 
-        // Arredondamento contábil para não quebrar a tela
-        capitalPart = Math.round(capitalPart * 100) / 100;
-        interestPart = Math.round(interestPart * 100) / 100;
+    // Arredondamento contábil para não quebrar a tela
+    flatCapital = Math.round(flatCapital * 100) / 100;
+    flatInterest = Math.round(flatInterest * 100) / 100;
 
-        // Regra de segurança: O Capital da parcela não pode ser maior que a dívida real restante
-        if (currentCapitalBalance < capitalPart) {
-            capitalPart = currentCapitalBalance;
-            interestPart = pmt - capitalPart;
-            if (interestPart < 0) interestPart = 0;
-        }
-
-        return { capital: capitalPart, interest: interestPart, total: pmt };
-
-    } else {
-        // ==========================================
-        // MODO CLÓVIS: Tabela Price Bancária Original
-        // ==========================================
-        let periodicRate = loan.interestRate / 100; 
-
-        if (loan.frequency === 'SEMANAL') periodicRate = periodicRate / 4; 
-        else if (loan.frequency === 'DIARIO') periodicRate = periodicRate / 30; 
-
-        let fixedInstallment = loan.installmentValue;
-        
-        if (!fixedInstallment || fixedInstallment === 0) {
-            if (periodicRate === 0) fixedInstallment = loan.amount / installments;
-            else fixedInstallment = loan.amount * ( (periodicRate * Math.pow(1 + periodicRate, installments)) / (Math.pow(1 + periodicRate, installments) - 1) );
-        }
-
-        let periodicInterest = currentCapitalBalance * periodicRate;
-        let capitalPart = fixedInstallment - periodicInterest;
-
-        if (capitalPart < 0) {
-            capitalPart = 0;
-            periodicInterest = fixedInstallment; 
-        }
-
-        if (currentCapitalBalance < capitalPart) {
-            capitalPart = currentCapitalBalance;
-            periodicInterest = fixedInstallment - capitalPart;
-        }
-
-        periodicInterest = Math.round(periodicInterest * 100) / 100;
-        capitalPart = Math.round(capitalPart * 100) / 100;
-        
-        return {
-            interest: periodicInterest,
-            capital: capitalPart,
-            total: periodicInterest + capitalPart
-        };
+    // Regra de segurança final: O Capital da parcela não pode ser maior que a dívida real restante
+    if (currentCapitalBalance < flatCapital) {
+        flatCapital = currentCapitalBalance;
+        flatInterest = pmt - flatCapital;
+        if (flatInterest < 0) flatInterest = 0;
     }
+
+    return { 
+        capital: flatCapital, 
+        interest: flatInterest, 
+        total: pmt 
+    };
 };
