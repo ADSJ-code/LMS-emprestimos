@@ -143,28 +143,22 @@ const Dashboard = () => {
       setAllLoans(safeLoans); 
       setAllClients(clients || []);
       
-      const today = new Date();
-      today.setHours(0,0,0,0);
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       
       let startFilter: Date | null = null;
       let endFilter: Date | null = null;
 
       if (period === 'hoje') {
-          startFilter = new Date(today);
-          endFilter = new Date(today);
+          startFilter = new Date(today); endFilter = new Date(today);
       } else if (period === 'semana') {
-          startFilter = new Date(today);
-          endFilter = new Date(today);
-          endFilter.setDate(today.getDate() + 7);
+          startFilter = new Date(today); endFilter = new Date(today); endFilter.setDate(today.getDate() + 7);
       } else if (period === 'mes') {
-          startFilter = new Date(today.getFullYear(), today.getMonth(), 1);
-          endFilter = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+          startFilter = new Date(today.getFullYear(), today.getMonth(), 1); endFilter = new Date(today.getFullYear(), today.getMonth() + 1, 0);
       } else if (period === 'proximo_mes') {
-          startFilter = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-          endFilter = new Date(today.getFullYear(), today.getMonth() + 2, 0);
+          startFilter = new Date(today.getFullYear(), today.getMonth() + 1, 1); endFilter = new Date(today.getFullYear(), today.getMonth() + 2, 0);
       } else if (period === 'personalizado' && customStart && customEnd) {
-          startFilter = parseLocalDate(customStart);
-          endFilter = parseLocalDate(customEnd);
+          startFilter = parseLocalDate(customStart); endFilter = parseLocalDate(customEnd);
       }
 
       if (endFilter) endFilter.setHours(23, 59, 59, 999);
@@ -176,10 +170,7 @@ const Dashboard = () => {
       let profAcc = { all: 0, low: 0, mid: 0, high: 0 };
       let overAcc = { all: 0, low: 0, mid: 0, high: 0 };
 
-      let rLowCap = 0, rMidCap = 0, rHighCap = 0;
-      let rLowProf = 0, rMidProf = 0, rHighProf = 0;
       let totalGloballyActive = 0;
-      
       const filteredContext: any[] = [];
       const pad = (n: number) => n.toString().padStart(2, '0');
 
@@ -191,10 +182,9 @@ const Dashboard = () => {
         }
         if (isPaid) return;
 
-        // O MOTOR CENTRAL PUXANDO DO FINANCE.TS (Fim das discrepâncias)
         const breakdown = calculateInstallmentBreakdown(loan);
-        const { totalOverdue, missedCount } = getLoanDetails(loan);
-        
+        const realStatus = getLoanRealStatus(loan);
+        const { totalOverdue } = getLoanDetails(loan); // Puxa a bola de neve inteira!        
         let currentDue = parseLocalDate(loan.nextDue);
         let hasMatch = false;
         let capToAdd = 0;
@@ -202,44 +192,27 @@ const Dashboard = () => {
         let overToAdd = 0;
         let slices: any[] = []; 
 
-        const isMulti = loan.multiDates && loan.multiDates.length > 0;
         const limit = loan.interestType === 'SIMPLE' ? 1 : (loan.installments || 1);
 
         for (let i = 0; i < limit; i++) {
             const inRange = !startFilter || !endFilter || (currentDue >= startFilter && currentDue <= endFilter);
-            
             if (inRange) {
                 hasMatch = true;
-                const realStatus = loan.status;
                 const isOverdueInstallment = currentDue < today || (i === 0 && realStatus === 'Atrasado');
 
                 if (isOverdueInstallment) {
                     const baseAmount = (i === 0 && realStatus === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
                     const dateStr = `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`;
-                    overToAdd += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
-                } else if (isMulti) {
-                    loan.multiDates.forEach((md: any, idx: number) => {
-                        const sliceDate = new Date(currentDue.getFullYear(), currentDue.getMonth(), md.day);
-                        const sliceInRange = !startFilter || !endFilter || (sliceDate >= startFilter && sliceDate <= endFilter);
-                        
-                        if (sliceInRange) {
-                            // Calcula a proporção dessa fatia sobre a parcela
-                            const ratio = breakdown.total > 0 ? (md.amount / breakdown.total) : 0;
-                            const sInt = breakdown.interest * ratio;
-                            const sCap = md.amount - sInt;
-                            
-                            capToAdd += sCap;
-                            profToAdd += sInt;
-                            slices.push({ date: sliceDate.toISOString(), capital: sCap, interest: sInt, index: `${i}-${idx}`, isSlice: true });
-                        }
-                    });
+                    // Sincronia Atraso: No card global, a produção só conta a parcela ATUAL pendente
+                    if (i === 0) {
+                        overToAdd = calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+                    }
                 } else {
-                    capToAdd += breakdown.capital;
+                    capToAdd += (loan.interestType === 'SIMPLE' ? 0 : breakdown.capital);
                     profToAdd += breakdown.interest;
-                    slices.push({ date: currentDue.toISOString(), capital: breakdown.capital, interest: breakdown.interest, index: i, isSlice: false });
+                    slices.push({ date: currentDue.toISOString(), capital: breakdown.capital, interest: breakdown.interest, index: i });
                 }
             }
-            if (startFilter && endFilter && currentDue > endFilter) break;
             if (loan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
             else if (loan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
             else currentDue.setMonth(currentDue.getMonth() + 1);
@@ -248,95 +221,66 @@ const Dashboard = () => {
         if (hasMatch) {
             uniqueMatchedContracts.add(loan.id);
             const tier = loan.interestRate < 10 ? 'low' : loan.interestRate <= 15 ? 'mid' : 'high';
-            
-            // Corrige arredondamentos absurdos
-            capToAdd = Math.round(capToAdd * 100) / 100;
-            profToAdd = Math.round(profToAdd * 100) / 100;
 
-            capAcc.all += capToAdd; capAcc[tier] += capToAdd;
-            profAcc.all += profToAdd; profAcc[tier] += profToAdd;
-            overAcc.all += overToAdd; overAcc[tier] += overToAdd;
-
-            if (tier === 'low') { rLowCap += capToAdd; rLowProf += profToAdd; } 
-            else if (tier === 'mid') { rMidCap += capToAdd; rMidProf += profToAdd; } 
-            else { rHighCap += capToAdd; rHighProf += profToAdd; }
-
-            if (period === 'todos') {
-                // VISAO SALDO GLOBAL: Usa o total pendente do contrato ignorando as parcelas do fluxo
-                const globalRemainingCapital = calculateCapitalBalance(loan);
-                const expectedTotalProfit = Number(loan.projectedProfit) || Math.max(0, (loan.installmentValue * loan.installments) - loan.amount);
-                const globalRemainingProfit = Math.max(0, expectedTotalProfit - (Number(loan.totalPaidInterest) || 0));
-
-                filteredContext.push({ 
-                    ...loan, 
-                    uniqueSliceId: loan.id,
-                    isActualSlice: false, 
-                    projectedDate: loan.nextDue,
-                    projectedCapitalForPeriod: globalRemainingCapital, 
-                    projectedInterestForPeriod: loan.interestType === 'SIMPLE' ? breakdown.interest : globalRemainingProfit
-                });
-            } else {
+            if (period !== 'todos') {
+                capAcc.all += capToAdd; capAcc[tier] += capToAdd;
+                profAcc.all += profToAdd; profAcc[tier] += profToAdd;
+                overAcc.all += overToAdd; overAcc[tier] += overToAdd;
+                
                 slices.forEach(s => {
                     filteredContext.push({ 
-                        ...loan, 
-                        uniqueSliceId: `${loan.id}-${s.index}`,
-                        isActualSlice: s.isSlice, 
-                        projectedDate: s.date,
-                        projectedCapitalForPeriod: s.capital, 
-                        projectedInterestForPeriod: s.interest
+                        ...loan, uniqueSliceId: `${loan.id}-${s.index}`, projectedDate: s.date,
+                        projectedCapitalForPeriod: s.capital, projectedInterestForPeriod: s.interest
                     });
+                });
+            } else {
+                // --- MÁGICA DA SINCRONIA GLOBAL (PRODUÇÃO) ---
+                let gCap = (loan.interestType === 'SIMPLE') ? 0 : calculateCapitalBalance(loan);
+                const gExpected = Number(loan.projectedProfit) || Math.max(0, (loan.installmentValue * loan.installments) - loan.amount);
+                
+                // No lucro global, a produção soma o lucro restante de Price + o juro atual de Simple
+                let gProf = (loan.interestType === 'SIMPLE') ? breakdown.interest : Math.max(0, gExpected - loan.totalPaidInterest);
+
+                capAcc.all += gCap; capAcc[tier] += gCap;
+                profAcc.all += gProf; profAcc[tier] += gProf;
+                
+                // Agora o Card soma a dívida inteira da Bola de Neve (Igual a tabela de baixo)
+                overAcc.all += totalOverdue; overAcc[tier] += totalOverdue;
+                filteredContext.push({ 
+                    ...loan, uniqueSliceId: loan.id, projectedDate: loan.nextDue,
+                    projectedCapitalForPeriod: gCap, projectedInterestForPeriod: gProf
                 });
             }
         }
       });
 
-      // Recalcula o saldo global quando o filtro é 'todos' para bater a conta redonda!
-      if (period === 'todos') {
-          capAcc = { all: 0, low: 0, mid: 0, high: 0 };
-          profAcc = { all: 0, low: 0, mid: 0, high: 0 };
-          rLowCap = 0; rMidCap = 0; rHighCap = 0;
-          rLowProf = 0; rMidProf = 0; rHighProf = 0;
-
-          safeLoans.forEach((loan:any) => {
-              if (loan.status === 'Pago' || loan.status === 'Quitado') return;
-              
-              const gCap = calculateCapitalBalance(loan);
-              const gExpected = Number(loan.projectedProfit) || Math.max(0, (loan.installmentValue * loan.installments) - loan.amount);
-              const gProf = loan.interestType === 'SIMPLE' ? calculateInstallmentBreakdown(loan).interest : Math.max(0, gExpected - (Number(loan.totalPaidInterest) || 0));
-              
-              const tier = loan.interestRate < 10 ? 'low' : loan.interestRate <= 15 ? 'mid' : 'high';
-              
-              capAcc.all += gCap; capAcc[tier] += gCap;
-              profAcc.all += gProf; profAcc[tier] += gProf;
-              
-              if (tier === 'low') { rLowCap += gCap; rLowProf += gProf; } 
-              else if (tier === 'mid') { rMidCap += gCap; rMidProf += gProf; } 
-              else { rHighCap += gCap; rHighProf += gProf; }
-          });
-      }
-
+      // Arredondamento final para bater os centavos (.13)
+      const round = (n: number) => Math.round(n * 100) / 100;
+      
+      // 👉 ESSA É A LINHA QUE FALTAVA PARA A LISTA APARECER:
       setFilteredLoansContext(filteredContext);
+      
       setMetrics({
-        capitalNaRua: capAcc,
-        lucroProjetado: profAcc,
-        atrasoGeral: overAcc,
+        capitalNaRua: { all: round(capAcc.all), low: round(capAcc.low), mid: round(capAcc.mid), high: round(capAcc.high) },        lucroProjetado: { all: round(profAcc.all), low: round(profAcc.low), mid: round(profAcc.mid), high: round(profAcc.high) },
+        atrasoGeral: { all: round(overAcc.all), low: round(overAcc.low), mid: round(overAcc.mid), high: round(overAcc.high) },
         contratosAtivosFiltro: uniqueMatchedContracts.size,
         contratosAtivosGlobais: totalGloballyActive,
         totalContratosLancados: safeLoans.length,
-        totalClientesCadastrados: clients ? clients.length : 0,
+        totalClientesCadastrados: allClients.length,
         clientesComDivida: activeDebtors.size,
-        taxas: { lowCap: rLowCap, midCap: rMidCap, highCap: rHighCap, lowProf: rLowProf, midProf: rMidProf, highProf: rHighProf }
+        taxas: { 
+            lowCap: round(capAcc.low), midCap: round(capAcc.mid), highCap: round(capAcc.high), 
+            lowProf: round(profAcc.low), midProf: round(profAcc.mid), highProf: round(profAcc.high) 
+        }
       });
 
       const activities = [...safeLoans].sort((a, b) => new Date(b.nextDue).getTime() - new Date(a.nextDue).getTime()).slice(0, 6).map((loan: any) => {
         const dueDate = parseLocalDate(loan.nextDue);
         const isOverdue = dueDate < today && loan.status !== 'Pago' && loan.status !== 'Quitado';
         return {
-          id: loan.id,
-          type: isOverdue ? 'atraso' : 'novo_contrato',
+          id: loan.id, type: isOverdue ? 'atraso' : 'novo_contrato',
           text: isOverdue ? `Atraso: ${loan.client}` : `Pendente: ${loan.client}`,
-          time: dueDate.toLocaleDateString('pt-BR'), 
-          value: isOverdue ? 'Cobrar' : `R$ ${formatMoney(loan.installmentValue)}`
+          time: dueDate.toLocaleDateString('pt-BR'), value: isOverdue ? 'Cobrar' : `R$ ${formatMoney(loan.installmentValue)}`
         };
       });
       setRecentActivities(activities);

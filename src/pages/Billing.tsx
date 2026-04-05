@@ -274,25 +274,21 @@ const Billing = () => {
     }
   }, [formData.multiDates, formData.hasMultiDates]);
   
-  useEffect(() => {
-    if (formData.hasMultiDates && formData.multiDates.length > 0 && simulation.installment > 0) {
-      const count = formData.multiDates.length;
-      const equalShare = parseFloat((simulation.installment / count).toFixed(2));
-      
-      const shouldDistribute = formData.multiDates.every(s => !s.amount || Number(s.amount) === 0);
-      
-      if (shouldDistribute) {
-        const distributedSlices = formData.multiDates.map(s => ({ ...s, amount: equalShare }));
-        const totalDist = equalShare * count;
-        if (totalDist !== simulation.installment) {
-            distributedSlices[count - 1].amount = parseFloat((equalShare + (simulation.installment - totalDist)).toFixed(2));
-        }
-        setFormData(prev => ({ ...prev, multiDates: distributedSlices }));
-      }
+  const isMultiDateInvalid = useMemo(() => {
+    if (!formData.hasMultiDates) return false;
+    
+    const sum = formData.multiDates.reduce((acc, curr) => acc + (parseFloat(curr.amount as any) || 0), 0);
+    
+    // Se for migração, a parcela é a soma do capital e juros manuais informados.
+    let expectedInstallment = simulation.installment;
+    if (formData.isMigration) {
+       const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
+       const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
+       expectedInstallment = formData.interestType === 'SIMPLE' ? mInt : (mCap + mInt);
     }
-  }, [simulation.installment, formData.hasMultiDates, formData.multiDates.length]);
-
-  const filteredClientsForSelect = useMemo(() => {
+    
+    return Math.abs(sum - expectedInstallment) > 5.00; // Tolerância de R$ 5,00
+  }, [formData.hasMultiDates, formData.isMigration, formData.multiDates, simulation.installment, formData.manualInstallmentCapital, formData.manualInstallmentInterest, formData.interestType]);  const filteredClientsForSelect = useMemo(() => {
       return availableClients.filter(c => 
         c.name.toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
         c.cpf.includes(clientSearchTerm)
@@ -756,7 +752,7 @@ const Billing = () => {
       formData.frequency
   ]);
 
-  // CÁLCULO E SIMULAÇÃO DE VALORES (ATUALIZADO PARA MODO EXATO)
+  // CÁLCULO E SIMULAÇÃO DE VALORES (ATUALIZADO CONTRA OS 36 CENTAVOS)
   useEffect(() => {
     const amount = parseFloat(formData.amount) || 0; 
     const rateMonthly = parseFloat(formData.interestRate) || 0; 
@@ -772,7 +768,7 @@ const Billing = () => {
             if (formData.frequency === 'SEMANAL') periodRate /= 4;
             else if (formData.frequency === 'DIARIO') periodRate /= 30;
 
-            const pmt = balance * periodRate;
+            const pmt = mInt > 0 ? mInt : (balance * periodRate);
                 
             if (amount > 0 && formData.startDate) {
                 setSimulation({ installment: pmt, totalInterest: 0, totalPayable: pmt + amount, isValid: true });
@@ -798,29 +794,6 @@ const Billing = () => {
       setIsSimulating(true);
       const timeoutId = setTimeout(() => {
         
-        // MODO EXATO DO RODRIGO
-        if (exactInterest !== null) {
-            if (formData.interestType === 'SIMPLE') {
-                setSimulation({ 
-                    installment: exactInterest, 
-                    totalInterest: exactInterest * numInstallments, 
-                    totalPayable: (exactInterest * numInstallments) + amount, 
-                    isValid: true 
-                });
-            } else {
-                const pmt = (amount + exactInterest) / numInstallments;
-                setSimulation({ 
-                    installment: pmt, 
-                    totalInterest: exactInterest, 
-                    totalPayable: amount + exactInterest, 
-                    isValid: true 
-                });
-            }
-            setIsSimulating(false);
-            return;
-        }
-
-        // MODO PRICE CLÁSSICO
         let periodRate = rateMonthly / 100;
         if (formData.frequency === 'SEMANAL') periodRate = periodRate / 4;
         else if (formData.frequency === 'DIARIO') periodRate = periodRate / 30;
@@ -837,6 +810,10 @@ const Billing = () => {
             totalInt = (pmt * numInstallments) - amount;
         }
 
+        // TRAVA DOS CENTAVOS NO REACT: Força o arredondamento limpo para 2 casas antes de mostrar na tela
+        pmt = Math.round(pmt * 100) / 100;
+        totalInt = Math.round(totalInt * 100) / 100;
+
         setSimulation({ 
             installment: pmt, totalInterest: totalInt, 
             totalPayable: pmt * numInstallments + (formData.interestType === 'SIMPLE' ? amount : 0), isValid: true 
@@ -847,16 +824,8 @@ const Billing = () => {
     } else { 
         setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false }); 
     }
-  }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency, formData.isMigration, formData.manualInstallmentCapital, formData.manualInstallmentInterest, formData.initialPaidCapital, exactInterest]);
-
-  const isMultiDateInvalid = useMemo(() => {
-    if (!formData.hasMultiDates) return false;
-    if (formData.isMigration) return false; 
-    
-    const sum = formData.multiDates.reduce((acc, curr) => acc + (parseFloat(curr.amount as any) || 0), 0);
-    return Math.abs(sum - simulation.installment) > 0.05;
-  }, [formData.hasMultiDates, formData.isMigration, formData.multiDates, simulation.installment]);
-
+  }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency, formData.isMigration, formData.manualInstallmentCapital, formData.manualInstallmentInterest, formData.initialPaidCapital]);
+  
   useEffect(() => {
       setSelectedIds([]);
   }, [searchTerm, statusFilter, filterStart, filterEnd]);
@@ -1315,21 +1284,14 @@ const Billing = () => {
       const newAmount = parseFloat(editContractData.amount) || selectedLoan.amount;
       const newInterestRate = parseFloat(editContractData.interestRate) || selectedLoan.interestRate;
       
+      // TRAVA DO DJAVAN: Respeita 100% o valor exato da parcela que o usuário digitou na tela
       let newInstallmentValue = parseFloat(editContractData.installmentValue) || selectedLoan.installmentValue;
       let newProjectedProfit = selectedLoan.projectedProfit; 
 
-      if (isSimple) {
-          let periodRate = newInterestRate / 100;
-          if (selectedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
-          else if (selectedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
-          
-          const currentBalance = Math.max(0, newAmount - (selectedLoan.totalPaidCapital || 0));
-          newInstallmentValue = currentBalance * periodRate;
-      } else {
+      if (!isSimple) {
           const numInst = parseInt(editContractData.installments) || selectedLoan.installments;
           newProjectedProfit = Math.max(0, (newInstallmentValue * numInst) - newAmount);
       }
-
       const updatedLoan = { 
           ...selectedLoan, 
           id: editContractData.id,
