@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -265,10 +266,10 @@ type Loan struct {
 	ClientBank          string          `json:"clientBank" bson:"clientBank"`
 	PaymentMethod       string          `json:"paymentMethod" bson:"paymentMethod"`
 	Justification       string          `json:"justification,omitempty" bson:"justification,omitempty"`
-	ChecklistAtApproval []string        `json:"checklistAtApproval,omitempty" bson:"checklistAtApproval,omitempty"`
+	ChecklistAtApproval []string        `json:"checklistAtApproval" bson:"checklistAtApproval"` // FIX: Removido omitempty
 	TotalPaidInterest   float64         `json:"totalPaidInterest" bson:"totalPaidInterest"`
 	TotalPaidCapital    float64         `json:"totalPaidCapital" bson:"totalPaidCapital"`
-	History             []PaymentRecord `json:"history" bson:"history"`
+	History             []PaymentRecord `json:"history" bson:"history"` // FIX: Removido omitempty
 	InterestType        string          `json:"interestType,omitempty" bson:"interestType,omitempty"`
 	Frequency           string          `json:"frequency,omitempty" bson:"frequency,omitempty"`
 	ProjectedProfit     float64         `json:"projectedProfit,omitempty" bson:"projectedProfit,omitempty"`
@@ -280,7 +281,7 @@ type Loan struct {
 	AffiliateName       string          `json:"affiliateName,omitempty" bson:"affiliateName,omitempty"`
 	AffiliateFee        float64         `json:"affiliateFee,omitempty" bson:"affiliateFee,omitempty"`
 	AffiliateNotes      string          `json:"affiliateNotes,omitempty" bson:"affiliateNotes,omitempty"`
-	MultiDates          []MultiDate     `json:"multiDates,omitempty" bson:"multiDates,omitempty"`
+	MultiDates          []MultiDate     `json:"multiDates" bson:"multiDates"` // FIX: Removido omitempty
 }
 
 type ClientDoc struct {
@@ -388,7 +389,7 @@ func main() {
 	logCollection = db.Collection("logs")
 	blacklistCollection = db.Collection("blacklist")
 	settingsCollection = db.Collection("settings")
-	log.Println("✅ MongoDB Conectado!")
+	log.Println("✅ MongoDB Conectado ao CreditNow!")
 
 	seedAdminUser()
 	StartBackgroundSystemLogs()
@@ -602,8 +603,6 @@ func userDetailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- LÓGICA DE ID SEQUENCIAL APLICADA AQUI ---
-
 func loansHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -622,6 +621,10 @@ func loansHandler(w http.ResponseWriter, r *http.Request) {
 
 		var l Loan
 		json.Unmarshal(bodyBytes, &l)
+
+		// --- FIX: Trava de Arredondamento para evitar dízimas no banco ---
+		l.InstallmentValue = math.Round(l.InstallmentValue*100) / 100
+		l.Amount = math.Round(l.Amount*100) / 100
 
 		var raw map[string]interface{}
 		json.Unmarshal(bodyBytes, &raw)
@@ -660,6 +663,11 @@ func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		var l Loan
 		json.NewDecoder(r.Body).Decode(&l)
+
+		// --- FIX: Trava de Arredondamento para evitar dízimas no banco ---
+		l.InstallmentValue = math.Round(l.InstallmentValue*100) / 100
+		l.Amount = math.Round(l.Amount*100) / 100
+
 		loanCollection.ReplaceOne(ctx, bson.M{"id": id}, l)
 		json.NewEncoder(w).Encode(l)
 	case http.MethodDelete:
@@ -987,13 +995,16 @@ func DefinirMensagemComDetalhes(delayLevel int, name string, lateDays int, updat
 	primeiroNome := strings.Split(strings.TrimSpace(name), " ")[0]
 	primeiroNome = strings.ToUpper(primeiroNome)
 
-	// Se tiver dias de atraso (lateDays > 0), a mensagem muda automaticamente para a de cobrança
-	if lateDays > 0 {
-		return fmt.Sprintf("🚨 *AVISO DE ATRASO*\n\n*%s*, o débito de R$ %s está em fase avançada de atraso (%d dias). Por favor, entre em contato conosco o mais breve possível para regularizarmos a situação.", primeiroNome, valorFormatado, lateDays)
-	}
+	mensagemPadrao := fmt.Sprintf("Olá, *%s*! Tudo bem?\n\nPassando para lembrar do vencimento da sua parcela no valor de R$ %s no dia %s.\n\nQualquer dúvida, estamos à disposição!", primeiroNome, valorFormatado, dateVencimento)
 
-	// Se estiver em dia, manda o lembrete de vencimento
-	return fmt.Sprintf("Olá, *%s*! Tudo bem?\n\nPassando para lembrar do vencimento da sua parcela no valor de R$ %s no dia %s.\n\nQualquer dúvida, estamos à disposição!", primeiroNome, valorFormatado, dateVencimento)
+	switch delayLevel {
+	case 1:
+		return fmt.Sprintf("Olá, *%s*!\n\nNotamos que o seu pagamento ainda não consta em nosso sistema.\n\n📌 *Detalhes:*\n• Valor: R$ %s\n• Atraso: %d dia(s)\n\nCaso já tenha efetuado o pagamento, por favor desconsidere esta mensagem.", primeiroNome, valorFormatado, lateDays)
+	case 3:
+		return fmt.Sprintf("🚨 *AVISO DE ATRASO*\n\n*%s*, o débito de R$ %s está em fase avançada de atraso (%d dias). Por favor, entre em contato conosco o mais breve possível para regularizarmos a situação.", primeiroNome, valorFormatado, lateDays)
+	default:
+		return mensagemPadrao
+	}
 }
 
 func (s *whatsappService) ViewInstances(ctx context.Context) ([]InstanceResponse, error) {

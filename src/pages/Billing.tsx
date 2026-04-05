@@ -29,7 +29,6 @@ type LoanFlowStep = 'closed' | 'form';
 
 const getApiUrl = localStorage.getItem("getApiUrl") || "https://creditnow-prod-266321031136.us-central1.run.app";
 
-// FAREJADOR DE WHATSAPP AGRESSIVO
 const getInstanceToken = async (
    targetName: string,
    targetPhone: string,
@@ -41,33 +40,30 @@ const getInstanceToken = async (
        body: JSON.stringify({ name: targetName, phone: targetPhone }),
      });
 
-     if (!response.ok) return null;
+     if (!response.ok) {
+       const errorText = await response.text();
+       throw new Error(`Erro HTTP ${response.status}: ${errorText}`);
+     }
 
      const data = await response.json();
      const list = Array.isArray(data) ? data : data.data || data.instances || [];
 
-     if (list.length === 0) return null;
+     if (list.length === 0) {
+       return null;
+     }
 
-     // 1. Tenta achar exatamente pelo nome da empresa
-     let targetInstance = list.find((inst: any) =>
-       inst.instance?.instanceName?.toString().trim().toLowerCase() === targetName.trim().toLowerCase()
+     const targetInstance = list.find((inst: any) =>
+       inst.instance?.instanceName?.toString().trim().toLowerCase() ===
+       targetName.trim().toLowerCase()
      );
-
-     // 2. Se não achar pelo nome, pega a primeira que estiver conectada
-     if (!targetInstance) {
-         targetInstance = list.find((inst: any) => {
-             const s = (inst.instance?.status || '').toLowerCase();
-             return s === 'open' || s === 'connected' || s === 'connecting';
-         });
-     }
-
-     // 3. Apelão: Se ainda não achar, pega a primeira da lista que tiver API Key
-     if (!targetInstance && list.length > 0) {
-         targetInstance = list[0];
-     }
 
      if (targetInstance?.instance?.instanceName && targetInstance?.instance?.apikey) {
        return { instanceName: targetInstance.instance.instanceName, apikey: targetInstance.instance.apikey };
+     }
+
+     const fallback = list.find((inst: any) => inst.instance?.status === "open");
+     if (fallback?.instance?.instanceName && fallback?.instance?.apikey) {
+       return { instanceName: fallback.instance.instanceName, apikey: fallback.instance.apikey };
      }
 
      return null;
@@ -117,6 +113,7 @@ const Billing = () => {
   const [isAgreementModalOpen, setIsAgreementModalOpen] = useState(false);
   const [isCollectionModalOpen, setIsCollectionModalOpen] = useState(false);
   
+  
   const [isEditContractModalOpen, setIsEditContractModalOpen] = useState(false);
   const [editContractData, setEditContractData] = useState<any>({});
 
@@ -139,11 +136,6 @@ const Billing = () => {
   const [isSimulating, setIsSimulating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingList, setIsLoadingList] = useState(false);
-  
-  // NOVO: Guarda o valor exato para ignorar dízimas periódicas no cálculo
-  const [exactInterest, setExactInterest] = useState<number | null>(null);
-  const [simulation, setSimulation] = useState({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
-
   const [companySettings, setCompanySettings] = useState<any>(null);
 
   useEffect(() => {
@@ -177,45 +169,15 @@ const Billing = () => {
       manualID: '', isMigration: false,
       initialPaidCapital: '', initialPaidInterest: '',
       manualInstallmentCapital: '', manualInstallmentInterest: '',
-      client: '', amount: '', interestRate: '', installments: '', 
-      startDate: new Date().toISOString().split('T')[0],
+      client: '', amount: '', interestRate: '', installments: '', startDate: '',
       firstPaymentDate: '', frequency: 'MENSAL', fineRate: '', moraInterestRate: '', 
       clientBank: '', paymentMethod: '', interestType: 'PRICE', 
       hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
       guarantorHouseType: 'CASA', guarantorNumber: '', guarantorBlock: '', guarantorFloor: '',
       hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: '',
-      hasMultiDates: false,
-      multiDates: [] as { day: number, amount: number }[]
+      isMultiDate: false, multiDates: [{ day: '', amount: '' }] as { day: string, amount: string }[]
   });
-
-  const addSlice = () => setFormData(prev => ({ ...prev, multiDates: [...prev.multiDates, { day: '' as any, amount: '' as any }] }));
-  const removeSlice = (idx: number) => setFormData(prev => ({ ...prev, multiDates: prev.multiDates.filter((_, i) => i !== idx) }));
-  const updateSlice = (idx: number, field: 'day' | 'amount', val: string) => {
-      const newSlices = [...formData.multiDates];
-      newSlices[idx] = { ...newSlices[idx], [field]: val === '' ? '' : parseFloat(val) };
-      setFormData(prev => ({ ...prev, multiDates: newSlices }));
-  };
-
-  const closeLoanFlow = () => {
-      const today = new Date().toISOString().split('T')[0];
-      setLoanFlowStep('closed');
-      setExactInterest(null); // Reseta o Modo Exato
-      setFormData({ 
-        manualID: '', isMigration: false, 
-        initialPaidCapital: '', initialPaidInterest: '',
-        manualInstallmentCapital: '', manualInstallmentInterest: '',
-        client: '', amount: '', interestRate: '', installments: '', 
-        startDate: today,
-        firstPaymentDate: '', frequency: 'MENSAL', fineRate: '', moraInterestRate: '', 
-        clientBank: '', paymentMethod: '', interestType: 'PRICE', 
-        hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
-        guarantorHouseType: 'CASA', guarantorNumber: '', guarantorBlock: '', guarantorFloor: '',
-        hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: '',
-        hasMultiDates: false, 
-        multiDates: []
-      });
-  };
-
+  
   useEffect(() => {
     if (formData.client && availableClients.length > 0) {
         const clientProfile = availableClients.find(c => c.name === formData.client);
@@ -251,44 +213,8 @@ const Billing = () => {
         }));
     }
   }, [formData.client, availableClients, loans]);
-  
-  useEffect(() => {
-    if (formData.hasMultiDates && formData.multiDates.length > 0) {
-      const days = formData.multiDates
-        .map(d => Number(d.day))
-        .filter(d => !isNaN(d) && d > 0);
-        
-      if (days.length > 0) {
-        const latestDay = Math.max(...days);
-        
-        const today = new Date();
-        const year = today.getFullYear();
-        const month = String(today.getMonth() + 1).padStart(2, '0');
-        const day = String(latestDay).padStart(2, '0');
-        const autoDate = `${year}-${month}-${day}`;
 
-        if (formData.firstPaymentDate !== autoDate) {
-          setFormData(prev => ({ ...prev, firstPaymentDate: autoDate }));
-        }
-      }
-    }
-  }, [formData.multiDates, formData.hasMultiDates]);
-  
-  const isMultiDateInvalid = useMemo(() => {
-    if (!formData.hasMultiDates) return false;
-    
-    const sum = formData.multiDates.reduce((acc, curr) => acc + (parseFloat(curr.amount as any) || 0), 0);
-    
-    // Se for migração, a parcela é a soma do capital e juros manuais informados.
-    let expectedInstallment = simulation.installment;
-    if (formData.isMigration) {
-       const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
-       const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
-       expectedInstallment = formData.interestType === 'SIMPLE' ? mInt : (mCap + mInt);
-    }
-    
-    return Math.abs(sum - expectedInstallment) > 5.00; // Tolerância de R$ 5,00
-  }, [formData.hasMultiDates, formData.isMigration, formData.multiDates, simulation.installment, formData.manualInstallmentCapital, formData.manualInstallmentInterest, formData.interestType]);  const filteredClientsForSelect = useMemo(() => {
+  const filteredClientsForSelect = useMemo(() => {
       return availableClients.filter(c => 
         c.name.toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
         c.cpf.includes(clientSearchTerm)
@@ -330,30 +256,10 @@ const Billing = () => {
     }
 
     const cleanPhone = client.phone.replace(/\D/g, "");
-    const firstName = loan.client.split(" ")[0].toUpperCase();
-
+    const firstName = loan.client.split(" ")[0];
     const contractCode = `CTR-${loan.id?.substring(0, 6).toUpperCase()}`;
-    
-    const breakdown = getSyncedBreakdown(loan);
-    const status = getLoanRealStatus(loan);
-    let finalAmount = breakdown.total;
-    let lateDays = 0;
-    
-    if (status === 'Atrasado') {
-        finalAmount = calculateOverdueValue(breakdown.total, loan.nextDue, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount);
-        const due = new Date(loan.nextDue);
-        const today = new Date();
-        lateDays = Math.floor((today.getTime() - due.getTime()) / (1000 * 3600 * 24));
-    }
-
+    const diffDays = loan.diffDays || 0;
     const formattedDate = formatDisplayDate(loan.nextDue);
-    const valorFormatado = formatMoney(finalAmount);
-    
-    let fallbackMessage = `Olá, *${firstName}*! Tudo bem?\n\nPassando para lembrar do vencimento da sua parcela no valor de R$ ${valorFormatado} no dia ${formattedDate}.\n\nQualquer dúvida, estamos à disposição!`;
-    
-    if (lateDays > 0) {
-        fallbackMessage = `🚨 *AVISO DE ATRASO*\n\n*${firstName}*, o débito de R$ ${valorFormatado} está em fase avançada de atraso (${lateDays} dias). Por favor, entre em contato conosco o mais breve possível para regularizarmos a situação.`;
-    }
 
     try {
       const instance = await getInstanceToken(companyName, companyPhone);
@@ -361,29 +267,31 @@ const Billing = () => {
       if (!instance) {
         throw new Error(`Instância WhatsApp não encontrada.`);
       }
-      
       await sendWhatsappApi(
         client.name,
         cleanPhone,
         contractCode,
-        lateDays,
-        finalAmount,
+        diffDays,
+        loan.installmentValue,
         formattedDate,
         instance.instanceName,
         instance.apikey,
       );
-      alert(`✅ Mensagem enviada com sucesso para ${firstName} via Sistema!`);
+      alert(`✅ Mensagem enviada com sucesso para ${firstName}!`);
     } catch (error: any) {
       if (error?.message === "WHATSAPP_DISCONNECTED") {
         alert("⚠️ WhatsApp desconectado!\n\nVá em Configurações → WhatsApp e reconecte o QR Code para voltar a enviar mensagens.");
         return;
       }
-      
-      const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(fallbackMessage)}`;
+      const message = `Olá, ${client.name}! Tudo bem? Passando para lembrar do vencimento da sua parcela no valor de R$ ${formatMoney(loan.installmentValue)} no dia ${formattedDate}. Qualquer dúvida, estamos à disposição!`;
+      const url = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
       window.open(url, "_blank");
     }
   };
 
+  const [simulation, setSimulation] = useState({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
+
+  // --- MOTOR DE CÁLCULO TRAVADO E LINEAR ---
   const getSyncedBreakdown = (loan: Loan | null) => {
     if (!loan) return { interest: 0, capital: 0, total: 0 };
     
@@ -404,25 +312,29 @@ const Billing = () => {
         }
 
         const principalAtStartOfMonth = (loan.amount - (loan.totalPaidCapital || 0)) + capitalPaidInThisCycle;
-
         let periodRate = loan.interestRate / 100;
         if (loan.frequency === 'SEMANAL') periodRate /= 4;
         else if (loan.frequency === 'DIARIO') periodRate /= 30;
 
         const dynamicInterest = principalAtStartOfMonth * periodRate;
-        return { interest: dynamicInterest, capital: 0, total: dynamicInterest };
+        let extraAcordo = 0;
+        if (loan.status === 'Acordo' && (loan.agreementValue || 0) > 0) extraAcordo = loan.agreementValue || 0;
+        
+        return { interest: dynamicInterest + extraAcordo, capital: 0, total: dynamicInterest + extraAcordo };
         
     } else {
         const totalReceivable = loan.amount + (loan.projectedProfit || 0);
         const originalInstallments = Math.max(1, Math.round(totalReceivable / loan.installmentValue));
-        
         const flatInterest = (loan.projectedProfit || 0) / originalInstallments;
         const flatCapital = loan.installmentValue - flatInterest;
 
+        let extraAcordo = 0;
+        if (loan.status === 'Acordo' && (loan.agreementValue || 0) > 0) extraAcordo = loan.agreementValue || 0;
+
         return { 
-            interest: Math.max(0, flatInterest), 
+            interest: Math.max(0, flatInterest) + extraAcordo, 
             capital: Math.max(0, flatCapital), 
-            total: loan.installmentValue 
+            total: loan.installmentValue + extraAcordo
         };
     }
   };
@@ -480,7 +392,7 @@ const Billing = () => {
       return dateObj.toLocaleDateString('pt-BR');
   }
 
-  const handleMassMessage = async () => {
+ const handleMassMessage = async () => {
     if (selectedIds.length === 0) return;
 
     const confirmMass = window.confirm(
@@ -502,13 +414,6 @@ const Billing = () => {
           localStorage.setItem("companyPhone", companyPhone);
         }
       } catch (_) {}
-    }
-
-    const instance = await getInstanceToken(companyName, companyPhone);
-    
-    if (!instance) {
-        alert("❌ Erro: Nenhuma instância do WhatsApp conectada foi encontrada. Vá em Configurações e certifique-se de que o QR Code está lido.");
-        return;
     }
 
     const selectedLoansData = loans.filter((l) => selectedIds.includes(l.id));
@@ -537,20 +442,25 @@ const Billing = () => {
         const formattedDate = formatDisplayDate(loan.nextDue);
 
         try {
-            await sendWhatsappApi(
-              client.name,
-              cleanPhone,
-              contractCode,
-              lateDays,
-              finalAmount,
-              formattedDate,
-              instance.instanceName,
-              instance.apikey
-            );
-            successCount++;
-            
-            await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 2000));
-            
+          const instance = await getInstanceToken(companyName, companyPhone);
+          if (instance) {
+              await sendWhatsappApi(
+                client.name,
+                cleanPhone,
+                contractCode,
+                lateDays,
+                finalAmount,
+                formattedDate,
+                instance.instanceName,
+                instance.apikey
+              );
+              successCount++;
+              // Anti-ban delay: Pausa de 3 a 5 segundos silenciosamente
+              await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 2000));
+          } else {
+              console.error("Instância do WhatsApp não encontrada.");
+              break;
+          }
         } catch (error: any) {
           console.error("Erro ao enviar para", client.name, error);
           if (error?.message === "WHATSAPP_DISCONNECTED") {
@@ -569,6 +479,7 @@ const Billing = () => {
       const historyPayments = (loan.history || []).filter(h => h.type === 'Parcela' || h.type === 'Amortização' || h.type === 'Juros');
       const isSimple = loan.interestType === 'SIMPLE';
       
+      // Só conta os ciclos realmente finalizados para avançar o número da parcela visual
       const completedCyclesCount = historyPayments.filter(h => h.note?.includes('[CICLO COMPLETADO]') || h.note?.includes('[QUITAÇÃO TOTAL]')).length;
       const totalOriginal = isSimple ? '∞' : (loan.installments + completedCyclesCount);
 
@@ -588,7 +499,7 @@ const Billing = () => {
               note: originalDateStr
           });
 
-          if (completed) currentCycle++; 
+          if (completed) currentCycle++; // Só avança a contagem se a parcela foi totalmente paga
       });
 
       if (loan.status !== 'Pago' && loan.status !== 'Quitado') {
@@ -699,6 +610,7 @@ const Billing = () => {
       if (l.status === 'Pago' || l.status === 'Quitado') return acc;
       const realStatus = getLoanRealStatus(l);
       if (realStatus === 'Atrasado') {
+          // BLINDAGEM PARA O TYPESCRIPT: Força número base
           const baseVal = l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue || 0);
           
           const val = calculateOverdueValue(
@@ -720,6 +632,7 @@ const Billing = () => {
     setSummary({ overdue: totalOverdue, received: totalProfit, today: totalTodayValue });
   }, [loans, collectionDate]);
 
+// --- MATEMÁTICA REVERSA PARA CONTRATOS ANTIGOS (MIGRAÇÃO) ---
   useEffect(() => {
       if (!formData.isMigration) return;
 
@@ -752,7 +665,7 @@ const Billing = () => {
       formData.frequency
   ]);
 
-  // CÁLCULO E SIMULAÇÃO DE VALORES (ATUALIZADO CONTRA OS 36 CENTAVOS)
+  // --- SIMULAÇÃO FINANCEIRA ---
   useEffect(() => {
     const amount = parseFloat(formData.amount) || 0; 
     const rateMonthly = parseFloat(formData.interestRate) || 0; 
@@ -768,7 +681,7 @@ const Billing = () => {
             if (formData.frequency === 'SEMANAL') periodRate /= 4;
             else if (formData.frequency === 'DIARIO') periodRate /= 30;
 
-            const pmt = mInt > 0 ? mInt : (balance * periodRate);
+            const pmt = balance * periodRate;
                 
             if (amount > 0 && formData.startDate) {
                 setSimulation({ installment: pmt, totalInterest: 0, totalPayable: pmt + amount, isValid: true });
@@ -790,11 +703,11 @@ const Billing = () => {
 
     const numInstallments = formData.interestType === 'SIMPLE' ? 1 : (parseInt(formData.installments) || 0);
     
-    if (amount > 0 && numInstallments > 0 && formData.startDate) {
+    if (amount > 0 && numInstallments > 0 && rateMonthly >= 0 && formData.startDate) {
       setIsSimulating(true);
       const timeoutId = setTimeout(() => {
-        
         let periodRate = rateMonthly / 100;
+        
         if (formData.frequency === 'SEMANAL') periodRate = periodRate / 4;
         else if (formData.frequency === 'DIARIO') periodRate = periodRate / 30;
 
@@ -810,7 +723,7 @@ const Billing = () => {
             totalInt = (pmt * numInstallments) - amount;
         }
 
-        // TRAVA DOS CENTAVOS NO REACT: Força o arredondamento limpo para 2 casas antes de mostrar na tela
+        // --- FIX: TRAVA DOS CENTAVOS NO REACT ---
         pmt = Math.round(pmt * 100) / 100;
         totalInt = Math.round(totalInt * 100) / 100;
 
@@ -824,8 +737,44 @@ const Billing = () => {
     } else { 
         setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false }); 
     }
-  }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency, formData.isMigration, formData.manualInstallmentCapital, formData.manualInstallmentInterest, formData.initialPaidCapital]);
+  }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency, formData.isMigration, formData.manualInstallmentCapital, formData.manualInstallmentInterest, formData.initialPaidCapital, formData.initialPaidInterest]);
+
+  // --- INTELIGÊNCIA MULTI-DATA: VALIDAÇÃO COM TOLERÂNCIA ---
+  const isMultiDateInvalid = useMemo(() => {
+    if (!formData.isMultiDate) return false;
+    
+    const sum = formData.multiDates.reduce((acc, curr) => acc + (parseFloat(curr.amount as any) || 0), 0);
+    
+    let expectedInstallment = simulation.installment;
+    if (formData.isMigration) {
+       const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
+       const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
+       expectedInstallment = formData.interestType === 'SIMPLE' ? mInt : (mCap + mInt);
+    }
+    
+    // TOLERÂNCIA DE R$ 5,00 PARA NÃO TRAVAR O BOTÃO INJUSTAMENTE
+    return Math.abs(sum - expectedInstallment) > 5.00;
+  }, [formData.isMultiDate, formData.isMigration, formData.multiDates, simulation.installment, formData.manualInstallmentCapital, formData.manualInstallmentInterest, formData.interestType]);
   
+  useEffect(() => {
+    if (formData.isMultiDate && formData.multiDates.length > 0) {
+      const validDays = formData.multiDates
+        .map(md => parseInt(md.day))
+        .filter(d => !isNaN(d) && d > 0 && d <= 31);
+      
+      if (validDays.length > 0) {
+        const maxDay = Math.max(...validDays);
+        const baseDateStr = formData.startDate || new Date().toISOString().split('T')[0];
+        const [year, month] = baseDateStr.split('-').map(Number);
+        const newDate = new Date(year, month - 1, maxDay);
+        const newDateStr = newDate.toISOString().split('T')[0];
+        if (formData.firstPaymentDate !== newDateStr) {
+          setFormData(prev => ({ ...prev, firstPaymentDate: newDateStr }));
+        }
+      }
+    }
+  }, [formData.isMultiDate, formData.multiDates, formData.startDate]);
+
   useEffect(() => {
       setSelectedIds([]);
   }, [searchTerm, statusFilter, filterStart, filterEnd]);
@@ -862,7 +811,7 @@ const Billing = () => {
       let capSum = 0;
       let intSum = 0;
       let expectedProfitSum = 0;
-      let installmentSum = 0; 
+      let installmentSum = 0; // NOVA VARIÁVEL AQUI
       let count = 0;
 
       filteredLoans.forEach(loan => {
@@ -871,23 +820,34 @@ const Billing = () => {
               const isSimple = loan.interestType === 'SIMPLE';
               const breakdown = getSyncedBreakdown(loan);
               
+              // SOMA DA PARCELA FIXA
               installmentSum += isSimple ? breakdown.total : Number(loan.installmentValue || 0);
               
-              capSum += Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
-
-              if (!isSimple) {
-                  const totalExpected = loan.projectedProfit || ((loan.installmentValue * loan.installments) - loan.amount);
-                  expectedProfitSum += Math.max(0, totalExpected - (loan.totalPaidInterest || 0));
+              if (filterStart && filterEnd && statusFilter !== 'PagosNoPeriodo') {
+                  const dueDate = new Date(loan.nextDue.split('T')[0]);
+                  const start = new Date(filterStart);
+                  const end = new Date(filterEnd);
+                  
+                  if (dueDate >= start && dueDate <= end) {
+                      capSum += breakdown.capital; 
+                      expectedProfitSum += breakdown.interest;
+                  }
               } else {
-                  expectedProfitSum += breakdown.interest;
+                  capSum += Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
+                  
+                  if (isSimple) {
+                      expectedProfitSum += breakdown.interest;
+                  } else {
+                      const totalExpected = loan.projectedProfit || ((loan.installmentValue * loan.installments) - loan.amount);
+                      expectedProfitSum += Math.max(0, totalExpected - (loan.totalPaidInterest || 0));
+                  }
               }
-
               count++;
           }
       });
 
       return { capital: capSum, interest: intSum, expectedProfit: expectedProfitSum, installment: installmentSum, count };
-  }, [filteredLoans, selectedIds]);
+  }, [filteredLoans, selectedIds, filterStart, filterEnd, statusFilter]);
 
   const handleOpenPayment = (loan: Loan) => {
     setSelectedLoan(loan);
@@ -924,6 +884,7 @@ const Billing = () => {
             const slicePenalty = totalPenalty * ratio;
             const sliceTotal = baseAmount + slicePenalty;
 
+            // SOMA tudo que já foi pago desta fatia específica neste mês
             const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
                 const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
                 if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${s.day}`)) {
@@ -932,6 +893,7 @@ const Billing = () => {
                 return acc;
             }, 0);
 
+            // Se o valor pago for menor que o total da fatia, esta é a fatia alvo!
             if (slicePaidAmount < (sliceTotal - 0.05)) {
                 targetSlice = s;
                 targetRemaining = sliceTotal - slicePaidAmount;
@@ -942,7 +904,7 @@ const Billing = () => {
         }
 
         if (targetSlice) {
-            const remRatio = targetRemaining / targetSliceTotal; 
+            const remRatio = targetRemaining / targetSliceTotal; // Proporção do que falta pagar
             const sliceIntOriginal = breakdown.interest * targetRatio;
             const sliceCapOriginal = breakdown.capital * targetRatio;
             const slicePenalty = totalPenalty * targetRatio;
@@ -991,7 +953,6 @@ const Billing = () => {
     const valCapital = parseFloat(payCapital) || 0;
     const valInterest = parseFloat(payInterest) || 0;
     const valTotal = valCapital + valInterest;
-
     if (valTotal < 0) { alert("Valor não pode ser negativo."); return; }
 
     const currentDebt = calculateCapitalBalance(selectedLoan);
@@ -1027,6 +988,7 @@ const Billing = () => {
         delete (window as any).lastSelectedDay;
     }
 
+    // CORREÇÃO: O avanço do mês AGORA DEPENDE EXCLUSIVAMENTE DO VALOR.
     let shouldAdvanceMonth = totalAccumulatedInCycle >= (totalRequiredInCycle - 1.0);
 
     if (balance <= 0.10) {
@@ -1131,6 +1093,7 @@ const Billing = () => {
         
         const isSimple = updatedLoan.interestType === 'SIMPLE';
         
+        // RECUPERAÇÃO DO NÚMERO DE PARCELAS
         if (!isSimple) {
             if (lastEntry.note?.includes('[QUITAÇÃO TOTAL]')) {
                  const totalReceivable = updatedLoan.amount + (updatedLoan.projectedProfit || 0);
@@ -1208,10 +1171,11 @@ const Billing = () => {
       } catch (e) { alert("Erro ao salvar acordo."); }
   };
 
-  const handleOpenEditContract = (loan: Loan) => {
+const handleOpenEditContract = (loan: Loan) => {
       setSelectedLoan(loan);
       
       let displayInstallment = Number(loan.installmentValue || 0).toFixed(2);
+      
       if (loan.interestType === 'SIMPLE') {
           let periodRate = loan.interestRate / 100;
           if (loan.frequency === 'SEMANAL') periodRate = periodRate / 4;
@@ -1234,8 +1198,7 @@ const Billing = () => {
           paymentMethod: loan.paymentMethod || '',
           guarantorName: loan.guarantorName || '',
           guarantorCPF: loan.guarantorCPF || '',
-          guarantorAddress: loan.guarantorAddress || '',
-          multiDates: loan.multiDates ? [...loan.multiDates] : []
+          guarantorAddress: loan.guarantorAddress || ''
       });
       setIsEditContractModalOpen(true);
       setOpenMenuId(null);
@@ -1247,6 +1210,13 @@ const Billing = () => {
           const newRate = parseFloat(editContractData.interestRate) || 0;
           const newInstallments = parseInt(editContractData.installments) || 1;
           
+          const isSameAsOriginal = 
+              newAmount === selectedLoan.amount && 
+              newRate === selectedLoan.interestRate && 
+              newInstallments === (selectedLoan.interestType === 'SIMPLE' ? 1 : selectedLoan.installments);
+
+          if (isSameAsOriginal) return; 
+
           let periodRate = newRate / 100;
           if (selectedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
           else if (selectedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
@@ -1264,7 +1234,8 @@ const Billing = () => {
               }
           }
 
-          const newInstallmentValue = calculatedInstallment.toFixed(2);
+          // FIX: Arredondamento limpo para evitar dízimas infinitas na edição
+          const newInstallmentValue = (Math.round(calculatedInstallment * 100) / 100).toFixed(2);
 
           if (editContractData.installmentValue !== newInstallmentValue && calculatedInstallment > 0) {
               setEditContractData((prev: any) => ({ ...prev, installmentValue: newInstallmentValue }));
@@ -1272,7 +1243,7 @@ const Billing = () => {
       }
   }, [editContractData.amount, editContractData.interestRate, editContractData.installments, isEditContractModalOpen, selectedLoan]);
 
-  const confirmEditContract = async () => {
+const confirmEditContract = async () => {
       if (!selectedLoan || !editContractData.id) return;
       
       if (editContractData.id !== selectedLoan.id && loans.some(l => l.id === editContractData.id)) {
@@ -1284,14 +1255,21 @@ const Billing = () => {
       const newAmount = parseFloat(editContractData.amount) || selectedLoan.amount;
       const newInterestRate = parseFloat(editContractData.interestRate) || selectedLoan.interestRate;
       
-      // TRAVA DO DJAVAN: Respeita 100% o valor exato da parcela que o usuário digitou na tela
       let newInstallmentValue = parseFloat(editContractData.installmentValue) || selectedLoan.installmentValue;
-      let newProjectedProfit = selectedLoan.projectedProfit; 
+      let newProjectedProfit = selectedLoan.projectedProfit;
 
-      if (!isSimple) {
+      if (isSimple) {
+          let periodRate = newInterestRate / 100;
+          if (selectedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
+          else if (selectedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
+          
+          const currentBalance = Math.max(0, newAmount - (selectedLoan.totalPaidCapital || 0));
+          newInstallmentValue = currentBalance * periodRate;
+      } else {
           const numInst = parseInt(editContractData.installments) || selectedLoan.installments;
           newProjectedProfit = Math.max(0, (newInstallmentValue * numInst) - newAmount);
       }
+
       const updatedLoan = { 
           ...selectedLoan, 
           id: editContractData.id,
@@ -1299,7 +1277,7 @@ const Billing = () => {
           interestRate: newInterestRate,
           installments: isSimple ? 1 : (parseInt(editContractData.installments) || selectedLoan.installments),
           installmentValue: newInstallmentValue,
-          projectedProfit: newProjectedProfit, 
+          projectedProfit: newProjectedProfit,
           startDate: editContractData.startDate, 
           nextDue: editContractData.nextDue,
           fineRate: parseFloat(editContractData.fineRate) || 0,
@@ -1308,8 +1286,7 @@ const Billing = () => {
           paymentMethod: editContractData.paymentMethod,
           guarantorName: editContractData.guarantorName,
           guarantorCPF: editContractData.guarantorCPF,
-          guarantorAddress: editContractData.guarantorAddress,
-          multiDates: editContractData.multiDates
+          guarantorAddress: editContractData.guarantorAddress
       };
 
       try {
@@ -1388,18 +1365,43 @@ const Billing = () => {
 
   const toggleSelectAll = () => { if (selectedIds.length === filteredLoans.length) setSelectedIds([]); else setSelectedIds(filteredLoans.map(l => l.id)); };
   const toggleSelectOne = (id: string) => { setSelectedIds(prev => prev.includes(id) ? prev.filter(curr => curr !== id) : [...prev, id]); };
+  
+  const closeLoanFlow = () => {
+      setLoanFlowStep('closed');
+      setFormData({ 
+        manualID: '', isMigration: false, 
+        initialPaidCapital: '', initialPaidInterest: '',
+        manualInstallmentCapital: '', manualInstallmentInterest: '',
+        client: '', amount: '', interestRate: '', installments: '', startDate: '', firstPaymentDate: '', frequency: 'MENSAL', 
+        fineRate: '', moraInterestRate: '', clientBank: '', paymentMethod: '', 
+        interestType: 'PRICE', 
+        hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
+        guarantorHouseType: 'CASA', guarantorNumber: '', guarantorBlock: '', guarantorFloor: '',
+        hasAffiliate: false, affiliateName: '', affiliateFee: '', affiliateNotes: '',
+        isMultiDate: false, multiDates: [{ day: '', amount: '' }]
+      });
+  }
 
- const handleFinalSave = async (e: React.FormEvent) => {
+const handleFinalSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
 
-    if (formData.hasMultiDates) {
+    // --- TRAVA DE SEGURANÇA: SOMA DAS FATIAS ---
+    if (formData.isMultiDate && formData.multiDates && formData.multiDates.length > 0) {
       const totalSlices = formData.multiDates.reduce((acc, s) => acc + (Number(s.amount) || 0), 0);
-      const installmentValue = simulation.installment;
-      const diff = Math.abs(totalSlices - installmentValue);
       
-      if (diff > 0.05) {
-        alert(`❌ BLOQUEIO: Soma Incorreta!\n\nA soma das fatias é R$ ${formatMoney(totalSlices)}, mas a parcela exige R$ ${formatMoney(installmentValue)}.\n\nPor favor, ajuste os valores para que o total seja idêntico.`);
+      let expectedInstallment = simulation.installment;
+      if (formData.isMigration) {
+         const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
+         const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
+         expectedInstallment = formData.interestType === 'SIMPLE' ? mInt : (mCap + mInt);
+      }
+
+      const diff = Math.abs(totalSlices - expectedInstallment);
+      
+      // Nova tolerância de R$ 5,00 para proteger arredondamentos
+      if (diff > 5.00) { 
+        alert(`❌ ERRO DE VALOR: A soma das fatias (R$ ${formatMoney(totalSlices)}) não coincide com o valor da parcela exigida (R$ ${formatMoney(expectedInstallment)}).\n\nAjuste os valores antes de aprovar.`);
         return;
       }
     }
@@ -1419,6 +1421,7 @@ const Billing = () => {
 
         let finalID = formData.manualID;
 
+        // PADRÃO DE ID ANUAL (001/2026)
         if (!finalID) {
             const year = new Date().getFullYear();
             const yearLoans = loans.filter(l => l.id.endsWith(`/${year}`));
@@ -1446,10 +1449,9 @@ const Billing = () => {
         }
 
         let finalAmount = parseFloat(formData.amount) || 0;
-        let inputInterestValue = parseFloat(formData.interestRate) || 0; 
+        let finalInterestRate = parseFloat(formData.interestRate) || 0;
         let projectedProfit = 0;
         let finalInstallmentValue = 0;
-        let calculatedPercentageRate = 0; 
 
         const isSimpleMode = formData.interestType === 'SIMPLE';
         const numInst = isSimpleMode ? 1 : (parseInt(formData.installments) || 1);
@@ -1460,24 +1462,21 @@ const Billing = () => {
 
             if (isSimpleMode) {
                  const balance = Math.max(0, finalAmount - initCap);
-                 finalInstallmentValue = balance > 0 ? inputInterestValue : 0;
+                 let periodRate = finalInterestRate / 100;
+                 if (formData.frequency === 'SEMANAL') periodRate = periodRate / 4;
+                 else if (formData.frequency === 'DIARIO') periodRate = periodRate / 30;
+                 finalInstallmentValue = balance * periodRate;
                  projectedProfit = 0;
-                 if (balance > 0) calculatedPercentageRate = (inputInterestValue / balance) * 100;
             } else {
                  const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
                  const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
                  finalInstallmentValue = mCap + mInt;
                  projectedProfit = (mInt * numInst) + initInt;
-                 calculatedPercentageRate = (inputInterestValue / finalAmount) * 100;
             }
         } else {
             finalInstallmentValue = simulation.installment;
             const totalReceivable = simulation.installment * numInst;
             projectedProfit = isSimpleMode ? totalReceivable : Math.max(0, totalReceivable - finalAmount);
-            
-            if (finalAmount > 0) {
-                 calculatedPercentageRate = (inputInterestValue / finalAmount) * 100;
-            }
         }
 
         const parseRate = (val: string) => { if (val === '') return 0; const num = parseFloat(val); return isNaN(num) ? 0 : num; };
@@ -1502,7 +1501,7 @@ const Billing = () => {
             });
         }
 
-        const finalMultiDates = formData.hasMultiDates ? formData.multiDates.map(md => {
+        const finalMultiDates = formData.isMultiDate ? formData.multiDates.map(md => {
             let amt = parseFloat(md.amount as any);
             
             if (formData.isMigration && finalInstallmentValue > 0) {
@@ -1519,8 +1518,7 @@ const Billing = () => {
 
         const newLoan: any = { 
             id: finalID, client: formData.client, amount: finalAmount, installments: numInst,
-            interestRate: calculatedPercentageRate, 
-            startDate: formData.startDate, nextDue: nextDueDate.toISOString().split('T')[0],
+            interestRate: finalInterestRate, startDate: formData.startDate, nextDue: nextDueDate.toISOString().split('T')[0],
             status: 'Em Dia', installmentValue: finalInstallmentValue,
             fineRate: parseRate(formData.fineRate), moraInterestRate: parseRate(formData.moraInterestRate),
             clientBank: formData.clientBank, paymentMethod: formData.paymentMethod, justification: '',
@@ -2041,10 +2039,12 @@ const Billing = () => {
         )}
       </Modal>
 
+      {/* --- O NOVO MODAL DE BAIXA FINANCEIRA COM FATIAS E MULTAS --- */}
       <Modal isOpen={isPaymentModalOpen} onClose={() => setIsPaymentModalOpen(false)} title="Baixa de Pagamento">
         {selectedLoan && (
             <div className="space-y-5">
             
+            {/* STATUS DA PARCELA COM MULTA - REDESIGN LIGHT/CLEAN */}
             {(() => {
                 const breakdown = getSyncedBreakdown(selectedLoan);
                 const status = getLoanRealStatus(selectedLoan);
@@ -2077,6 +2077,7 @@ const Billing = () => {
                 );
             })()}
 
+            {/* LISTAGEM DE FATIAS COM MULTA PROPORCIONAL E PAGAMENTO PARCIAL - REDESIGN ALTO CONTRASTE */}
             {((selectedLoan as any).multiDates && (selectedLoan as any).multiDates.length > 0) ? (
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5">
                     <div className="flex items-center gap-2 mb-4">
@@ -2190,11 +2191,11 @@ const Billing = () => {
             <div className="grid grid-cols-2 gap-4">
                 <div>
                     <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Amortização</label>
-                    <input type="number" step="0.01" value={payCapital} onChange={(e) => setPayCapital(e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none font-black text-slate-700 focus:ring-2 focus:ring-blue-500/20 transition-all" placeholder="0.00"/>
+                    <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={payCapital} onChange={(e) => setPayCapital(e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none font-black text-slate-700 focus:ring-2 focus:ring-blue-500/20 transition-all" placeholder="0.00"/>
                 </div>
                 <div>
                     <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Juros + Multa</label>
-                    <input type="number" step="0.01" value={payInterest} onChange={(e) => setPayInterest(e.target.value)} className="w-full p-3 border border-green-200 rounded-xl outline-none font-black text-green-700 bg-green-50/50 focus:ring-2 focus:ring-green-500/20 transition-all" placeholder="0.00"/>
+                    <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={payInterest} onChange={(e) => setPayInterest(e.target.value)} className="w-full p-3 border border-green-200 rounded-xl outline-none font-black text-green-700 bg-green-50/50 focus:ring-2 focus:ring-green-500/20 transition-all" placeholder="0.00"/>
                 </div>
             </div>
 
@@ -2217,7 +2218,7 @@ const Billing = () => {
                   <p className="text-xs text-orange-700">Este acordo alterará o vencimento e o status para "Em Acordo". O valor acordado será registrado, mas não haverá cobrança automática de juros adicionais neste período.</p>
               </div>
               <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nova Data de Vencimento</label><input type="date" value={agreementDate} onChange={e => setAgreementDate(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-orange-500/20"/></div>
-              <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Valor Acordado (R$)</label><input type="number" step="0.01" value={agreementValue} onChange={e => setAgreementValue(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-orange-500/20 font-bold text-slate-800" placeholder=""/></div>
+              <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Valor Acordado (R$)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={agreementValue} onChange={e => setAgreementValue(e.target.value)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-orange-500/20 font-bold text-slate-800" placeholder=""/></div>
               <button onClick={confirmAgreement} className="w-full py-3 bg-orange-600 text-white font-bold rounded-xl hover:bg-orange-700 transition-all">Confirmar Acordo</button>
           </div>
       </Modal>
@@ -2232,15 +2233,15 @@ const Billing = () => {
               
               <div className="grid grid-cols-2 gap-4">
                   <div><label className="block text-xs font-bold text-slate-500 mb-1">ID do Contrato</label><input type="text" value={editContractData.id} onChange={e => setEditContractData({...editContractData, id: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-slate-800"/></div>
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Valor Emprestado Original (R$)</label><input type="number" step="0.01" value={editContractData.amount} onChange={e => setEditContractData({...editContractData, amount: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Valor Emprestado Original (R$)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={editContractData.amount} onChange={e => setEditContractData({...editContractData, amount: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
               </div>
 
               <div className="grid grid-cols-3 gap-4">
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Taxa (%)</label><input type="number" step="0.01" value={editContractData.interestRate} onChange={e => setEditContractData({...editContractData, interestRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Parcelas</label><input type="number" value={selectedLoan?.interestType === 'SIMPLE' ? 1 : editContractData.installments} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installments: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none disabled:bg-slate-100 disabled:text-slate-400"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Taxa (%)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={editContractData.interestRate} onChange={e => setEditContractData({...editContractData, interestRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Parcelas</label><input type="number" onWheel={(e) => e.currentTarget.blur()} value={selectedLoan?.interestType === 'SIMPLE' ? 1 : editContractData.installments} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installments: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none disabled:bg-slate-100 disabled:text-slate-400"/></div>
                   <div>
                       <label className="block text-xs font-bold text-slate-500 mb-1">Valor Parcela (R$)</label>
-                      <input type="number" step="0.01" value={editContractData.installmentValue} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installmentValue: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-green-600 disabled:bg-slate-100"/>
+                      <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={editContractData.installmentValue} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installmentValue: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-green-600 disabled:bg-slate-100"/>
                       {selectedLoan?.interestType === 'SIMPLE' && <span className="text-[9px] text-blue-500 mt-1 block leading-tight">Valor da parcela atualizado dinamicamente com base no Saldo Devedor.</span>}
                   </div>
               </div>
@@ -2251,48 +2252,13 @@ const Billing = () => {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Multa Atraso (%)</label><input type="number" step="0.01" value={editContractData.fineRate} onChange={e => setEditContractData({...editContractData, fineRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Mora Diária (%)</label><input type="number" step="0.01" value={editContractData.moraInterestRate} onChange={e => setEditContractData({...editContractData, moraInterestRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Multa Atraso (%)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={editContractData.fineRate} onChange={e => setEditContractData({...editContractData, fineRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Mora Diária (%)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={editContractData.moraInterestRate} onChange={e => setEditContractData({...editContractData, moraInterestRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                   <div><label className="block text-xs font-bold text-slate-500 mb-1">Banco do Cliente</label><input list="bancos-sugestao" value={editContractData.clientBank} onChange={e => setEditContractData({...editContractData, clientBank: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none" placeholder="Digite ou selecione o banco..."/></div>
                   <div><label className="block text-xs font-bold text-slate-500 mb-1">Chave Pix/Conta</label><input type="text" value={editContractData.paymentMethod} onChange={e => setEditContractData({...editContractData, paymentMethod: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
-              </div>
-
-              {/* GESTÃO DE FATIAS NA EDIÇÃO */}
-              <div className="border-t border-slate-100 pt-4">
-                  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Fatias de Pagamento (Multi-Data)</label>
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
-                      {(editContractData.multiDates || []).map((slice: any, idx: number) => (
-                           <div key={idx} className="flex items-center gap-2">
-                               <div className="flex-1">
-                                   <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Dia</label>
-                                   <input type="number" min="1" max="31" value={slice.day} onChange={(e) => {
-                                       const newMd = [...editContractData.multiDates];
-                                       newMd[idx].day = e.target.value;
-                                       setEditContractData({...editContractData, multiDates: newMd});
-                                   }} className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-white" />
-                               </div>
-                               <div className="flex-1">
-                                   <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Valor (R$)</label>
-                                   <input type="number" step="0.01" value={slice.amount} onChange={(e) => {
-                                       const newMd = [...editContractData.multiDates];
-                                       newMd[idx].amount = e.target.value;
-                                       setEditContractData({...editContractData, multiDates: newMd});
-                                   }} className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-white" />
-                               </div>
-                               <button type="button" onClick={() => {
-                                   const newMd = editContractData.multiDates.filter((_:any, i:number) => i !== idx);
-                                   setEditContractData({...editContractData, multiDates: newMd});
-                               }} className="mt-4 p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16}/></button>
-                           </div>
-                      ))}
-                      <button type="button" onClick={() => {
-                          const currentMd = editContractData.multiDates || [];
-                          setEditContractData({...editContractData, multiDates: [...currentMd, {day: '', amount: ''}]});
-                      }} className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1 mt-2"><Plus size={12}/> Adicionar Fatia</button>
-                  </div>
               </div>
 
               <div className="border-t border-slate-100 pt-4">
@@ -2336,6 +2302,10 @@ const Billing = () => {
                     <div>
                         <div className="flex justify-between items-end mb-1">
                              <label className="flex items-center gap-1 text-xs font-bold uppercase text-slate-500"><Hash size={12}/> ID do Contrato</label>
+                             <div className="flex items-center gap-1 text-orange-600 bg-orange-50 px-2 py-0.5 rounded border border-orange-200">
+                                 <input type="checkbox" id="isPreContractCheckbox" className="w-3 h-3 text-orange-600 focus:ring-orange-500" />
+                                 <label htmlFor="isPreContractCheckbox" className="text-[9px] font-black uppercase cursor-pointer">Gerar como Pré-Contrato</label>
+                             </div>
                         </div>
                         <input value={formData.manualID} onChange={e => setFormData({...formData, manualID: e.target.value})} className="w-full p-2 border rounded-lg bg-white font-mono text-sm" placeholder="Deixe em branco p/ Automático"/>
                     </div>
@@ -2346,34 +2316,13 @@ const Billing = () => {
                 </div>
 
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                    <div className="flex justify-between items-end mb-2">
-                        <label className="block text-xs font-bold uppercase text-slate-500">Chave PIX / Forma de Pagamento</label>
-                        {formData.client && (
-                            <select 
-                                onChange={(e) => {
-                                    const clientProfile = availableClients.find(c => c.name === formData.client);
-                                    if (!clientProfile) return;
-                                    const val = e.target.value;
-                                    if (val === 'cpf') setFormData({...formData, paymentMethod: clientProfile.cpf || ''});
-                                    if (val === 'phone') setFormData({...formData, paymentMethod: clientProfile.phone || ''});
-                                    if (val === 'email') setFormData({...formData, paymentMethod: clientProfile.email || ''});
-                                    e.target.value = ""; 
-                                }}
-                                className="text-[10px] p-1 border rounded bg-white text-blue-600 font-bold outline-none cursor-pointer"
-                            >
-                                <option value="">Puxar do cadastro...</option>
-                                <option value="cpf">Usar CPF</option>
-                                <option value="phone">Usar Telefone</option>
-                                <option value="email">Usar E-mail</option>
-                            </select>
-                        )}
-                    </div>
-                    <input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Puxado automaticamente do cliente ou digite aqui..."/>
+                    <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Chave PIX / Forma de Pagamento</label>
+                    <input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Puxado automaticamente do cliente..."/>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
-                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input type="number" step="0.1" value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="" /></div>
-                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros Mora Diária (%)</label><input type="number" step="0.01" value={formData.moraInterestRate} onChange={e => setFormData({...formData, moraInterestRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="" /></div>
+                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.1" value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="" /></div>
+                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros Mora Diária (%)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.moraInterestRate} onChange={e => setFormData({...formData, moraInterestRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="" /></div>
                 </div>
 
                 <div className={`p-3 border rounded-xl transition-all ${formData.isMigration ? 'bg-amber-50 border-amber-300' : 'bg-slate-50 border-slate-200'}`}>
@@ -2384,12 +2333,12 @@ const Billing = () => {
                     {formData.isMigration && (
                         <div className="mt-3 animate-in zoom-in-95 border-t border-amber-200 pt-3">
                             <div className="grid grid-cols-2 gap-3 mb-3">
-                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Valor Original Emprestado (R$)</label><input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
-                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Taxa Registrada (%)</label><input required type="number" step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Valor Original Emprestado (R$)</label><input required type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Taxa Registrada (%)</label><input required type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
                             </div>
                             <div className="grid grid-cols-2 gap-3 mb-3">
-                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital Já Pago (R$)</label><input type="number" step="0.01" value={formData.initialPaidCapital} onChange={e => setFormData({...formData, initialPaidCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
-                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Juros Já Pagos (R$)</label><input type="number" step="0.01" value={formData.initialPaidInterest} onChange={e => setFormData({...formData, initialPaidInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital Já Pago (R$)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.initialPaidCapital} onChange={e => setFormData({...formData, initialPaidCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
+                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Juros Já Pagos (R$)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.initialPaidInterest} onChange={e => setFormData({...formData, initialPaidInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
                             </div>
                             
                             <div className="flex items-center gap-2 p-3 bg-white border border-amber-200 rounded-xl mb-3">
@@ -2401,19 +2350,19 @@ const Billing = () => {
                             <div className="grid grid-cols-3 gap-3">
                                 <div>
                                     <label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Qtd. Parcelas Restantes</label>
-                                    <input required type="number" value={formData.interestType === 'SIMPLE' ? 1 : formData.installments} disabled={formData.interestType === 'SIMPLE'} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white disabled:bg-amber-50 disabled:text-amber-400" placeholder="" />
+                                    <input required type="number" onWheel={(e) => e.currentTarget.blur()} value={formData.interestType === 'SIMPLE' ? 1 : formData.installments} disabled={formData.interestType === 'SIMPLE'} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white disabled:bg-amber-50 disabled:text-amber-400" placeholder="" />
                                 </div>
                                 
                                 {formData.interestType !== 'SIMPLE' && (
-                                    <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital / Parcela (R$)</label><input required type="number" step="0.01" value={formData.manualInstallmentCapital} onChange={e => setFormData({...formData, manualInstallmentCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
+                                    <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital / Parcela (R$)</label><input required type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.manualInstallmentCapital} onChange={e => setFormData({...formData, manualInstallmentCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
                                 )}
                                 
                                 <div className={formData.interestType === 'SIMPLE' ? 'col-span-2' : ''}>
                                     <label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">
                                         Juros / Parcela (R$)
-                                        {formData.interestType === 'SIMPLE' && <span className="lowercase text-[8px] font-normal ml-1">(Será recalculado dinamicamente)</span>}
+                                        {formData.interestType === 'SIMPLE' && <span className="lowercase text-[8px] font-normal ml-1">(Será recalculado dincamicamente se pagar capital)</span>}
                                     </label>
-                                    <input required type="number" step="0.01" value={formData.manualInstallmentInterest} onChange={e => setFormData({...formData, manualInstallmentInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" />
+                                    <input required type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.manualInstallmentInterest} onChange={e => setFormData({...formData, manualInstallmentInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" />
                                 </div>
                             </div>
                         </div>
@@ -2421,101 +2370,43 @@ const Billing = () => {
                 </div>
 
                 {!formData.isMigration && (
-                    <div className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor Emprestado (R$)</label>
-                                <input required type="number" step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none font-bold text-slate-800 focus:ring-2 focus:ring-slate-900/5" placeholder="Ex: 2000.00"/>
-                            </div>
-                            <div>
-                                <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label>
-                                <input required type="number" value={formData.interestType === 'SIMPLE' ? 1 : formData.installments} disabled={formData.interestType === 'SIMPLE'} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none font-bold text-slate-800 focus:ring-2 focus:ring-slate-900/5 disabled:bg-slate-100 disabled:text-slate-400" placeholder=""/>
-                            </div>
+                    <>
+                        <div className="grid grid-cols-3 gap-4">
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" onWheel={(e) => e.currentTarget.blur()} value={formData.interestType === 'SIMPLE' ? 1 : formData.installments} disabled={formData.interestType === 'SIMPLE'} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 disabled:bg-slate-100 disabled:text-slate-400" placeholder=""/></div>
                         </div>
-                        
-                        <div className="grid grid-cols-2 gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl shadow-inner">
-                            <div>
-                                <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1 leading-tight">Taxa Mensal (%)</label>
-                                <input required type="number" step="0.01" value={formData.interestRate} onChange={e => {
-                                    setExactInterest(null);
-                                    setFormData({...formData, interestRate: e.target.value});
-                                }} className="w-full p-3 border border-slate-300 rounded-xl outline-none font-bold text-slate-700 focus:ring-2 focus:ring-blue-500/20" placeholder="Ex: 5.5"/>
-                            </div>
-                            <div>
-                                <label className="block text-[10px] font-black uppercase text-blue-600 mb-1 leading-tight">Ou Juros Total Desejado (R$)</label>
-                                <input 
-                                    type="number" 
-                                    step="0.01" 
-                                    placeholder="Ex: 410.00 (Calcula a %)"
-                                    onChange={e => {
-                                        const val = e.target.value;
-                                        if (val === '') {
-                                            setExactInterest(null);
-                                            return;
-                                        }
-                                        const jurosTarget = parseFloat(val) || 0;
-                                        setExactInterest(jurosTarget);
-
-                                        const cap = parseFloat(formData.amount) || 0;
-                                        const parcelas = formData.interestType === 'SIMPLE' ? 1 : (parseInt(formData.installments) || 1);
-                                        
-                                        if (cap > 0 && jurosTarget >= 0) {
-                                            if (formData.interestType === 'SIMPLE' || parcelas === 1) {
-                                                const taxa = (jurosTarget / cap) * 100;
-                                                setFormData({...formData, interestRate: String(taxa.toFixed(2))});
-                                            } else {
-                                                let low = 0.0;
-                                                let high = 100.0; 
-                                                let bestRate = 0;
-                                                for (let i = 0; i < 40; i++) {
-                                                    let mid = (low + high) / 2;
-                                                    let r = mid / 100;
-                                                    let pmt = cap * ((r * Math.pow(1 + r, parcelas)) / (Math.pow(1 + r, parcelas) - 1));
-                                                    let totalInt = (pmt * parcelas) - cap;
-                                                    if (totalInt < jurosTarget) low = mid;
-                                                    else high = mid;
-                                                    bestRate = mid;
-                                                }
-                                                setFormData({...formData, interestRate: String(bestRate.toFixed(2))});
-                                            }
-                                        }
-                                    }}
-                                    className="w-full p-3 border border-blue-300 rounded-xl outline-none font-black text-blue-700 bg-blue-50 focus:ring-2 focus:ring-blue-500/20 shadow-sm" 
-                                />
-                            </div>
-                        </div>
-
                         <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl mb-4">
                             <input type="checkbox" id="interestType" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" />
-                            <label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros) <span className="text-xs font-normal text-blue-600 block">O cliente paga apenas os juros mensais. O capital não abate.</span></label>
+                            <label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros)</label>
                         </div>
-                    </div>
+                    </>
                 )}
 
                 {formData.frequency === 'MENSAL' && (
                     <div className="border-t border-slate-200 pt-4 mt-2">
                         <div className="flex items-center gap-2 mb-3">
-                            <input type="checkbox" id="hasMultiDates" checked={formData.hasMultiDates} onChange={(e) => setFormData({...formData, hasMultiDates: e.target.checked})} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500" />
-                            <label htmlFor="hasMultiDates" className="text-sm font-bold text-slate-700 cursor-pointer">Dividir Parcela em Múltiplas Datas (Multi-data)</label>
+                            <input type="checkbox" id="isMultiDate" checked={formData.isMultiDate} onChange={(e) => setFormData({...formData, isMultiDate: e.target.checked})} className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500" />
+                            <label htmlFor="isMultiDate" className="text-sm font-bold text-slate-700 cursor-pointer">Dividir Parcela em Múltiplas Datas (Multi-data)</label>
                         </div>
-                        {formData.hasMultiDates && (
+                        {formData.isMultiDate && (
                             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 animate-in slide-in-from-top-2">
                                 <p className="text-xs text-slate-600 font-medium mb-2">Defina as datas para compor a parcela de <b>R$ {formatMoney(simulation.installment)}</b>.</p>
                                 {formData.multiDates.map((md, index) => (
                                     <div key={index} className="flex items-center gap-2">
                                         <div className="flex-1">
                                             <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Dia do Mês</label>
-                                            <input type="number" min="1" max="31" value={md.day} onChange={(e) => {
+                                            <input type="number" onWheel={(e) => e.currentTarget.blur()} min="1" max="31" value={md.day} onChange={(e) => {
                                                 const newMd = [...formData.multiDates];
-                                                newMd[index].day = e.target.value as any;
+                                                newMd[index].day = e.target.value;
                                                 setFormData({...formData, multiDates: newMd});
                                             }} className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-white" placeholder="Ex: 10" />
                                         </div>
                                         <div className="flex-1">
                                             <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Valor (R$)</label>
-                                            <input type="number" step="0.01" value={md.amount} onChange={(e) => {
+                                            <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={md.amount} onChange={(e) => {
                                                 const newMd = [...formData.multiDates];
-                                                newMd[index].amount = e.target.value as any;
+                                                newMd[index].amount = e.target.value;
                                                 setFormData({...formData, multiDates: newMd});
                                             }} className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-white" placeholder="Ex: 150.00" />
                                         </div>
@@ -2527,9 +2418,8 @@ const Billing = () => {
                                         )}
                                     </div>
                                 ))}
-                                {/* AUMENTO DE LIMITE DE 5 PARA 10 FATIAS */}
-                                {formData.multiDates.length < 10 && (
-                                    <button type="button" onClick={() => setFormData({...formData, multiDates: [...formData.multiDates, {day: '' as any, amount: '' as any}]})} className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1 mt-2"><Plus size={12}/> Adicionar Data</button>
+                                {formData.multiDates.length < 15 && (
+                                    <button type="button" onClick={() => setFormData({...formData, multiDates: [...formData.multiDates, {day: '', amount: ''}]})} className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1 mt-2"><Plus size={12}/> Adicionar Data</button>
                                 )}
                             </div>
                         )}
@@ -2587,7 +2477,7 @@ const Billing = () => {
                         <div className="grid grid-cols-2 gap-3">
                             <div>
                                 <label className="block text-[10px] uppercase font-bold text-indigo-400 mb-1">Valor a Pagar/Descontar (R$)</label>
-                                <input type="number" step="0.01" placeholder="Ex: 50.00" value={formData.affiliateFee} onChange={(e) => setFormData({...formData, affiliateFee: e.target.value})} className="w-full p-2 border border-indigo-200 rounded-lg bg-white outline-none"/>
+                                <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" placeholder="Ex: 50.00" value={formData.affiliateFee} onChange={(e) => setFormData({...formData, affiliateFee: e.target.value})} className="w-full p-2 border border-indigo-200 rounded-lg bg-white outline-none"/>
                             </div>
                             <div>
                                 <label className="block text-[10px] uppercase font-bold text-indigo-400 mb-1">Observações</label>
