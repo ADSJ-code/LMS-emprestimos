@@ -126,6 +126,7 @@ const Billing = () => {
   const [clientSearchTerm, setClientSearchTerm] = useState('');
   
   const [statusFilter, setStatusFilter] = useState<'Todos' | 'Em Dia' | 'Atrasado' | 'Quitado' | 'Acordo' | 'PagosNoPeriodo'>('Todos');
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]); 
 
@@ -777,10 +778,9 @@ const Billing = () => {
 
   useEffect(() => {
       setSelectedIds([]);
-  }, [searchTerm, statusFilter, filterStart, filterEnd]);
-
+  }, [searchTerm, statusFilter, filterStart, filterEnd, sortOrder]);
   const filteredLoans = useMemo(() => {
-      return loans.filter(l => {
+      const filtered = loans.filter(l => {
         const matchesSearch = (l.client || '').toLowerCase().includes(searchTerm.toLowerCase()) || (l.id || '').toLowerCase().includes(searchTerm.toLowerCase());
         const realStatus = getLoanRealStatus(l);
         let matchesStatus = true;
@@ -805,8 +805,15 @@ const Billing = () => {
         }
         return matchesSearch && matchesStatus && matchesDate;
       });
-  }, [loans, searchTerm, statusFilter, filterStart, filterEnd]);
 
+      // NOVO: Motor de Ordenação de Data de Criação
+      return filtered.sort((a, b) => {
+          const timeA = (a.history && a.history.length > 0 && a.history[0].registeredAt) ? new Date(a.history[0].registeredAt).getTime() : new Date(a.startDate).getTime();
+          const timeB = (b.history && b.history.length > 0 && b.history[0].registeredAt) ? new Date(b.history[0].registeredAt).getTime() : new Date(b.startDate).getTime();
+          
+          return sortOrder === 'newest' ? timeB - timeA : timeA - timeB;
+      });
+  }, [loans, searchTerm, statusFilter, filterStart, filterEnd, sortOrder]);
   const tableTotals = useMemo(() => {
       let capSum = 0;
       let intSum = 0;
@@ -1638,6 +1645,11 @@ const handleFinalSave = async (e: React.FormEvent) => {
                       <option value="Acordo">Em Acordo</option>
                       <option value="Quitado">Quitado (Finalizado)</option>
                       <option value="PagosNoPeriodo">Pagamentos no Período</option>
+                  </select>
+
+                  <select value={sortOrder} onChange={(e: any) => setSortOrder(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-medium outline-none cursor-pointer hover:bg-slate-50 transition-colors shadow-sm">
+                      <option value="newest">Mais Recentes</option>
+                      <option value="oldest">Mais Antigos</option>
                   </select>
 
                   <button onClick={handleExportExcel} className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-slate-800 transition-colors shadow-lg shadow-slate-900/10"><Download size={18} /> Exportar Selecionados</button>
