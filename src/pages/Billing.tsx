@@ -290,8 +290,8 @@ const Billing = () => {
     }
   };
 
+  const [exactInterest, setExactInterest] = useState<number | null>(null);
   const [simulation, setSimulation] = useState({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
-
   // --- MOTOR DE CÁLCULO TRAVADO E LINEAR ---
   const getSyncedBreakdown = (loan: Loan | null) => {
     if (!loan) return { interest: 0, capital: 0, total: 0 };
@@ -370,14 +370,48 @@ const Billing = () => {
       }
   }, []);
 
+  // --- MOTOR INTELIGENTE DE STATUS ---
   const getLoanRealStatus = (loan: Loan) => {
     if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
     if (loan.status === 'Acordo') return 'Acordo';
     const balance = loan.amount - (loan.totalPaidCapital || 0);
     if (balance <= 0.10) return 'Quitado'; 
+    
     const today = new Date();
+    today.setHours(0,0,0,0);
     const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
     const dueStr = loan.nextDue.split('T')[0];
+
+    // INTEGRAÇÃO DAS FATIAS NA VERIFICAÇÃO GERAL DE STATUS
+    const slices = (loan as any).multiDates || [];
+    if (slices.length > 0) {
+        const currentMonth = new Date(loan.nextDue).getMonth();
+        const currentYear = new Date(loan.nextDue).getFullYear();
+        let hasLateSlice = false;
+
+        for (const slice of slices) {
+            const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+            if (sliceDate < today) {
+                const baseAmount = Number(slice.amount) || 0;
+                const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
+                    const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                    if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
+                        return acc + h.amount;
+                    }
+                    return acc;
+                }, 0);
+                
+                if (slicePaidAmount < (baseAmount - 0.05)) {
+                    hasLateSlice = true;
+                    break;
+                }
+            }
+        }
+        if (hasLateSlice) return 'Atrasado';
+        // Se as fatias até hoje estão pagas, mas as futuras não chegaram, então está "Em Dia"
+        return 'Em Dia';
+    }
+
     if (dueStr < todayStr) return 'Atrasado';
     return 'Em Dia';
   };
@@ -633,39 +667,6 @@ const Billing = () => {
     setSummary({ overdue: totalOverdue, received: totalProfit, today: totalTodayValue });
   }, [loans, collectionDate]);
 
-// --- MATEMÁTICA REVERSA PARA CONTRATOS ANTIGOS (MIGRAÇÃO) ---
-  useEffect(() => {
-      if (!formData.isMigration) return;
-
-      const amount = parseFloat(formData.amount) || 0;
-      const manualJuros = parseFloat(formData.manualInstallmentInterest) || 0;
-
-      if (amount > 0 && manualJuros > 0) {
-          let taxPerPeriod = 0;
-          taxPerPeriod = (manualJuros / amount) * 100;
-
-          if (taxPerPeriod > 0) {
-              let monthlyRate = taxPerPeriod;
-              if (formData.frequency === 'SEMANAL') monthlyRate = taxPerPeriod * 4;
-              else if (formData.frequency === 'DIARIO') monthlyRate = taxPerPeriod * 30;
-
-              const formattedRate = monthlyRate.toFixed(2);
-              
-              if (formData.interestRate !== formattedRate) {
-                  setFormData(prev => ({ ...prev, interestRate: formattedRate }));
-              }
-          }
-      } else if (manualJuros === 0 && formData.interestRate !== '') {
-          setFormData(prev => ({ ...prev, interestRate: '' }));
-      }
-  }, [
-      formData.isMigration,
-      formData.amount,
-      formData.manualInstallmentInterest,
-      formData.interestType,
-      formData.frequency
-  ]);
-
   // --- SIMULAÇÃO FINANCEIRA ---
   useEffect(() => {
     const amount = parseFloat(formData.amount) || 0; 
@@ -677,12 +678,7 @@ const Billing = () => {
         const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
         
         if (formData.interestType === 'SIMPLE') {
-            const balance = Math.max(0, amount - initCap);
-            let periodRate = rateMonthly / 100;
-            if (formData.frequency === 'SEMANAL') periodRate /= 4;
-            else if (formData.frequency === 'DIARIO') periodRate /= 30;
-
-            const pmt = balance * periodRate;
+            const pmt = mInt; 
                 
             if (amount > 0 && formData.startDate) {
                 setSimulation({ installment: pmt, totalInterest: 0, totalPayable: pmt + amount, isValid: true });
@@ -715,13 +711,24 @@ const Billing = () => {
         let pmt = 0;
         let totalInt = 0;
 
-        if (formData.interestType === 'SIMPLE') {
-            pmt = amount * periodRate; 
-            totalInt = pmt * numInstallments;
+        if (exactInterest !== null && exactInterest > 0) {
+            // FIX: Se o usuário digitou o Juros Exato, ignora a taxa arredondada e crava a matemática absoluta!
+            if (formData.interestType === 'SIMPLE') {
+                pmt = exactInterest;
+                totalInt = exactInterest * numInstallments;
+            } else {
+                pmt = (amount + exactInterest) / numInstallments;
+                totalInt = exactInterest;
+            }
         } else {
-            if (periodRate === 0) pmt = amount / numInstallments;
-            else pmt = amount * ( (periodRate * Math.pow(1 + periodRate, numInstallments)) / (Math.pow(1 + periodRate, numInstallments) - 1) );
-            totalInt = (pmt * numInstallments) - amount;
+            if (formData.interestType === 'SIMPLE') {
+                pmt = amount * periodRate; 
+                totalInt = pmt * numInstallments;
+            } else {
+                if (periodRate === 0) pmt = amount / numInstallments;
+                else pmt = amount * ( (periodRate * Math.pow(1 + periodRate, numInstallments)) / (Math.pow(1 + periodRate, numInstallments) - 1) );
+                totalInt = (pmt * numInstallments) - amount;
+            }
         }
 
         // --- FIX: TRAVA DOS CENTAVOS NO REACT ---
@@ -738,8 +745,7 @@ const Billing = () => {
     } else { 
         setSimulation({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false }); 
     }
-  }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency, formData.isMigration, formData.manualInstallmentCapital, formData.manualInstallmentInterest, formData.initialPaidCapital, formData.initialPaidInterest]);
-
+  }, [formData.amount, formData.interestRate, formData.installments, formData.startDate, formData.interestType, formData.frequency, formData.isMigration, formData.manualInstallmentCapital, formData.manualInstallmentInterest, formData.initialPaidCapital, formData.initialPaidInterest, exactInterest]);
   // --- INTELIGÊNCIA MULTI-DATA: VALIDAÇÃO COM TOLERÂNCIA ---
   const isMultiDateInvalid = useMemo(() => {
     if (!formData.isMultiDate) return false;
@@ -779,6 +785,7 @@ const Billing = () => {
   useEffect(() => {
       setSelectedIds([]);
   }, [searchTerm, statusFilter, filterStart, filterEnd, sortOrder]);
+  
   const filteredLoans = useMemo(() => {
       const filtered = loans.filter(l => {
         const matchesSearch = (l.client || '').toLowerCase().includes(searchTerm.toLowerCase()) || (l.id || '').toLowerCase().includes(searchTerm.toLowerCase());
@@ -814,6 +821,7 @@ const Billing = () => {
           return sortOrder === 'newest' ? timeB - timeA : timeA - timeB;
       });
   }, [loans, searchTerm, statusFilter, filterStart, filterEnd, sortOrder]);
+  
   const tableTotals = useMemo(() => {
       let capSum = 0;
       let intSum = 0;
@@ -830,24 +838,14 @@ const Billing = () => {
               // SOMA DA PARCELA FIXA
               installmentSum += isSimple ? breakdown.total : Number(loan.installmentValue || 0);
               
-              if (filterStart && filterEnd && statusFilter !== 'PagosNoPeriodo') {
-                  const dueDate = new Date(loan.nextDue.split('T')[0]);
-                  const start = new Date(filterStart);
-                  const end = new Date(filterEnd);
-                  
-                  if (dueDate >= start && dueDate <= end) {
-                      capSum += breakdown.capital; 
-                      expectedProfitSum += breakdown.interest;
-                  }
+              // SALDO CAPITAL A RECEBER EXATO DO PRINCIPAL (Ignora filtro de data para saldo total da carteira)
+              capSum += Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
+
+              if (!isSimple) {
+                  const totalExpected = loan.projectedProfit || ((loan.installmentValue * loan.installments) - loan.amount);
+                  expectedProfitSum += Math.max(0, totalExpected - (loan.totalPaidInterest || 0));
               } else {
-                  capSum += Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
-                  
-                  if (isSimple) {
-                      expectedProfitSum += breakdown.interest;
-                  } else {
-                      const totalExpected = loan.projectedProfit || ((loan.installmentValue * loan.installments) - loan.amount);
-                      expectedProfitSum += Math.max(0, totalExpected - (loan.totalPaidInterest || 0));
-                  }
+                  expectedProfitSum += breakdown.interest;
               }
               count++;
           }
@@ -856,6 +854,7 @@ const Billing = () => {
       return { capital: capSum, interest: intSum, expectedProfit: expectedProfitSum, installment: installmentSum, count };
   }, [filteredLoans, selectedIds, filterStart, filterEnd, statusFilter]);
 
+  // --- MOTOR INTELIGENTE DE BAIXA DE FATIAS ---
   const handleOpenPayment = (loan: Loan) => {
     setSelectedLoan(loan);
     const now = new Date();
@@ -867,31 +866,26 @@ const Billing = () => {
     const slices = (loan as any).multiDates || [];
     const status = getLoanRealStatus(loan);
     
-    let totalPenalty = 0;
-    if (status === 'Atrasado') {
-        const fullOverdue = calculateOverdueValue(breakdown.total, loan.nextDue, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount);
-        totalPenalty = fullOverdue - breakdown.total;
-    }
-
     let autoCapital = '';
     let autoInterest = '';
+    let totalPenalty = 0;
+
+    const currentMonth = new Date(loan.nextDue).getMonth();
+    const currentYear = new Date(loan.nextDue).getFullYear();
+    const today = new Date();
+    today.setHours(0,0,0,0);
 
     if (slices.length > 0) {
-        const currentMonth = new Date(loan.nextDue).getMonth();
-        const currentYear = new Date(loan.nextDue).getFullYear();
-        
         let targetSlice = null;
         let targetRemaining = 0;
         let targetSliceTotal = 0;
         let targetRatio = 0;
+        let targetPenalty = 0;
 
         for (const s of slices) {
             const baseAmount = Number(s.amount) || 0;
             const ratio = baseAmount / (breakdown.total || 1);
-            const slicePenalty = totalPenalty * ratio;
-            const sliceTotal = baseAmount + slicePenalty;
-
-            // SOMA tudo que já foi pago desta fatia específica neste mês
+            
             const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
                 const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
                 if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${s.day}`)) {
@@ -900,27 +894,54 @@ const Billing = () => {
                 return acc;
             }, 0);
 
-            // Se o valor pago for menor que o total da fatia, esta é a fatia alvo!
-            if (slicePaidAmount < (sliceTotal - 0.05)) {
+            const isPaid = slicePaidAmount >= (baseAmount - 0.05);
+            let slicePenalty = 0;
+            const sliceDate = new Date(currentYear, currentMonth, Number(s.day));
+            
+            // Calcula a multa APENAS se ESTA fatia específica estiver atrasada
+            if (!isPaid && sliceDate < today && loan.status !== 'Pago' && loan.status !== 'Quitado') {
+                const sliceOverdue = calculateOverdueValue(baseAmount, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount * ratio);
+                slicePenalty = sliceOverdue - baseAmount;
+            }
+            
+            const sliceTotal = baseAmount + slicePenalty;
+
+            // Achou a primeira fatia não paga por completo
+            if (slicePaidAmount < (sliceTotal - 0.05) && !targetSlice) {
                 targetSlice = s;
                 targetRemaining = sliceTotal - slicePaidAmount;
                 targetSliceTotal = sliceTotal;
                 targetRatio = ratio;
-                break;
+                targetPenalty = slicePenalty;
             }
         }
 
         if (targetSlice) {
-            const remRatio = targetRemaining / targetSliceTotal; // Proporção do que falta pagar
+            const remRatio = targetRemaining / targetSliceTotal; 
             const sliceIntOriginal = breakdown.interest * targetRatio;
             const sliceCapOriginal = breakdown.capital * targetRatio;
-            const slicePenalty = totalPenalty * targetRatio;
 
-            autoCapital = (sliceCapOriginal * remRatio).toFixed(2);
-            autoInterest = ((sliceIntOriginal + slicePenalty) * remRatio).toFixed(2);
+            // PROTEÇÃO DE AUTO-PREENCHIMENTO: Não sugere pagar mais capital do que deve
+            const remainingCapitalDebt = Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
+            let autoCap = sliceCapOriginal * remRatio;
+            
+            if (autoCap > remainingCapitalDebt) {
+                autoCap = remainingCapitalDebt;
+            }
+            
+            // O que sobrar (seja juros normal, multa, ou excesso de capital) vai pro campo de Juros
+            const expectedTotal = targetRemaining;
+            const autoInt = expectedTotal - autoCap;
+
+            autoCapital = autoCap.toFixed(2);
+            autoInterest = autoInt.toFixed(2);
             (window as any).lastSelectedDay = targetSlice.day;
         }
     } else {
+        if (status === 'Atrasado') {
+            const fullOverdue = calculateOverdueValue(breakdown.total, loan.nextDue, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount);
+            totalPenalty = fullOverdue - breakdown.total;
+        }
         autoCapital = breakdown.capital > 0 ? breakdown.capital.toFixed(2) : '';
         autoInterest = (breakdown.interest + totalPenalty) > 0 ? (breakdown.interest + totalPenalty).toFixed(2) : '';
     }
@@ -1325,6 +1346,8 @@ const confirmEditContract = async () => {
         { header: 'Data da Baixa', key: 'paymentDate', width: 18 },
         { header: 'ID Contrato', key: 'id', width: 12 },
         { header: 'Cliente', key: 'client', width: 35 },
+        { header: 'CPF', key: 'cpf', width: 18 },
+        { header: 'Endereço Completo', key: 'address', width: 50 },
         { header: 'Tipo de Registro', key: 'type', width: 18 },
         { header: 'Valor Recebido Total', key: 'amount', width: 22 },
         { header: 'Capital (Amortizado)', key: 'capital', width: 20 },
@@ -1339,6 +1362,27 @@ const confirmEditContract = async () => {
     let hasRecords = false;
 
     loansToExport.forEach(loan => {
+        // Cruzando dados com a base de clientes para puxar CPF e Endereço
+        const clientData = availableClients.find(c => c.name === loan.client);
+        let cpfStr = clientData?.cpf || '-';
+        let addressStr = '-';
+
+        if (clientData) {
+            const addrParts = [];
+            if (clientData.address) addrParts.push(clientData.address);
+            if (clientData.number) addrParts.push(clientData.number);
+            if ((clientData as any).block) addrParts.push(`BLOCO ${(clientData as any).block}`);
+            if ((clientData as any).floor) addrParts.push(`APTO ${(clientData as any).floor}`);
+            if ((clientData as any).neighborhood) addrParts.push((clientData as any).neighborhood);
+            if (clientData.city) addrParts.push(clientData.city);
+            if (clientData.state) addrParts.push(clientData.state);
+            if (clientData.cep) addrParts.push(`CEP: ${clientData.cep}`);
+            
+            if (addrParts.length > 0) {
+                addressStr = addrParts.join(", ");
+            }
+        }
+
         if (loan.history && loan.history.length > 0) {
             loan.history.forEach(record => {
                 if (record.amount > 0 || record.type === 'Abertura') {
@@ -1347,6 +1391,8 @@ const confirmEditContract = async () => {
                         paymentDate: new Date(record.date).toLocaleDateString('pt-BR') + ' ' + new Date(record.date).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'}),
                         id: loan.id, 
                         client: loan.client,
+                        cpf: cpfStr,
+                        address: addressStr,
                         type: record.type,
                         amount: record.amount,
                         capital: record.capitalPaid || 0,
@@ -1363,7 +1409,7 @@ const confirmEditContract = async () => {
         return;
     }
 
-    const colunasMoeda = ['E', 'F', 'G'];
+    const colunasMoeda = ['G', 'H', 'I']; // Ajustado devido à inserção das colunas CPF (D) e Endereço (E)
     colunasMoeda.forEach(col => { worksheet.getColumn(col).numFmt = '"R$" #,##0.00'; });
 
     const buffer = await workbook.xlsx.writeBuffer();
@@ -1468,11 +1514,8 @@ const handleFinalSave = async (e: React.FormEvent) => {
             const initInt = parseFloat(formData.initialPaidInterest) || 0;
 
             if (isSimpleMode) {
-                 const balance = Math.max(0, finalAmount - initCap);
-                 let periodRate = finalInterestRate / 100;
-                 if (formData.frequency === 'SEMANAL') periodRate = periodRate / 4;
-                 else if (formData.frequency === 'DIARIO') periodRate = periodRate / 30;
-                 finalInstallmentValue = balance * periodRate;
+                 // FIX: Para migração simples, cravar o valor digitado como a parcela fixa, ignorando dízimas da taxa
+                 finalInstallmentValue = parseFloat(formData.manualInstallmentInterest) || 0;
                  projectedProfit = 0;
             } else {
                  const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
@@ -1583,37 +1626,45 @@ const handleFinalSave = async (e: React.FormEvent) => {
       </datalist>
 
       {isCollectionModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
-             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 border border-slate-200 relative z-[70]">
+        <div className="fixed inset-0 z-[60] flex items-start justify-center bg-black/40 backdrop-blur-sm pt-20 p-4 animate-in fade-in duration-200">
+             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in slide-in-from-top-8 fade-in duration-300 border border-slate-200 relative z-[70] ring-1 ring-black/5">
                  <div className="bg-slate-900 p-5 flex justify-between items-center">
-                     <div className="flex items-center gap-2 text-white font-bold"><Calendar className="text-yellow-400" size={20}/> <span>Central de Cobrança</span></div>
-                     <button onClick={() => setIsCollectionModalOpen(false)} className="text-white/50 hover:text-white transition-colors"><X size={24}/></button>
+                     <div className="flex items-center gap-3 text-white font-bold">
+                         <div className="bg-yellow-400/20 p-2 rounded-lg">
+                             <Calendar className="text-yellow-400" size={20}/>
+                         </div>
+                         <span>Central de Cobrança</span>
+                     </div>
+                     <button onClick={() => setIsCollectionModalOpen(false)} className="text-white/50 hover:text-white hover:bg-white/10 p-2 rounded-full transition-all"><X size={20}/></button>
                  </div>
-                 <div className="p-4 bg-slate-50 border-b border-slate-200">
-                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Selecione a Data de Vencimento</label>
-                     <input type="date" value={collectionDate} onChange={(e) => setCollectionDate(e.target.value)} className="w-full p-3 border border-slate-300 rounded-xl font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"/>
+                 <div className="p-5 bg-slate-50/80 border-b border-slate-100">
+                     <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Data de Referência</label>
+                     <input type="date" value={collectionDate} onChange={(e) => setCollectionDate(e.target.value)} className="w-full p-3.5 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-yellow-400/30 focus:border-yellow-400 transition-all shadow-sm bg-white"/>
                  </div>
-                 <div className="p-4 max-h-[50vh] overflow-y-auto custom-scrollbar">
+                 <div className="p-5 max-h-[55vh] overflow-y-auto custom-scrollbar bg-white">
                      {collectionLoans.length === 0 ? (
-                         <div className="text-center py-8">
-                             <CheckCircle size={48} className="mx-auto text-green-500 mb-2 opacity-50"/>
-                             <p className="text-slate-500 font-medium">Nenhum vencimento para esta data.</p>
+                         <div className="text-center py-10">
+                             <div className="bg-green-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3">
+                                 <CheckCircle size={32} className="text-green-500"/>
+                             </div>
+                             <p className="text-slate-800 font-bold">Tudo limpo por aqui!</p>
+                             <p className="text-slate-400 text-xs mt-1">Nenhum vencimento pendente para esta data.</p>
                          </div>
                      ) : (
                          <div className="space-y-3">
-                             <p className="text-xs font-bold uppercase text-slate-400 mb-2">Clientes para cobrar ({collectionLoans.length}):</p>
+                             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-3">Clientes para cobrar ({collectionLoans.length}):</p>
                              {collectionLoans.map(l => (
-                                 <div key={l.id} className="flex justify-between items-center p-4 bg-white border border-slate-200 rounded-xl hover:bg-blue-50 hover:border-blue-300 transition-all cursor-pointer group shadow-sm" onClick={() => handleOpenPayment(l)}>
+                                 <div key={l.id} className="flex justify-between items-center p-4 bg-white border border-slate-100 rounded-2xl hover:border-yellow-400 hover:shadow-md hover:shadow-yellow-400/10 transition-all cursor-pointer group" onClick={() => handleOpenPayment(l)}>
                                      <div className="flex items-center gap-3">
-                                         <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-700 font-bold border border-slate-200">{l.client.charAt(0)}</div>
+                                         <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center text-slate-600 font-black border border-slate-200 group-hover:bg-yellow-50 group-hover:text-yellow-600 group-hover:border-yellow-200 transition-colors">{l.client.charAt(0)}</div>
                                          <div>
-                                             <p className="font-bold text-slate-800 text-sm group-hover:text-blue-700">{l.client}</p>
-                                             <p className="text-[10px] text-slate-400 font-mono">Contrato: {l.id}</p>
+                                             <p className="font-bold text-slate-800 text-sm group-hover:text-slate-900">{l.client}</p>
+                                             <p className="text-[10px] text-slate-400 font-mono mt-0.5">ID: {l.id}</p>
                                          </div>
                                      </div>
                                      <div className="text-right">
-                                         <p className="font-black text-green-600 text-sm">R$ {formatMoney(l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : l.installmentValue)}</p>
-                                         <p className="text-[10px] text-slate-400 uppercase font-bold">Cobrar</p>
+                                         <p className="font-black text-slate-800 text-sm group-hover:text-yellow-600 transition-colors">R$ {formatMoney(l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : l.installmentValue)}</p>
+                                         <span className="inline-block mt-1 text-[9px] text-slate-500 uppercase font-bold bg-slate-100 px-2 py-0.5 rounded-md group-hover:bg-yellow-100 group-hover:text-yellow-700 transition-colors">Cobrar ➔</span>
                                      </div>
                                  </div>
                              ))}
@@ -1965,7 +2016,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                 <span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Repeat size={10}/> Periodicidade</span>
                                 <span className="text-sm font-bold text-slate-800">{selectedLoan.frequency === 'DIARIO' ? 'Diário' : selectedLoan.frequency === 'SEMANAL' ? 'Semanal' : 'Mensal'}</span>
                             </div>
-                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Percent size={10}/> Taxa de Juros</span><span className="text-sm font-bold text-slate-800">{selectedLoan.interestRate}% a.m</span></div>
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Percent size={10}/> Taxa de Juros</span><span className="text-sm font-bold text-slate-800">{Number(selectedLoan.interestRate).toFixed(2)}% a.m</span></div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><AlertTriangle size={10}/> Multa (Atraso)</span><span className="text-sm font-bold text-red-600">{selectedLoan.fineRate}%</span></div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Clock size={10}/> Mora Diária</span><span className="text-sm font-bold text-red-600">{selectedLoan.moraInterestRate}% ao dia</span></div>
                             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100"><span className="text-[10px] text-slate-500 uppercase font-bold mb-1 flex items-center gap-1"><Landmark size={10}/> Banco</span><span className="text-sm font-bold text-slate-800 truncate" title={selectedLoan.clientBank}>{selectedLoan.clientBank || '-'}</span></div>
@@ -2061,29 +2112,73 @@ const handleFinalSave = async (e: React.FormEvent) => {
                 const breakdown = getSyncedBreakdown(selectedLoan);
                 const status = getLoanRealStatus(selectedLoan);
                 let displayTotal = breakdown.total;
+                let isFatiaAtrasada = false;
+                let bannerDateStr = selectedLoan.nextDue;
                 
-                if (status === 'Atrasado') {
+                const slices = (selectedLoan as any).multiDates || [];
+                
+                if (slices.length > 0) {
+                    const currentMonth = new Date(selectedLoan.nextDue).getMonth();
+                    const currentYear = new Date(selectedLoan.nextDue).getFullYear();
+                    const today = new Date();
+                    today.setHours(0,0,0,0);
+                    
+                    let totalSlicesCalc = 0;
+                    let firstOverdueSliceDate: string | null = null;
+                    
+                    for (const slice of slices) {
+                        const baseAmount = Number(slice.amount) || 0;
+                        const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+                        
+                        const slicePaidAmount = (selectedLoan.history || []).reduce((acc, h) => {
+                            const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                            if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
+                                return acc + h.amount;
+                            }
+                            return acc;
+                        }, 0);
+
+                        const isPaid = slicePaidAmount >= (baseAmount - 0.05);
+                        let slicePenalty = 0;
+                        
+                        if (!isPaid && sliceDate < today && selectedLoan.status !== 'Pago' && selectedLoan.status !== 'Quitado') {
+                            isFatiaAtrasada = true;
+                            if (!firstOverdueSliceDate) {
+                                firstOverdueSliceDate = sliceDate.toISOString().split('T')[0];
+                            }
+                            const ratio = baseAmount / (breakdown.total || 1);
+                            const sliceOverdue = calculateOverdueValue(baseAmount, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount * ratio);
+                            slicePenalty = sliceOverdue - baseAmount;
+                        }
+                        
+                        totalSlicesCalc += Math.max(0, (baseAmount + slicePenalty) - slicePaidAmount);
+                    }
+                    displayTotal = totalSlicesCalc;
+                    if (firstOverdueSliceDate) bannerDateStr = firstOverdueSliceDate;
+                } else if (status === 'Atrasado') {
                     displayTotal = calculateOverdueValue(breakdown.total, selectedLoan.nextDue, 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount);
                 }
 
+                const showAtraso = (slices.length > 0) ? isFatiaAtrasada : (status === 'Atrasado');
+
                 return (
-                    <div className={`p-5 rounded-2xl shadow-sm border relative overflow-hidden ${status === 'Atrasado' ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
-                        <div className={`absolute top-0 right-0 p-4 opacity-10 ${status === 'Atrasado' ? 'text-red-900' : 'text-slate-900'}`}><Database size={48} /></div>
+                    <div className={`p-5 rounded-2xl shadow-sm border relative overflow-hidden ${showAtraso ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                        <div className={`absolute top-0 right-0 p-4 opacity-10 ${showAtraso ? 'text-red-900' : 'text-slate-900'}`}><Database size={48} /></div>
                         
                         <div className="flex items-center gap-2 mb-1">
-                            {status === 'Atrasado' && <AlertTriangle size={16} className="text-red-600" />}
-                            <p className={`text-[10px] font-black uppercase tracking-widest ${status === 'Atrasado' ? 'text-red-600' : 'text-slate-500'}`}>
-                                {status === 'Atrasado' ? 'Vencimento em Atraso' : 'Próximo Vencimento em Aberto'}
+                            {showAtraso && <AlertTriangle size={16} className="text-red-600" />}
+                            <p className={`text-[10px] font-black uppercase tracking-widest ${showAtraso ? 'text-red-600' : 'text-slate-500'}`}>
+                                {showAtraso ? (slices.length > 0 ? 'Fatia em Atraso' : 'Vencimento em Atraso') : 'Próximo Vencimento em Aberto'}
                             </p>
                         </div>
                         
-                        <p className={`text-2xl font-black ${status === 'Atrasado' ? 'text-red-900' : 'text-slate-800'}`}>
-                            {formatDisplayDate(selectedLoan.nextDue)}
+                        <p className={`text-2xl font-black ${showAtraso ? 'text-red-900' : 'text-slate-800'}`}>
+                            {formatDisplayDate(bannerDateStr)}
                         </p>
                         
-                        <div className={`flex justify-between items-center mt-3 border-t pt-3 ${status === 'Atrasado' ? 'border-red-200' : 'border-slate-200'}`}>
-                            <span className={`text-xs font-bold uppercase ${status === 'Atrasado' ? 'text-red-500' : 'text-slate-500'}`}>Total Devido (c/ juros):</span>
-                            <span className={`text-xl font-black ${status === 'Atrasado' ? 'text-red-700' : 'text-green-600'}`}>R$ {formatMoney(displayTotal)}</span>
+                        <div className={`flex justify-between items-center mt-3 border-t pt-3 ${showAtraso ? 'border-red-200' : 'border-slate-200'}`}>
+                            <span className={`text-xs font-bold uppercase ${showAtraso ? 'text-red-500' : 'text-slate-500'}`}>Total Restante Devido:</span>
+                            <span className={`text-xl font-black ${showAtraso ? 'text-red-700' : 'text-green-600'}`}>R$ {formatMoney(displayTotal)}</span>
                         </div>
                     </div>
                 );
@@ -2099,24 +2194,12 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     <div className="space-y-3">
                         {(selectedLoan as any).multiDates.map((slice: any, idx: number) => {
                             const breakdown = getSyncedBreakdown(selectedLoan);
-                            const status = getLoanRealStatus(selectedLoan);
                             const baseAmount = Number(slice.amount) || 0;
-                            
-                            let totalPenalty = 0;
-                            if (status === 'Atrasado') {
-                                const fullOverdue = calculateOverdueValue(breakdown.total, selectedLoan.nextDue, 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount);
-                                totalPenalty = fullOverdue - breakdown.total;
-                            }
-
-                            const ratio = baseAmount / (breakdown.total || 1);
-                            const slicePenalty = totalPenalty * ratio;
-                            const finalAmount = baseAmount + slicePenalty;
-
-                            const sliceInt = (breakdown.interest * ratio) + slicePenalty;
-                            const sliceCap = breakdown.capital * ratio;
-
                             const currentMonth = new Date(selectedLoan.nextDue).getMonth();
                             const currentYear = new Date(selectedLoan.nextDue).getFullYear();
+                            const today = new Date();
+                            today.setHours(0,0,0,0);
+                            const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                             
                             const slicePaidAmount = (selectedLoan.history || []).reduce((acc, h) => {
                                 const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
@@ -2126,9 +2209,17 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                 return acc;
                             }, 0);
 
-                            const isPaid = slicePaidAmount >= (finalAmount - 0.05);
+                            const isPaid = slicePaidAmount >= (baseAmount - 0.05);
+                            let slicePenalty = 0;
+                            
+                            if (!isPaid && sliceDate < today && selectedLoan.status !== 'Pago' && selectedLoan.status !== 'Quitado') {
+                                const ratio = baseAmount / (breakdown.total || 1);
+                                const sliceOverdue = calculateOverdueValue(baseAmount, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount * ratio);
+                                slicePenalty = sliceOverdue - baseAmount;
+                            }
+                            
+                            const finalAmount = baseAmount + slicePenalty;
                             const remainingToPay = Math.max(0, finalAmount - slicePaidAmount);
-
                             const isSelected = (window as any).lastSelectedDay === slice.day;
 
                             return (
@@ -2174,8 +2265,12 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                             type="button"
                                             onClick={() => {
                                                 const remRatio = remainingToPay / finalAmount;
-                                                setPayCapital((sliceCap * remRatio).toFixed(2));
-                                                setPayInterest((sliceInt * remRatio).toFixed(2));
+                                                const ratio = baseAmount / (breakdown.total || 1);
+                                                const sliceCapOriginal = breakdown.capital * ratio;
+                                                const sliceIntOriginal = breakdown.interest * ratio;
+                                                
+                                                setPayCapital((sliceCapOriginal * remRatio).toFixed(2));
+                                                setPayInterest(((sliceIntOriginal + slicePenalty) * remRatio).toFixed(2));
                                                 (window as any).lastSelectedDay = slice.day;
                                                 setLoans([...loans]);
                                             }}
@@ -2199,6 +2294,11 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     <p className="text-xs text-slate-500 italic">Este contrato não possui fatias de pagamento no cadastro.</p>
                 </div>
             )}
+
+            <div className="mb-1 mt-4">
+                <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Data da Baixa (Pagamento)</label>
+                <input type="datetime-local" value={payDate} onChange={(e) => setPayDate(e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none font-bold text-slate-700 focus:ring-2 focus:ring-blue-500/20"/>
+            </div>
 
             <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -2249,13 +2349,19 @@ const handleFinalSave = async (e: React.FormEvent) => {
               </div>
 
               <div className="grid grid-cols-3 gap-4">
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Taxa (%)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={editContractData.interestRate} onChange={e => setEditContractData({...editContractData, interestRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Taxa (%)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="any" value={editContractData.interestRate} onChange={e => setEditContractData({...editContractData, interestRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
                   <div><label className="block text-xs font-bold text-slate-500 mb-1">Parcelas</label><input type="number" onWheel={(e) => e.currentTarget.blur()} value={selectedLoan?.interestType === 'SIMPLE' ? 1 : editContractData.installments} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installments: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none disabled:bg-slate-100 disabled:text-slate-400"/></div>
                   <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-1">Valor Parcela (R$)</label>
-                      <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={editContractData.installmentValue} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installmentValue: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-green-600 disabled:bg-slate-100"/>
-                      {selectedLoan?.interestType === 'SIMPLE' && <span className="text-[9px] text-blue-500 mt-1 block leading-tight">Valor da parcela atualizado dinamicamente com base no Saldo Devedor.</span>}
-                  </div>
+    <label className="block text-xs font-bold text-slate-500 mb-1">Valor Parcela Fixa (R$)</label>
+    <input 
+        type="number" 
+        value={editContractData.installmentValue || ''} 
+        onChange={e => setEditContractData({...editContractData, installmentValue: e.target.value})} 
+        className="w-full p-2.5 border rounded-lg outline-none text-green-700 font-bold focus:ring-2 focus:ring-green-500/20"
+        placeholder="Forçar valor exato..."
+    />
+    <p className="text-[8px] text-slate-400 mt-1 leading-tight">Se preenchido, o sistema ignorará a taxa<br/>e cobrará este valor exato mensalmente.</p>
+</div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -2270,7 +2376,70 @@ const handleFinalSave = async (e: React.FormEvent) => {
 
               <div className="grid grid-cols-2 gap-4">
                   <div><label className="block text-xs font-bold text-slate-500 mb-1">Banco do Cliente</label><input list="bancos-sugestao" value={editContractData.clientBank} onChange={e => setEditContractData({...editContractData, clientBank: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none" placeholder="Digite ou selecione o banco..."/></div>
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Chave Pix/Conta</label><input type="text" value={editContractData.paymentMethod} onChange={e => setEditContractData({...editContractData, paymentMethod: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+                  <div>
+                      <div className="flex justify-between items-end mb-1">
+                          <label className="block text-xs font-bold text-slate-500">Chave Pix/Conta</label>
+                          <select 
+                              onChange={(e) => {
+                                  const c = availableClients.find(cl => cl.name === selectedLoan?.client);
+                                  const val = e.target.value;
+                                  if (val === 'cpf' && c?.cpf) setEditContractData((f: any) => ({...f, paymentMethod: c.cpf}));
+                                  else if (val === 'phone' && c?.phone) setEditContractData((f: any) => ({...f, paymentMethod: c.phone}));
+                                  else if (val === 'email' && c?.email) setEditContractData((f: any) => ({...f, paymentMethod: c.email}));
+                                  else if (val === 'aleatoria') setEditContractData((f: any) => ({...f, paymentMethod: 'Chave Aleatória: '}));
+                                  else if (val === 'cnpj') setEditContractData((f: any) => ({...f, paymentMethod: 'CNPJ: '}));
+                                  else if (val === 'conta') setEditContractData((f: any) => ({...f, paymentMethod: 'Agência e Conta: '}));
+                                  e.target.value = ""; 
+                              }}
+                              className="text-[9px] p-1 border border-blue-200 rounded text-blue-700 font-bold outline-none cursor-pointer"
+                          >
+                              <option value="">Puxar dados...</option>
+                              <option value="cpf">CPF</option>
+                              <option value="phone">Celular</option>
+                              <option value="email">E-mail</option>
+                              <option value="aleatoria">Aleatória</option>
+                              <option value="cnpj">CNPJ</option>
+                              <option value="conta">Conta</option>
+                          </select>
+                      </div>
+                      <input type="text" value={editContractData.paymentMethod} onChange={e => setEditContractData({...editContractData, paymentMethod: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
+                  </div>
+              </div>
+
+              <div className="border-t border-slate-100 pt-4">
+                  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Fatias de Pagamento (Multi-Data)</label>
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                      {(editContractData.multiDates || []).map((slice: any, idx: number) => (
+                           <div key={idx} className="flex items-center gap-2">
+                               <div className="flex-1">
+                                   <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Dia</label>
+                                   <input type="number" onWheel={(e) => e.currentTarget.blur()} min="1" max="31" value={slice.day} onChange={(e) => {
+                                       const newMd = [...editContractData.multiDates];
+                                       newMd[idx].day = e.target.value;
+                                       setEditContractData({...editContractData, multiDates: newMd});
+                                   }} className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                               </div>
+                               <div className="flex-1">
+                                   <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Valor (R$)</label>
+                                   <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={slice.amount} onChange={(e) => {
+                                       const newMd = [...editContractData.multiDates];
+                                       newMd[idx].amount = e.target.value;
+                                       setEditContractData({...editContractData, multiDates: newMd});
+                                   }} className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                               </div>
+                               <button type="button" onClick={() => {
+                                   const newMd = editContractData.multiDates.filter((_:any, i:number) => i !== idx);
+                                   setEditContractData({...editContractData, multiDates: newMd});
+                               }} className="mt-4 p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16}/></button>
+                           </div>
+                      ))}
+                      {editContractData.multiDates?.length < 15 && (
+                          <button type="button" onClick={() => {
+                              const currentMd = editContractData.multiDates || [];
+                              setEditContractData({...editContractData, multiDates: [...currentMd, {day: '', amount: ''}]});
+                          }} className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1 mt-2"><Plus size={12}/> Adicionar Fatia</button>
+                      )}
+                  </div>
               </div>
 
               <div className="border-t border-slate-100 pt-4">
@@ -2314,10 +2483,6 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     <div>
                         <div className="flex justify-between items-end mb-1">
                              <label className="flex items-center gap-1 text-xs font-bold uppercase text-slate-500"><Hash size={12}/> ID do Contrato</label>
-                             <div className="flex items-center gap-1 text-orange-600 bg-orange-50 px-2 py-0.5 rounded border border-orange-200">
-                                 <input type="checkbox" id="isPreContractCheckbox" className="w-3 h-3 text-orange-600 focus:ring-orange-500" />
-                                 <label htmlFor="isPreContractCheckbox" className="text-[9px] font-black uppercase cursor-pointer">Gerar como Pré-Contrato</label>
-                             </div>
                         </div>
                         <input value={formData.manualID} onChange={e => setFormData({...formData, manualID: e.target.value})} className="w-full p-2 border rounded-lg bg-white font-mono text-sm" placeholder="Deixe em branco p/ Automático"/>
                     </div>
@@ -2327,11 +2492,37 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     </div>
                 </div>
 
+                {/* --- DROPDOWN INTELIGENTE PARA PUXAR CHAVE PIX --- */}
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                    <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Chave PIX / Forma de Pagamento</label>
-                    <input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Puxado automaticamente do cliente..."/>
+                    <div className="flex justify-between items-end mb-2">
+                        <label className="block text-xs font-bold uppercase text-slate-500">Chave PIX / Pagamento</label>
+                        {formData.client && (
+                            <select 
+                                onChange={(e) => {
+                                    const c = availableClients.find(cl => cl.name === formData.client);
+                                    const val = e.target.value;
+                                    if (val === 'cpf' && c?.cpf) setFormData(f => ({...f, paymentMethod: c.cpf}));
+                                    else if (val === 'phone' && c?.phone) setFormData(f => ({...f, paymentMethod: c.phone}));
+                                    else if (val === 'email' && c?.email) setFormData(f => ({...f, paymentMethod: c.email}));
+                                    else if (val === 'aleatoria') setFormData(f => ({...f, paymentMethod: 'Chave Aleatória: '}));
+                                    else if (val === 'cnpj') setFormData(f => ({...f, paymentMethod: 'CNPJ: '}));
+                                    else if (val === 'conta') setFormData(f => ({...f, paymentMethod: 'Agência e Conta: '}));
+                                    e.target.value = ""; 
+                                }}
+                                className="text-[10px] p-1.5 border border-blue-200 rounded-md bg-white text-blue-700 font-bold outline-none cursor-pointer shadow-sm"
+                            >
+                                <option value="">Puxar dados...</option>
+                                <option value="cpf">Puxar CPF</option>
+                                <option value="phone">Puxar Celular</option>
+                                <option value="email">Puxar E-mail</option>
+                                <option value="aleatoria">Chave Aleatória</option>
+                                <option value="cnpj">Usar CNPJ</option>
+                                <option value="conta">Agência e Conta</option>
+                            </select>
+                        )}
+                    </div>
+                    <input value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Selecione acima ou digite aqui..."/>
                 </div>
-
                 <div className="grid grid-cols-2 gap-4">
                     <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Multa Atraso (%)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.1" value={formData.fineRate} onChange={e => setFormData({...formData, fineRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="" /></div>
                     <div><label className="block text-xs font-bold uppercase text-slate-500 mb-1">Juros Mora Diária (%)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.moraInterestRate} onChange={e => setFormData({...formData, moraInterestRate: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="" /></div>
@@ -2346,8 +2537,46 @@ const handleFinalSave = async (e: React.FormEvent) => {
                         <div className="mt-3 animate-in zoom-in-95 border-t border-amber-200 pt-3">
                             <div className="grid grid-cols-2 gap-3 mb-3">
                                 <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Valor Original Emprestado (R$)</label><input required type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
-                                <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Taxa Registrada (%)</label><input required type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
-                            </div>
+                                <div>
+                                    <label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Taxa Registrada (%)</label>
+                                    <input 
+                                        required 
+                                        type="number" 
+                                        onWheel={(e) => e.currentTarget.blur()} 
+                                        step="any" 
+                                        value={formData.interestRate} 
+                                        onChange={(e) => {
+                                            const val = e.target.value;
+                                            setFormData(prev => {
+                                                const amount = parseFloat(prev.amount) || 0;
+                                                const initCap = parseFloat(prev.initialPaidCapital) || 0;
+                                                const balance = Math.max(0, amount - initCap);
+                                                let autoJuros = prev.manualInstallmentInterest;
+                                                const rateNum = parseFloat(val) || 0;
+
+                                                if (balance > 0) {
+                                                    let periodRate = rateNum / 100;
+                                                    if (prev.frequency === 'SEMANAL') periodRate /= 4;
+                                                    else if (prev.frequency === 'DIARIO') periodRate /= 30;
+
+                                                    if (prev.interestType === 'SIMPLE') {
+                                                        autoJuros = (balance * periodRate).toFixed(2);
+                                                    } else {
+                                                        const numInst = parseInt(prev.installments) || 1;
+                                                        const mCap = parseFloat(prev.manualInstallmentCapital) || 0;
+                                                        let pmt = 0;
+                                                        if (periodRate === 0) pmt = balance / numInst;
+                                                        else pmt = balance * ( (periodRate * Math.pow(1 + periodRate, numInst)) / (Math.pow(1 + periodRate, numInst) - 1) );
+                                                        autoJuros = Math.max(0, pmt - mCap).toFixed(2);
+                                                    }
+                                                }
+                                                return { ...prev, interestRate: val, manualInstallmentInterest: autoJuros };
+                                            });
+                                        }} 
+                                        className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-amber-500/20 outline-none transition-all" 
+                                        placeholder="" 
+                                    />
+                                </div>                            </div>
                             <div className="grid grid-cols-2 gap-3 mb-3">
                                 <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Capital Já Pago (R$)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.initialPaidCapital} onChange={e => setFormData({...formData, initialPaidCapital: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
                                 <div><label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">Juros Já Pagos (R$)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.initialPaidInterest} onChange={e => setFormData({...formData, initialPaidInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" /></div>
@@ -2372,9 +2601,57 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                 <div className={formData.interestType === 'SIMPLE' ? 'col-span-2' : ''}>
                                     <label className="block text-[10px] uppercase font-bold text-amber-700 mb-1">
                                         Juros / Parcela (R$)
-                                        {formData.interestType === 'SIMPLE' && <span className="lowercase text-[8px] font-normal ml-1">(Será recalculado dincamicamente se pagar capital)</span>}
+                                        {formData.interestType === 'SIMPLE' && <span className="lowercase text-[8px] font-normal ml-1">(Será recalculado se amortizar capital)</span>}
                                     </label>
-                                    <input required type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.manualInstallmentInterest} onChange={e => setFormData({...formData, manualInstallmentInterest: e.target.value})} className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white" placeholder="" />
+                                    <input 
+                                        required 
+                                        type="number" 
+                                        onWheel={(e) => e.currentTarget.blur()} 
+                                        step="0.01" 
+                                        value={formData.manualInstallmentInterest} 
+                                        onChange={(e) => {
+                                            const val = e.target.value;
+                                            setFormData(prev => {
+                                                const amount = parseFloat(prev.amount) || 0;
+                                                const initCap = parseFloat(prev.initialPaidCapital) || 0;
+                                                const balance = Math.max(0, amount - initCap);
+                                                let autoRate = prev.interestRate;
+                                                const newJuros = parseFloat(val) || 0;
+
+                                                if (balance > 0 && newJuros > 0) {
+                                                    if (prev.interestType === 'SIMPLE') {
+                                                        let rate = (newJuros / balance) * 100;
+                                                        if (prev.frequency === 'SEMANAL') rate *= 4;
+                                                        if (prev.frequency === 'DIARIO') rate *= 30;
+                                                        autoRate = String(rate);
+                                                    } else {
+                                                        const numInst = parseInt(prev.installments) || 1;
+                                                        const mCap = parseFloat(prev.manualInstallmentCapital) || 0;
+                                                        const targetPmt = mCap + newJuros;
+                                                        
+                                                        let low = 0.0;
+                                                        let high = 100.0; 
+                                                        let bestRate = 0;
+                                                        for (let i = 0; i < 60; i++) {
+                                                            let mid = (low + high) / 2;
+                                                            let r = mid / 100;
+                                                            let pmt = balance * ((r * Math.pow(1 + r, numInst)) / (Math.pow(1 + r, numInst) - 1));
+                                                            if (pmt < targetPmt) low = mid;
+                                                            else high = mid;
+                                                            bestRate = mid;
+                                                        }
+                                                        if (prev.frequency === 'SEMANAL') bestRate *= 4;
+                                                        if (prev.frequency === 'DIARIO') bestRate *= 30;
+                                                        // FIX: Previne notação científica (e-17)
+                                                        if (bestRate < 0.000001) bestRate = 0;
+                                                        autoRate = String(bestRate);                                                    }
+                                                }
+                                                return { ...prev, manualInstallmentInterest: val, interestRate: autoRate };
+                                            });
+                                        }} 
+                                        className="w-full p-2 border border-amber-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-amber-500/20 outline-none transition-all" 
+                                        placeholder="" 
+                                    />
                                 </div>
                             </div>
                         </div>
@@ -2385,12 +2662,71 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     <>
                         <div className="grid grid-cols-3 gap-4">
                             <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label><input required type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
-                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={formData.interestRate} onChange={e => setFormData({...formData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
+                            <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label><input required type="number" onWheel={(e) => e.currentTarget.blur()} step="any" value={formData.interestRate} onChange={e => {
+                                setExactInterest(null);
+                                setFormData({...formData, interestRate: e.target.value});
+                            }} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" placeholder=""/></div>
                             <div className="col-span-1"><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label><input required type="number" onWheel={(e) => e.currentTarget.blur()} value={formData.interestType === 'SIMPLE' ? 1 : formData.installments} disabled={formData.interestType === 'SIMPLE'} onChange={e => setFormData({...formData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 disabled:bg-slate-100 disabled:text-slate-400" placeholder=""/></div>
                         </div>
+
+                        <div className="grid grid-cols-1 p-4 bg-slate-50 border border-slate-200 rounded-xl shadow-inner">
+                            <div>
+                                <label className="block text-[10px] font-black uppercase text-blue-600 mb-1 leading-tight">Juros Total Desejado (R$) - Opcional</label>
+                                <input 
+                                    type="number" 
+                                    onWheel={(e) => e.currentTarget.blur()}
+                                    step="0.01" 
+                                    placeholder="Ex: 410.00 (O sistema calcula a % exata para você)"
+                                    onChange={e => {
+                                        const val = e.target.value;
+                                        if (val === '') {
+                                            setExactInterest(null);
+                                            return;
+                                        }
+                                        const jurosTarget = parseFloat(val) || 0;
+                                        setExactInterest(jurosTarget);
+
+                                        const cap = parseFloat(formData.amount) || 0;
+                                        const parcelas = formData.interestType === 'SIMPLE' ? 1 : (parseInt(formData.installments) || 1);
+                                        
+                                        if (cap > 0 && jurosTarget >= 0) {
+                                            if (formData.interestType === 'SIMPLE' || parcelas === 1) {
+                                                let taxa = (jurosTarget / cap) * 100;
+                                                if (formData.frequency === 'SEMANAL') taxa *= 4;
+                                                if (formData.frequency === 'DIARIO') taxa *= 30;
+                                                setFormData({...formData, interestRate: String(taxa)});
+                                            } else {
+                                                let low = 0.0;
+                                                let high = 100.0; 
+                                                let bestRate = 0;
+                                                // 60 loops garantem precisão microscópica!
+                                                for (let i = 0; i < 60; i++) {
+                                                    let mid = (low + high) / 2;
+                                                    let r = mid / 100;
+                                                    let pmt = cap * ((r * Math.pow(1 + r, parcelas)) / (Math.pow(1 + r, parcelas) - 1));
+                                                    let totalInt = (pmt * parcelas) - cap;
+                                                    if (totalInt < jurosTarget) low = mid;
+                                                    else high = mid;
+                                                    bestRate = mid;
+                                                }
+                                                // Converte a taxa do período de volta para Taxa Mensal para visualização correta
+                                                if (formData.frequency === 'SEMANAL') bestRate *= 4;
+                                                if (formData.frequency === 'DIARIO') bestRate *= 30;
+                                                
+                                                // FIX: Previne notação científica (e-17) em taxas zeradas
+                                                if (bestRate < 0.000001) bestRate = 0;
+                                                setFormData({...formData, interestRate: String(bestRate)});
+                                            }
+                                        }
+                                    }}
+                                    className="w-full p-3 border border-blue-300 rounded-xl outline-none font-black text-blue-700 bg-blue-50 focus:ring-2 focus:ring-blue-500/20 shadow-sm" 
+                                />
+                            </div>
+                        </div>
+
                         <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl mb-4">
                             <input type="checkbox" id="interestType" checked={formData.interestType === 'SIMPLE'} onChange={(e) => setFormData({...formData, interestType: e.target.checked ? 'SIMPLE' : 'PRICE'})} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" />
-                            <label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros)</label>
+                            <label htmlFor="interestType" className="text-sm font-bold text-blue-800 cursor-pointer">Pagamento Mínimo (Só Juros) <span className="text-xs font-normal text-blue-600 block">O cliente paga apenas os juros mensais. O capital não abate.</span></label>
                         </div>
                     </>
                 )}
@@ -2410,7 +2746,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                             <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Dia do Mês</label>
                                             <input type="number" onWheel={(e) => e.currentTarget.blur()} min="1" max="31" value={md.day} onChange={(e) => {
                                                 const newMd = [...formData.multiDates];
-                                                newMd[index].day = e.target.value;
+                                                newMd[index].day = e.target.value as any;
                                                 setFormData({...formData, multiDates: newMd});
                                             }} className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-white" placeholder="Ex: 10" />
                                         </div>
@@ -2418,7 +2754,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                             <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Valor (R$)</label>
                                             <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={md.amount} onChange={(e) => {
                                                 const newMd = [...formData.multiDates];
-                                                newMd[index].amount = e.target.value;
+                                                newMd[index].amount = e.target.value as any;
                                                 setFormData({...formData, multiDates: newMd});
                                             }} className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-white" placeholder="Ex: 150.00" />
                                         </div>
@@ -2431,7 +2767,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                     </div>
                                 ))}
                                 {formData.multiDates.length < 15 && (
-                                    <button type="button" onClick={() => setFormData({...formData, multiDates: [...formData.multiDates, {day: '', amount: ''}]})} className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1 mt-2"><Plus size={12}/> Adicionar Data</button>
+                                    <button type="button" onClick={() => setFormData({...formData, multiDates: [...formData.multiDates, {day: '' as any, amount: '' as any}]})} className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1 mt-2"><Plus size={12}/> Adicionar Data</button>
                                 )}
                             </div>
                         )}

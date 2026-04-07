@@ -199,8 +199,10 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client, setti
     const pixDestino = loan.paymentMethod ? ` ${labelPixCliente} ${loan.paymentMethod}` : "";
     const bankDestino = loan.clientBank ? `, Banco ${loan.clientBank.toUpperCase()}` : ", Banco NÃO INFORMADO";
 
-    addText(`1.1 Pelo presente instrumento, o MUTUANTE entrega ao MUTUÁRIO neste ato, a título de empréstimo (ou “Mútuo”), a importância de ${formatMoney(loan.amount)} (${valorParaExtenso(loan.amount).toUpperCase()}), através de transferência bancária para a chave${pixDestino} do próprio MUTUÁRIO${bankDestino}.`);    addText(`1.2 Fica acordado entre as Partes que o Valor do Mútuo, na data do vencimento do presente contrato, será acrescido de uma taxa de remuneração a ${loan.interestRate}% a.m do Valor do Mútuo.`);
-    addText(`1.3 O Valor do Mútuo deverá ser restituído em sua integralidade pelo MUTUÁRIO ao MUTUANTE, respeitando-se os juros e correção pactuados na cláusula 1.2 acima, até o término do prazo de vigência do presente contrato, qual seja, até o pagamento da parcela.`);
+    addText(`1.1 Pelo presente instrumento, o MUTUANTE entrega ao MUTUÁRIO neste ato, a título de empréstimo (ou “Mútuo”), a importância de ${formatMoney(loan.amount)} (${valorParaExtenso(loan.amount).toUpperCase()}), através de transferência bancária para a chave${pixDestino} do próprio MUTUÁRIO${bankDestino}.`);    
+    // FIX: Máscara para evitar dízimas periódicas na taxa de juros do contrato
+    const displayRate = Number(loan.interestRate).toFixed(2);
+    addText(`1.2 Fica acordado entre as Partes que o Valor do Mútuo, na data do vencimento do presente contrato, será acrescido de uma taxa de remuneração a ${displayRate}% a.m do Valor do Mútuo.`);    addText(`1.3 O Valor do Mútuo deverá ser restituído em sua integralidade pelo MUTUÁRIO ao MUTUANTE, respeitando-se os juros e correção pactuados na cláusula 1.2 acima, até o término do prazo de vigência do presente contrato, qual seja, até o pagamento da parcela.`);
     addText(`1.4 Caso o MUTUÁRIO deixe de pagar integralmente o Valor do Mútuo e seus acessórios no prazo estipulado na cláusula 1.3 acima, o saldo devedor corrigido na data do término de referido prazo ficará sujeito a juros moratórios à taxa de 20% (vinte por cento) ao mês, multa de mora na ordem de 2% (dois por cento) sobre o valor atualizado do débito e correção monetária.`);
 y += 5;
     addText("Cláusula Segunda – DO PRAZO DE VIGÊNCIA", true);
@@ -241,8 +243,8 @@ y += 5;
     }
 
     addText(`2.1. O presente Contrato entra em vigor na data de sua assinatura. ${textoVigencia}, findo o qual o MUTUÁRIO deverá efetuar a restituição ao MUTUANTE do Valor do Mútuo, acrescido da taxa de remuneração, perfazendo o total em ${instTextNum} (${instTextExt}) ${palavraParcela} no valor de ${formatMoney(totalRepayment)} (${valorParaExtenso(totalRepayment).toUpperCase()}), através de transferência para a conta corrente do MUTUANTE, ${lenderBank} NA QUAL A CHAVE PIX É O CNPJ: ${lenderCNPJ}, sob pena de ficar constituído em mora, autorizada a aplicação das sanções previstas na cláusula 1.4.`);
-    addText("2.2. Poderão as Partes prorrogar o prazo de vigência deste Contrato, mediante aditamento ao presente subscrito por elas juntamente com duas testemunhas.");    addText("Cláusula Terceira – DAS DISPOSIÇÕES GERAIS", true);
-    addText("3.1. O MUTUÁRIO arcará com todos e quaisquer tributos e despesas de qualquer natureza incidentes sobre ou decorrentes da presente avença, bem como arcará com os demais custos e despesas dela decorrentes.");
+    addText("2.2. Poderão as Partes prorrogar o prazo de vigência deste Contrato, mediante aditamento ao presente subscrito por elas juntamente com duas testemunhas.");    
+    addText("Cláusula Terceira – DAS DISPOSIÇÕES GERAIS", true);addText("3.1. O MUTUÁRIO arcará com todos e quaisquer tributos e despesas de qualquer natureza incidentes sobre ou decorrentes da presente avença, bem como arcará com os demais custos e despesas dela decorrentes.");
     addText("3.2. Todas as obrigações assumidas neste Contrato são irretratáveis e irrevogáveis.");
     addText("3.3. O MUTUÁRIO não poderá ceder quaisquer de seus direitos, interesses ou obrigações estabelecidas no presente Contrato sem o prévio consentimento por escrito do MUTUANTE, e qualquer tentativa de cessão do presente Contrato sem o mencionado consentimento será considerada nula e sem efeito.");
     addText("3.4. As Partes reconhecem e acordam que as condições constantes no presente Contrato refletem as suas pretensões e interesses comerciais. Ademais, as Partes têm pleno entendimento e conhecimento do teor do presente Contrato e de suas Cláusulas, cientes das obrigações bilaterais a que se comprometem, produzindo seus efeitos perante os contratantes e terceiros.");
@@ -323,8 +325,7 @@ const startY = (i % 2 === 0) ? 148.5 : 10;
 
         const val = loan.interestType === 'SIMPLE' ? (Number(loan.amount) * (1 + (loan.interestRate / 100))) : loan.installmentValue;
 
-        doc.setLineWidth(0.3); doc.rect(10, startY, 190, 130); 
-        doc.setFont("times", "bold"); doc.setFontSize(12);
+        doc.setLineWidth(0.3); doc.rect(10, startY, 190, 130);        doc.setFont("times", "bold"); doc.setFontSize(12);
         doc.text("NOTA PROMISSÓRIA", 15, startY + 12);
         doc.text(`Nº  #${i}/${totalInst.toString().padStart(3, '0')}#`, 90, startY + 12, { align: "center" });
         

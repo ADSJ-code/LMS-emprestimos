@@ -67,14 +67,94 @@ const Dashboard = () => {
       return new Date(ty, tm - 1, td);
   };
 
+  // --- NOVO MOTOR DE CÁLCULO C/ JUROS SIMPLES ---
+  const getSyncedBreakdown = (loan: Loan | null) => {
+      if (!loan) return { interest: 0, capital: 0, total: 0 };
+      
+      if (loan.interestType === 'SIMPLE') {
+          const dueDate = new Date(loan.nextDue);
+          const cycleStart = new Date(dueDate);
+          cycleStart.setMonth(cycleStart.getMonth() - 1);
+          cycleStart.setHours(23, 59, 59, 999);
+
+          let capitalPaidInThisCycle = 0;
+          if (loan.history) {
+              loan.history.forEach(h => {
+                  const hDate = new Date(h.date);
+                  if (hDate > cycleStart && !h.note?.includes('[CICLO COMPLETADO]')) {
+                      capitalPaidInThisCycle += (h.capitalPaid || 0);
+                  }
+              });
+          }
+
+          const principalAtStartOfMonth = (loan.amount - (loan.totalPaidCapital || 0)) + capitalPaidInThisCycle;
+          let periodRate = loan.interestRate / 100;
+          if (loan.frequency === 'SEMANAL') periodRate /= 4;
+          else if (loan.frequency === 'DIARIO') periodRate /= 30;
+
+          const dynamicInterest = principalAtStartOfMonth * periodRate;
+          let extraAcordo = 0;
+          if (loan.status === 'Acordo' && (loan.agreementValue || 0) > 0) extraAcordo = loan.agreementValue || 0;
+          
+          return { interest: dynamicInterest + extraAcordo, capital: 0, total: dynamicInterest + extraAcordo };
+          
+      } else {
+          const totalReceivable = loan.amount + (loan.projectedProfit || 0);
+          const originalInstallments = Math.max(1, Math.round(totalReceivable / loan.installmentValue));
+          const flatInterest = (loan.projectedProfit || 0) / originalInstallments;
+          const flatCapital = loan.installmentValue - flatInterest;
+
+          let extraAcordo = 0;
+          if (loan.status === 'Acordo' && (loan.agreementValue || 0) > 0) extraAcordo = loan.agreementValue || 0;
+
+          return { 
+              interest: Math.max(0, flatInterest) + extraAcordo, 
+              capital: Math.max(0, flatCapital), 
+              total: loan.installmentValue + extraAcordo
+          };
+      }
+  };
+
   const getLoanRealStatus = (loan: Loan) => {
       if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
       if (loan.status === 'Acordo') return 'Acordo';
       const balance = Number(loan.amount) - (Number(loan.totalPaidCapital) || 0);
       if (balance <= 0.10) return 'Quitado'; 
-      const now = new Date();
-      const todayStr = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+      
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
       const dueStr = loan.nextDue.split('T')[0];
+
+      // INTEGRAÇÃO DAS FATIAS NA VERIFICAÇÃO GERAL DE STATUS DO DASHBOARD
+      const slices = (loan as any).multiDates || [];
+      if (slices.length > 0) {
+          const currentMonth = new Date(loan.nextDue).getMonth();
+          const currentYear = new Date(loan.nextDue).getFullYear();
+          let hasLateSlice = false;
+
+          for (const slice of slices) {
+              const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+              if (sliceDate < today) {
+                  const baseAmount = Number(slice.amount) || 0;
+                  const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
+                      const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                      if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
+                          return acc + h.amount;
+                      }
+                      return acc;
+                  }, 0);
+                  
+                  if (slicePaidAmount < (baseAmount - 0.05)) {
+                      hasLateSlice = true;
+                      break;
+                  }
+              }
+          }
+          if (hasLateSlice) return 'Atrasado';
+          return 'Em Dia';
+      }
+
       if (dueStr < todayStr) return 'Atrasado';
       return 'Em Dia';
   };
@@ -94,7 +174,40 @@ const Dashboard = () => {
       let count = 0;
       
       const realStatus = getLoanRealStatus(loan);
-      const breakdown = calculateInstallmentBreakdown(loan);
+      const breakdown = getSyncedBreakdown(loan);
+      
+      // MOTOR DA BOLA DE NEVE PARA FATIAS
+      const slices = (loan as any).multiDates || [];
+      if (slices.length > 0) {
+          const currentMonth = tempDue.getMonth();
+          const currentYear = tempDue.getFullYear();
+          const todayDate = new Date();
+          todayDate.setHours(0,0,0,0);
+          
+          for (const slice of slices) {
+              const baseAmount = Number(slice.amount) || 0;
+              const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+              
+              const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
+                  const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                  if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
+                      return acc + h.amount;
+                  }
+                  return acc;
+              }, 0);
+
+              const isPaid = slicePaidAmount >= (baseAmount - 0.05);
+              
+              if (!isPaid && sliceDate < todayDate && loan.status !== 'Pago' && loan.status !== 'Quitado') {
+                  const ratio = baseAmount / (breakdown.total || 1);
+                  const sliceOverdue = calculateOverdueValue(baseAmount, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), Number(loan.amount) * ratio);
+                  totalOverdue += (sliceOverdue - slicePaidAmount);
+                  missedCount++;
+              }
+          }
+          return { totalOverdue, missedCount };
+      }
+
       const baseAmount = loan.interestType === 'SIMPLE' ? breakdown.total : (realStatus === 'Acordo' ? Number(loan.installmentValue) + Number(loan.agreementValue || 0) : Number(loan.installmentValue));
       
       const remainingInstallments = loan.interestType === 'SIMPLE' ? 1 : (loan.installments || 1);
@@ -182,8 +295,7 @@ const Dashboard = () => {
         }
         if (isPaid) return;
 
-        const breakdown = calculateInstallmentBreakdown(loan);
-        const realStatus = getLoanRealStatus(loan);
+        const breakdown = getSyncedBreakdown(loan);    const realStatus = getLoanRealStatus(loan);
         const { totalOverdue } = getLoanDetails(loan); // Puxa a bola de neve inteira!        
         let currentDue = parseLocalDate(loan.nextDue);
         let hasMatch = false;
@@ -235,12 +347,13 @@ const Dashboard = () => {
                 });
             } else {
                 // --- MÁGICA DA SINCRONIA GLOBAL (PRODUÇÃO) ---
-                let gCap = (loan.interestType === 'SIMPLE') ? 0 : calculateCapitalBalance(loan);
+                // FIX: O saldo global devedor de capital precisa subtrair exatamente o que o cliente já pagou
+                let gCap = (loan.interestType === 'SIMPLE') ? Math.max(0, Number(loan.amount) - (Number(loan.totalPaidCapital) || 0)) : Math.max(0, Number(loan.amount) - (Number(loan.totalPaidCapital) || 0));
+                
                 const gExpected = Number(loan.projectedProfit) || Math.max(0, (loan.installmentValue * loan.installments) - loan.amount);
                 
                 // No lucro global, a produção soma o lucro restante de Price + o juro atual de Simple
-                let gProf = (loan.interestType === 'SIMPLE') ? breakdown.interest : Math.max(0, gExpected - loan.totalPaidInterest);
-
+                let gProf = (loan.interestType === 'SIMPLE') ? breakdown.interest : Math.max(0, gExpected - (Number(loan.totalPaidInterest) || 0));
                 capAcc.all += gCap; capAcc[tier] += gCap;
                 profAcc.all += gProf; profAcc[tier] += gProf;
                 
@@ -449,87 +562,123 @@ const Dashboard = () => {
   return (
     <Layout>
       {isDailyAlertOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
-             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 border border-slate-200">
-                 <div className="bg-slate-900 p-5 flex justify-between items-center">
-                     <div className="flex items-center gap-2 text-white font-bold"><BellRing className="text-yellow-400" size={20}/> <span>Vencimentos de Hoje</span></div>
-                     <button onClick={() => setIsDailyAlertOpen(false)} className="text-white/50 hover:text-white transition-colors"><X size={24}/></button>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 sm:p-6 sm:items-start sm:pt-[10vh] overflow-y-auto animate-in fade-in duration-200">
+             <div className="bg-slate-50 rounded-3xl shadow-2xl w-full max-w-md flex flex-col animate-in slide-in-from-bottom-4 sm:slide-in-from-top-8 fade-in duration-300 relative my-auto sm:my-0 ring-1 ring-white/20 overflow-hidden">
+                 {/* HEADER */}
+                 <div className="bg-slate-900 p-6 flex justify-between items-center relative">
+                     <div className="absolute -right-4 -top-4 bg-white/5 w-24 h-24 rounded-full blur-xl"></div>
+                     <div className="flex items-center gap-3 text-white font-bold relative z-10">
+                         <div className="bg-yellow-400/20 p-2.5 rounded-xl">
+                             <BellRing className="text-yellow-400" size={22}/>
+                         </div>
+                         <span className="text-lg tracking-wide">Vencimentos de Hoje</span>
+                     </div>
+                     <button onClick={() => setIsDailyAlertOpen(false)} className="text-white/40 hover:text-white hover:bg-white/10 p-2 rounded-full transition-all relative z-10"><X size={20}/></button>
                  </div>
-                 <div className="p-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                 
+                 {/* BODY */}
+                 <div className="p-5 max-h-[60vh] overflow-y-auto custom-scrollbar">
                      {todaysLoans.length === 0 ? (
-                         <div className="text-center py-8">
-                             <CheckCircle size={48} className="mx-auto text-green-500 mb-2 opacity-50"/>
-                             <p className="text-slate-500 font-medium">Nenhum vencimento para hoje!</p>
+                         <div className="text-center py-10">
+                             <div className="bg-white w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-slate-100">
+                                 <CheckCircle size={36} className="text-green-500"/>
+                             </div>
+                             <p className="text-slate-800 font-bold text-lg">Tudo limpo por aqui!</p>
+                             <p className="text-slate-500 text-sm mt-1">Nenhum vencimento pendente para hoje.</p>
                          </div>
                      ) : (
                          <div className="space-y-3">
-                             <p className="text-xs font-bold uppercase text-slate-400 mb-2">Clientes para cobrar:</p>
+                             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-3 ml-1">Atenção ao dia de hoje:</p>
                              {todaysLoans.map(l => (
-                                 <div key={l.id} className="flex justify-between items-center p-4 bg-slate-50 border border-slate-100 rounded-xl hover:bg-blue-50 hover:border-blue-100 transition-all cursor-pointer group" onClick={() => goToBillingWithSearch(l.client)}>
-                                     <div className="flex items-center gap-3">
-                                         <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-slate-700 font-bold border border-slate-200 shadow-sm">{l.client.charAt(0)}</div>
+                                 <div key={l.id} className="flex justify-between items-center p-4 bg-white border border-slate-200 rounded-2xl hover:border-yellow-400 hover:shadow-md hover:shadow-yellow-400/10 transition-all cursor-pointer group" onClick={() => goToBillingWithSearch(l.client)}>
+                                     <div className="flex items-center gap-4">
+                                         <div className="w-12 h-12 rounded-full bg-slate-50 flex items-center justify-center text-slate-600 font-black border border-slate-100 group-hover:bg-yellow-50 group-hover:text-yellow-600 group-hover:border-yellow-200 transition-colors text-lg">{l.client.charAt(0)}</div>
                                          <div>
-                                             <p className="font-bold text-slate-800 text-sm group-hover:text-blue-700">{l.client}</p>
-                                             <p className="text-[10px] text-slate-400 font-mono">Contrato: {l.id}</p>
+                                             <p className="font-bold text-slate-800 group-hover:text-slate-900 leading-tight">{l.client}</p>
+                                             <p className="text-[10px] text-slate-400 font-mono mt-1">ID: {l.id}</p>
                                          </div>
                                      </div>
                                      <div className="text-right">
-                                         <p className="font-black text-green-600 text-sm">R$ {formatMoney(l.interestType === 'SIMPLE' ? calculateInstallmentBreakdown(l).total : Number(l.installmentValue))}</p>
-                                         <p className="text-[10px] text-slate-400 uppercase font-bold">Parcela Fixa</p>
+                                         <p className="font-black text-slate-800 group-hover:text-yellow-600 transition-colors text-lg">R$ {formatMoney(l.interestType === 'SIMPLE' ? calculateInstallmentBreakdown(l).total : Number(l.installmentValue))}</p>
+                                         <span className="inline-block mt-1 text-[9px] text-slate-500 uppercase font-bold bg-slate-100 px-2 py-0.5 rounded-md group-hover:bg-yellow-100 group-hover:text-yellow-700 transition-colors">Cobrar ➔</span>
                                      </div>
                                  </div>
                              ))}
                          </div>
                      )}
                  </div>
-                 <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end">
-                      <button onClick={() => setIsDailyAlertOpen(false)} className="px-6 py-2 bg-slate-900 text-white rounded-xl text-sm font-bold shadow-lg hover:bg-slate-800 transition-all">Entendido</button>
+
+                 {/* FOOTER */}
+                 <div className="p-5 border-t border-slate-200 bg-slate-50/80 flex justify-end">
+                      <button onClick={() => setIsDailyAlertOpen(false)} className="w-full sm:w-auto px-8 py-3 bg-slate-900 text-white rounded-xl font-bold shadow-lg shadow-slate-900/20 hover:bg-slate-800 hover:-translate-y-0.5 transition-all">Entendido</button>
                  </div>
              </div>
         </div>
       )}
 
-      {showWelcomeModal && (          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
-              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95">
-                  <div className="bg-slate-900 p-6 flex justify-between items-center">
-                      <div>
-                          <h3 className="text-xl font-bold text-white flex items-center gap-2"><CalendarDays size={22} className="text-yellow-400"/> Vencimentos</h3>
-                          <p className="text-slate-400 text-xs">Consulte o que vence em cada data.</p>
-                      </div>
-                      <button onClick={() => setShowWelcomeModal(false)} className="text-white/50 hover:text-white"><X size={24}/></button>
-                  </div>
-                  
-                  <div className="p-4 bg-slate-50 border-b border-slate-200">
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Data de Referência</label>
-                      <input type="date" value={maturityDate} onChange={(e) => setMaturityDate(e.target.value)} className="w-full p-3 border border-slate-300 rounded-xl font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"/>
-                  </div>
+      {showWelcomeModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 sm:p-6 sm:items-start sm:pt-[10vh] overflow-y-auto animate-in fade-in duration-200">
+             <div className="bg-slate-50 rounded-3xl shadow-2xl w-full max-w-md flex flex-col animate-in slide-in-from-bottom-4 sm:slide-in-from-top-8 fade-in duration-300 relative my-auto sm:my-0 ring-1 ring-white/20 overflow-hidden">
+                 
+                 {/* HEADER */}
+                 <div className="bg-slate-900 p-6 flex justify-between items-center relative">
+                     <div className="absolute -right-4 -top-4 bg-white/5 w-24 h-24 rounded-full blur-xl"></div>
+                     <div className="flex items-center gap-3 text-white font-bold relative z-10">
+                         <div className="bg-orange-400/20 p-2.5 rounded-xl">
+                             <CalendarDays className="text-orange-400" size={22}/>
+                         </div>
+                         <div className="flex flex-col">
+                            <span className="text-lg tracking-wide leading-tight">Vencimentos</span>
+                            <span className="text-[10px] font-normal text-slate-400">Consulte qualquer data</span>
+                         </div>
+                     </div>
+                     <button onClick={() => setShowWelcomeModal(false)} className="text-white/40 hover:text-white hover:bg-white/10 p-2 rounded-full transition-all relative z-10"><X size={20}/></button>
+                 </div>
+                 
+                 {/* FILTER BAR */}
+                 <div className="p-5 bg-white border-b border-slate-200 shadow-sm relative z-10">
+                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Escolha uma Data</label>
+                     <input type="date" value={maturityDate} onChange={(e) => setMaturityDate(e.target.value)} className="w-full p-3.5 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-400/30 focus:border-orange-400 transition-all bg-slate-50 hover:bg-white"/>
+                 </div>
 
-                  <div className="p-6">
-                      <h4 className="text-sm font-bold text-slate-500 uppercase mb-3 flex items-center gap-2"><Bell size={16}/> Lista de Contratos ({loansOnMaturityDate.length})</h4>
-                      <div className="space-y-2 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
-                          {loansOnMaturityDate.length === 0 ? (
-                              <div className="text-center py-6">
-                                  <CheckCircle size={40} className="mx-auto text-slate-300 mb-2"/>
-                                  <p className="text-sm text-slate-400 italic">Nada consta para esta data.</p>
-                              </div>
-                          ) : (
-                              loansOnMaturityDate.map(l => (
-                                  <div key={l.id} className="flex justify-between items-center p-3 bg-blue-50 rounded-xl border border-blue-100 hover:bg-blue-100 transition-colors cursor-pointer" onClick={() => goToBillingWithSearch(l.client)}>
-                                      <div>
-                                          <span className="font-bold text-blue-900 block">{l.client}</span>
-                                          <span className="text-[10px] text-blue-500 font-mono">{l.id}</span>
-                                      </div>
-                                      <span className="text-blue-700 font-bold">R$ {formatMoney(l.installmentValue)}</span>
-                                  </div>
-                              ))
-                          )}
-                      </div>
-                      <div className="mt-6 pt-4 border-t border-slate-100">
-                          <button onClick={() => setShowWelcomeModal(false)} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all">Fechar</button>
-                      </div>
-                  </div>
-              </div>
-          </div>
+                 {/* BODY */}
+                 <div className="p-5 max-h-[50vh] overflow-y-auto custom-scrollbar">
+                     {loansOnMaturityDate.length === 0 ? (
+                         <div className="text-center py-10">
+                             <div className="bg-white w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-slate-100">
+                                 <CalendarDays size={36} className="text-slate-300"/>
+                             </div>
+                             <p className="text-slate-800 font-bold text-lg">Agenda Livre!</p>
+                             <p className="text-slate-500 text-sm mt-1">Nada agendado para esta data.</p>
+                         </div>
+                     ) : (
+                         <div className="space-y-3">
+                             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-3 ml-1 flex items-center gap-1.5"><Bell size={12}/> Contratos Encontrados ({loansOnMaturityDate.length})</p>
+                             {loansOnMaturityDate.map(l => (
+                                 <div key={l.id} className="flex justify-between items-center p-4 bg-white border border-slate-200 rounded-2xl hover:border-orange-400 hover:shadow-md hover:shadow-orange-400/10 transition-all cursor-pointer group" onClick={() => goToBillingWithSearch(l.client)}>
+                                     <div className="flex items-center gap-4">
+                                         <div className="w-12 h-12 rounded-full bg-slate-50 flex items-center justify-center text-slate-600 font-black border border-slate-100 group-hover:bg-orange-50 group-hover:text-orange-600 group-hover:border-orange-200 transition-colors text-lg">{l.client.charAt(0)}</div>
+                                         <div>
+                                             <p className="font-bold text-slate-800 group-hover:text-slate-900 leading-tight">{l.client}</p>
+                                             <p className="text-[10px] text-slate-400 font-mono mt-1">ID: {l.id}</p>
+                                         </div>
+                                     </div>
+                                     <div className="text-right">
+                                         <p className="font-black text-slate-800 group-hover:text-orange-600 transition-colors text-lg">R$ {formatMoney(l.interestType === 'SIMPLE' ? calculateInstallmentBreakdown(l).total : Number(l.installmentValue))}</p>
+                                         <span className="inline-block mt-1 text-[9px] text-slate-500 uppercase font-bold bg-slate-100 px-2 py-0.5 rounded-md group-hover:bg-orange-100 group-hover:text-orange-700 transition-colors">Ver Ficha ➔</span>
+                                     </div>
+                                 </div>
+                             ))}
+                         </div>
+                     )}
+                 </div>
+
+                 {/* FOOTER */}
+                 <div className="p-5 border-t border-slate-200 bg-slate-50/80">
+                     <button onClick={() => setShowWelcomeModal(false)} className="w-full py-3.5 bg-slate-900 text-white rounded-xl font-bold shadow-lg shadow-slate-900/20 hover:bg-slate-800 hover:-translate-y-0.5 transition-all">Fechar Aba</button>
+                 </div>
+             </div>
+        </div>
       )}
 
       {selectedRange ? (
@@ -642,15 +791,13 @@ const Dashboard = () => {
                                               )}
                                           </td>
 
-                                          <td className="p-4 text-center font-bold text-slate-600">{loan.interestRate}%</td>
-                                          
+                                          <td className="p-4 text-center font-bold text-slate-600">{Number(loan.interestRate).toFixed(2)}%</td>    
                                           <td className="p-4 text-right font-bold text-slate-700">
-                                              R$ {formatMoney(selectedRange === 'overdue' ? (calculateInstallmentBreakdown(loan).capital) : loan.projectedCapitalForPeriod)}
-                                          </td>
+                                              R$ {formatMoney(selectedRange === 'overdue' ? (getSyncedBreakdown(loan).capital) : (loan.interestType === 'SIMPLE' || loan.isMigration ? Math.max(0, Number(loan.amount) - (Number(loan.totalPaidCapital) || 0)) : calculateCapitalBalance(loan)))}
+                                          </td>                                          
                                           <td className="p-4 text-right font-bold text-green-600">
-                                              R$ {formatMoney(selectedRange === 'overdue' ? (calculateInstallmentBreakdown(loan).interest) : loan.projectedInterestForPeriod)}
-                                          </td>
-                                          
+                                              R$ {formatMoney(selectedRange === 'overdue' ? (getSyncedBreakdown(loan).interest) : loan.projectedInterestForPeriod)}
+                                          </td>                                          
                                           {selectedRange === 'overdue' && <td className="p-4 text-right font-black text-red-600">R$ {formatMoney(overdueVal)}</td>}
                                           <td className="p-4 text-center">
                                               <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${getLoanRealStatus(loan) === 'Atrasado' ? 'bg-red-50 text-red-600' : getLoanRealStatus(loan) === 'Acordo' ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>
