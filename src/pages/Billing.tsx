@@ -370,7 +370,16 @@ const Billing = () => {
       }
   }, []);
 
-  // --- MOTOR INTELIGENTE DE STATUS ---
+  // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS ---
+ 
+  // FIX: Função para blindar a leitura de datas contra o Fuso Horário do Javascript
+  const parseLocalDate = (dateStr: string) => {
+    if (!dateStr) return new Date();
+    const cleanStr = dateStr.split("T")[0];
+    const [year, month, day] = cleanStr.split("-").map(Number);
+    return new Date(year, month - 1, day);
+  };
+ 
   const getLoanRealStatus = (loan: Loan) => {
     if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
     if (loan.status === 'Acordo') return 'Acordo';
@@ -382,19 +391,21 @@ const Billing = () => {
     const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
     const dueStr = loan.nextDue.split('T')[0];
 
-    // INTEGRAÇÃO DAS FATIAS NA VERIFICAÇÃO GERAL DE STATUS
-    const slices = (loan as any).multiDates || [];
-    if (slices.length > 0) {
-        const currentMonth = new Date(loan.nextDue).getMonth();
-        const currentYear = new Date(loan.nextDue).getFullYear();
+    // FIX: Filtra e ignora "Fatias Fantasmas" (vazias, dia 0 ou valor 0)
+    const validSlices = ((loan as any).multiDates || []).filter((s: any) => s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && Number(s.amount) > 0);
+
+    if (validSlices.length > 0) {
+        const dueLocalDate = parseLocalDate(loan.nextDue);
+        const currentMonth = dueLocalDate.getMonth();
+        const currentYear = dueLocalDate.getFullYear();
         let hasLateSlice = false;
 
-        for (const slice of slices) {
+        for (const slice of validSlices) {
             const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
             if (sliceDate < today) {
                 const baseAmount = Number(slice.amount) || 0;
                 const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
-                    const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                    const hDue = parseLocalDate(h.originalDueDate || h.date);
                     if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
                         return acc + h.amount;
                     }
@@ -408,7 +419,6 @@ const Billing = () => {
             }
         }
         if (hasLateSlice) return 'Atrasado';
-        // Se as fatias até hoje estão pagas, mas as futuras não chegaram, então está "Em Dia"
         return 'Em Dia';
     }
 
