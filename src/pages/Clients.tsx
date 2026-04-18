@@ -18,12 +18,21 @@ interface ChecklistItem {
 const Clients = () => {
   const navigate = useNavigate();
 
+  // 🚀 EXTRAÇÃO DE APELIDO: Limpa o JSON [META:...] e mostra apenas a observação
+  const getNickname = (obs?: string) => {
+      if (!obs) return '';
+      return obs.replace(/\[META:.*?\]/g, '').trim();
+  };
+
   const [clients, setClients] = useState<Client[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]); 
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   
   const [isModalOpen, setIsModalOpen] = useState(false);
+  
+  // 🚨 NOVO ESTADO: Controla o aviso de duplicidade em tempo real
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | number | null>(null);
   const [modalTab, setModalTab] = useState<'dados' | 'financeiro' | 'analise'>('dados');
   
@@ -135,6 +144,26 @@ const Clients = () => {
     return () => window.removeEventListener('click', handleGlobalClick);
   }, []);
 
+  // 🚨 OLHEIRO EM TEMPO REAL: Verifica duplicidade enquanto o usuário digita
+  useEffect(() => {
+      const cleanDoc = (formData.cpf || '').replace(/\D/g, '');
+      if (cleanDoc.length === 11 || cleanDoc.length === 14) {
+          const isDuplicate = clients.some(c => {
+              const cClean = (c.cpf || '').replace(/\D/g, '');
+              if (editingId && c.id === editingId) return false;
+              return cClean === cleanDoc;
+          });
+          
+          if (isDuplicate) {
+              setDuplicateWarning(`⚠️ Este ${cleanDoc.length === 11 ? 'CPF' : 'CNPJ'} já está cadastrado em outro cliente!`);
+          } else {
+              setDuplicateWarning(null);
+          }
+      } else {
+          setDuplicateWarning(null);
+      }
+  }, [formData.cpf, clients, editingId]);
+
   const processedClients = useMemo(() => {
       const sortedByTime = [...clients].sort((a, b) => Number(a.id) - Number(b.id));
       return sortedByTime.map((c, index) => ({
@@ -235,9 +264,10 @@ const Clients = () => {
 
   const filteredClients = useMemo(() => {
     return processedClients.filter(c => 
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+      c.status !== 'Bloqueado' && // 🚫 ESCONDE A LISTA NEGRA
+      (c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
       c.cpf.includes(searchTerm) ||
-      c.displayNumber.toString().includes(searchTerm)
+      c.displayNumber.toString().includes(searchTerm))
     );
   }, [processedClients, searchTerm]);
 
@@ -301,10 +331,27 @@ const Clients = () => {
     setOpenMenuId(null);
   };
 
-  // SISTEMA DE EMPACOTAMENTO DE DADOS (SALVA NO BACKEND SEM MODIFICAR O BANCO)
+  // SISTEMA DE EMPACOTAMENTO DE DADOS E SALVAMENTO
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+
+    // 🚨 TRAVA DE SEGURANÇA: Impede envio se o CPF for duplicado
+    const cleanDoc = (formData.cpf || '').replace(/\D/g, '');
+    if (cleanDoc) {
+        const isDuplicate = clients.some(c => {
+            const cClean = (c.cpf || '').replace(/\D/g, '');
+            if (editingId && c.id === editingId) return false;
+            return cClean === cleanDoc;
+        });
+
+        if (isDuplicate) {
+            alert(`❌ ERRO: Este ${clientType === 'PF' ? 'CPF' : 'CNPJ'} já está cadastrado no sistema!`);
+            setIsLoading(false);
+            return;
+        }
+    }
+
     try {
       const checkedIds = checklistItems.filter(i => i.checked).map(i => i.id);
       
@@ -384,7 +431,21 @@ const Clients = () => {
               const ds = getClientDebtStatus(client.name);
               return (
                 <tr key={client.id} className="hover:bg-slate-50/80 transition-colors cursor-pointer" onClick={() => handleOpenModal(client, 'financeiro')}>
-                  <td className="p-4"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center text-white font-bold text-xs">#{(client as any).displayNumber}</div><div><p className="font-bold text-slate-800">{client.name}</p><p className="text-[10px] text-slate-400">{client.cpf}</p></div></div></td>
+                  <td className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center text-white font-bold text-xs">#{(client as any).displayNumber}</div>
+                      <div>
+                        <p className="font-bold text-slate-800">{client.name}</p>
+                        {/* 🚀 EXIBINDO O APELIDO/OBSERVAÇÃO */}
+                        {getNickname(client.observations) && (
+                           <p className="text-[10px] font-bold text-blue-600 truncate max-w-[150px]" title={getNickname(client.observations)}>
+                             {getNickname(client.observations)}
+                           </p>
+                        )}
+                        <p className="text-[10px] text-slate-400">{client.cpf}</p>
+                      </div>
+                    </div>
+                  </td>
                   <td className="p-4 text-xs text-slate-600"><Mail size={12} className="inline mr-1"/> {client.email || '-'}<br/><Phone size={12} className="inline mr-1"/> {client.phone}</td>
                   <td className="p-4 text-center"><span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${ds.color === 'red' ? 'bg-red-50 text-red-600' : ds.color === 'blue' ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'}`}>{ds.label}</span></td>
                   <td className="p-4 text-right relative">
@@ -438,24 +499,31 @@ const Clients = () => {
                         className="w-full p-2.5 border rounded-lg font-bold text-slate-800" 
                     />
                     <div className="grid grid-cols-2 gap-3">
-                        <input 
-                            required 
-                            placeholder={clientType === 'PF' ? "CPF" : "CNPJ"} 
-                            value={formData.cpf} 
-                            onChange={e => {
-                                const val = clientType === 'PF' ? maskCPF(e.target.value) : maskCNPJ(e.target.value);
-                                setFormData(prev => {
-                                    const autoSync = (prev.pixKeyType === 'CPF' || prev.pixKeyType === 'CNPJ') && (!prev.pixKey || prev.pixKey === prev.cpf);
-                                    return { 
-                                        ...prev, 
-                                        cpf: val, 
-                                        ...(autoSync ? { pixKey: val, pixKeyType: clientType === 'PF' ? 'CPF' : 'CNPJ' } : {}) 
-                                    };
-                                });
-                            }} 
-                            className="w-full p-2.5 border rounded-lg font-mono text-sm" 
-                        />
-                        <input 
+                        <div>
+                            <input 
+                                required 
+                                placeholder={clientType === 'PF' ? "CPF" : "CNPJ"} 
+                                value={formData.cpf} 
+                                onChange={e => {
+                                    const val = clientType === 'PF' ? maskCPF(e.target.value) : maskCNPJ(e.target.value);
+                                    setFormData(prev => {
+                                        const autoSync = (prev.pixKeyType === 'CPF' || prev.pixKeyType === 'CNPJ') && (!prev.pixKey || prev.pixKey === prev.cpf);
+                                        return { 
+                                            ...prev, 
+                                            cpf: val, 
+                                            ...(autoSync ? { pixKey: val, pixKeyType: clientType === 'PF' ? 'CPF' : 'CNPJ' } : {}) 
+                                        };
+                                    });
+                                }} 
+                                className={`w-full p-2.5 border rounded-lg font-mono text-sm ${duplicateWarning ? 'border-red-400 bg-red-50 focus:ring-red-500' : ''}`} 
+                            />
+                            {duplicateWarning && (
+                                <p className="text-[9px] font-bold text-red-500 mt-1 flex items-center gap-1 animate-in fade-in">
+                                    <AlertCircle size={10} /> {duplicateWarning}
+                                </p>
+                            )}
+                        </div>
+                        <input
                             placeholder={clientType === 'PF' ? "RG (Opcional)" : "Inscrição Estadual (Opcional)"} 
                             value={formData.rg} 
                             onChange={e => {

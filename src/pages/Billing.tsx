@@ -292,6 +292,14 @@ const Billing = () => {
 
   const [exactInterest, setExactInterest] = useState<number | null>(null);
   const [simulation, setSimulation] = useState({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
+  // 🚀 LIMPADOR INTELIGENTE: Blindagem contra vírgulas brasileiras
+  const parseVal = (v: any): number => {
+      if (typeof v === 'number') return isNaN(v) ? 0 : v;
+      if (!v) return 0;
+      if (typeof v === 'string') return parseFloat(v.replace(/\./g, '').replace(',', '.')) || 0;
+      return 0;
+  };
+
   // --- MOTOR DE CÁLCULO TRAVADO E LINEAR ---
   const getSyncedBreakdown = (loan: Loan | null) => {
     if (!loan) return { interest: 0, capital: 0, total: 0 };
@@ -307,35 +315,35 @@ const Billing = () => {
             loan.history.forEach(h => {
                 const hDate = new Date(h.date);
                 if (hDate > cycleStart && !h.note?.includes('[CICLO COMPLETADO]')) {
-                    capitalPaidInThisCycle += (h.capitalPaid || 0);
+                    capitalPaidInThisCycle += parseVal(h.capitalPaid);
                 }
             });
         }
 
-        const principalAtStartOfMonth = (loan.amount - (loan.totalPaidCapital || 0)) + capitalPaidInThisCycle;
-        let periodRate = loan.interestRate / 100;
+        const principalAtStartOfMonth = (parseVal(loan.amount) - parseVal(loan.totalPaidCapital)) + capitalPaidInThisCycle;
+        let periodRate = parseVal(loan.interestRate) / 100;
         if (loan.frequency === 'SEMANAL') periodRate /= 4;
         else if (loan.frequency === 'DIARIO') periodRate /= 30;
 
         const dynamicInterest = principalAtStartOfMonth * periodRate;
         let extraAcordo = 0;
-        if (loan.status === 'Acordo' && (loan.agreementValue || 0) > 0) extraAcordo = loan.agreementValue || 0;
+        if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
         
         return { interest: dynamicInterest + extraAcordo, capital: 0, total: dynamicInterest + extraAcordo };
         
     } else {
-        const totalReceivable = loan.amount + (loan.projectedProfit || 0);
-        const originalInstallments = Math.max(1, Math.round(totalReceivable / loan.installmentValue));
-        const flatInterest = (loan.projectedProfit || 0) / originalInstallments;
-        const flatCapital = loan.installmentValue - flatInterest;
+        const totalReceivable = parseVal(loan.amount) + parseVal(loan.projectedProfit);
+        const originalInstallments = Math.max(1, Math.round(totalReceivable / parseVal(loan.installmentValue)));
+        const flatInterest = parseVal(loan.projectedProfit) / originalInstallments;
+        const flatCapital = parseVal(loan.installmentValue) - flatInterest;
 
         let extraAcordo = 0;
-        if (loan.status === 'Acordo' && (loan.agreementValue || 0) > 0) extraAcordo = loan.agreementValue || 0;
+        if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
 
         return { 
             interest: Math.max(0, flatInterest) + extraAcordo, 
             capital: Math.max(0, flatCapital), 
-            total: loan.installmentValue + extraAcordo
+            total: parseVal(loan.installmentValue) + extraAcordo
         };
     }
   };
@@ -372,30 +380,41 @@ const Billing = () => {
 
   // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS ---
  
-  // FIX: Função para blindar a leitura de datas contra o Fuso Horário do Javascript
+  // 🚀 EXTRAÇÃO DE APELIDO: Limpa o JSON e mostra apenas a observação
+  const getNickname = (obs?: string) => {
+      if (!obs) return '';
+      return obs.replace(/\[META:.*?\]/g, '').trim();
+  };
+
   const parseLocalDate = (dateStr: string) => {
     if (!dateStr) return new Date();
-    const cleanStr = dateStr.split("T")[0];
+    let cleanStr = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+    if (cleanStr.includes('/')) {
+        const [d, m, y] = cleanStr.split('/');
+        return new Date(Number(y), Number(m) - 1, Number(d));
+    }
     const [year, month, day] = cleanStr.split("-").map(Number);
     return new Date(year, month - 1, day);
   };
- 
+
+  // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
     if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
-    if (loan.status === 'Acordo') return 'Acordo';
-    const balance = loan.amount - (loan.totalPaidCapital || 0);
+    if (loan.status === 'Acordo') return 'Acordo'; // 🚨 Acordos não são inadimplentes
+    const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
     if (balance <= 0.10) return 'Quitado'; 
     
     const today = new Date();
     today.setHours(0,0,0,0);
-    const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
-    const dueStr = loan.nextDue.split('T')[0];
+    
+    const dueLocalDate = parseLocalDate(loan.nextDue);
 
-    // FIX: Filtra e ignora "Fatias Fantasmas" (vazias, dia 0 ou valor 0)
-    const validSlices = ((loan as any).multiDates || []).filter((s: any) => s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && Number(s.amount) > 0);
+    const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+    const expectedInstallment = parseVal(loan.installmentValue);
+    const sumSlices = validSlices.reduce((acc: number, s: any) => acc + parseVal(s.amount), 0);
+    const isActuallyMultiDate = validSlices.length > 0 && Math.abs(sumSlices - expectedInstallment) <= 5.00;
 
-    if (validSlices.length > 0) {
-        const dueLocalDate = parseLocalDate(loan.nextDue);
+    if (isActuallyMultiDate) {
         const currentMonth = dueLocalDate.getMonth();
         const currentYear = dueLocalDate.getFullYear();
         let hasLateSlice = false;
@@ -403,11 +422,11 @@ const Billing = () => {
         for (const slice of validSlices) {
             const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
             if (sliceDate < today) {
-                const baseAmount = Number(slice.amount) || 0;
+                const baseAmount = parseVal(slice.amount);
                 const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
                     const hDue = parseLocalDate(h.originalDueDate || h.date);
                     if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                        return acc + h.amount;
+                        return acc + parseVal(h.amount);
                     }
                     return acc;
                 }, 0);
@@ -419,10 +438,11 @@ const Billing = () => {
             }
         }
         if (hasLateSlice) return 'Atrasado';
+        // 🚀 CORREÇÃO PRINCIPAL: Se as fatias passadas estão pagas, está Em Dia. Ignora data base travada no passado.
         return 'Em Dia';
     }
 
-    if (dueStr < todayStr) return 'Atrasado';
+    if (dueLocalDate < today) return 'Atrasado';
     return 'Em Dia';
   };
 
@@ -655,16 +675,15 @@ const Billing = () => {
       if (l.status === 'Pago' || l.status === 'Quitado') return acc;
       const realStatus = getLoanRealStatus(l);
       if (realStatus === 'Atrasado') {
-          // BLINDAGEM PARA O TYPESCRIPT: Força número base
-          const baseVal = l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue || 0);
+          const baseVal = l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : parseVal(l.installmentValue);
           
           const val = calculateOverdueValue(
-              Number(baseVal || 0), 
+              baseVal, 
               l.nextDue, 
               'Atrasado', 
-              Number(l.fineRate || 0), 
-              Number(l.moraInterestRate || 0), 
-              Number(l.amount || 0)
+              parseVal(l.fineRate), 
+              parseVal(l.moraInterestRate), 
+              parseVal(l.amount)
           );
           return acc + val;
       }
@@ -1669,6 +1688,11 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                          <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center text-slate-600 font-black border border-slate-200 group-hover:bg-yellow-50 group-hover:text-yellow-600 group-hover:border-yellow-200 transition-colors">{l.client.charAt(0)}</div>
                                          <div>
                                              <p className="font-bold text-slate-800 text-sm group-hover:text-slate-900">{l.client}</p>
+                                             {getNickname(availableClients.find(c => c.name === l.client)?.observations) && (
+                                                <p className="text-[10px] font-bold text-blue-600 truncate max-w-[150px] mb-0.5">
+                                                  {getNickname(availableClients.find(c => c.name === l.client)?.observations)}
+                                                </p>
+                                             )}
                                              <p className="text-[10px] text-slate-400 font-mono mt-0.5">ID: {l.id}</p>
                                          </div>
                                      </div>
@@ -1775,6 +1799,11 @@ const handleFinalSave = async (e: React.FormEvent) => {
                           <div className="font-bold text-slate-800">
                             {loan.client}
                           </div>
+                          {getNickname(availableClients.find(c => c.name === loan.client)?.observations) && (
+                              <div className="text-[10px] font-bold text-blue-600 truncate max-w-[200px] mb-0.5">
+                                {getNickname(availableClients.find(c => c.name === loan.client)?.observations)}
+                              </div>
+                          )}
                           <div className="text-[10px] font-mono text-slate-400">
                             {loan.id}
                           </div>
@@ -1989,7 +2018,12 @@ const handleFinalSave = async (e: React.FormEvent) => {
                 <>
                     <div className="bg-slate-900 p-6 rounded-2xl shadow-xl text-white relative overflow-hidden">
                         <div className="absolute top-0 right-0 p-4 opacity-10"><FileText size={64} /></div>
-                        <h3 className="text-xl font-black mb-1">{selectedLoan.client}</h3>
+                        <h3 className="text-xl font-black mb-0">{selectedLoan.client}</h3>
+                        {getNickname(availableClients.find(c => c.name === selectedLoan.client)?.observations) && (
+                            <p className="text-xs font-medium text-blue-300 mb-1">
+                                {getNickname(availableClients.find(c => c.name === selectedLoan.client)?.observations)}
+                            </p>
+                        )}
                         <div className="flex gap-4 text-[10px] text-slate-400 font-mono uppercase tracking-widest mt-1"><span>ID: {selectedLoan.id}</span><span>•</span><span>Criado em: {formatDisplayDate(selectedLoan.startDate)}</span></div>
                         
                         <div className="mt-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700 flex gap-4">
@@ -2485,7 +2519,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                         autoComplete="off"
                     />
                     <datalist id="clients-datalist">
-                        {availableClients.map((c) => (<option key={c.id} value={c.name}>{c.name} ({c.cpf})</option>))}
+                        {availableClients.filter(c => c.status !== 'Bloqueado').map((c) => (<option key={c.id} value={c.name}>{c.name} ({c.cpf})</option>))}
                     </datalist>
                 </div>
 
@@ -2498,7 +2532,33 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     </div>
                     <div>
                         <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Banco do Cliente</label>
-                        <input list="bancos-sugestao" value={formData.clientBank} onChange={e => setFormData({...formData, clientBank: e.target.value})} className="w-full p-2 border rounded-lg bg-white" placeholder="Selecione ou digite..."/>
+                        <select 
+                            value={["Itaú", "Bradesco", "Santander", "Nubank", "Inter", "Caixa Econômica", "Banco do Brasil", "C6 Bank", "PagBank", "Mercado Pago", ""].includes(formData.clientBank) ? formData.clientBank : "Outro"} 
+                            onChange={e => setFormData({...formData, clientBank: e.target.value === 'Outro' ? '' : e.target.value})} 
+                            className="w-full p-2 border rounded-lg bg-white text-sm"
+                        >
+                            <option value="">Selecione o Banco...</option>
+                            <option value="Itaú">Itaú</option>
+                            <option value="Bradesco">Bradesco</option>
+                            <option value="Santander">Santander</option>
+                            <option value="Nubank">Nubank</option>
+                            <option value="Inter">Banco Inter</option>
+                            <option value="Caixa Econômica">Caixa Econômica</option>
+                            <option value="Banco do Brasil">Banco do Brasil</option>
+                            <option value="C6 Bank">C6 Bank</option>
+                            <option value="PagBank">PagBank</option>
+                            <option value="Mercado Pago">Mercado Pago</option>
+                            <option value="Outro">Outro banco...</option>
+                        </select>
+                        {(!["Itaú", "Bradesco", "Santander", "Nubank", "Inter", "Caixa Econômica", "Banco do Brasil", "C6 Bank", "PagBank", "Mercado Pago", ""].includes(formData.clientBank) || formData.clientBank === "Outro") && (
+                            <input 
+                                type="text" 
+                                placeholder="Digite o nome do banco" 
+                                value={formData.clientBank} 
+                                onChange={e => setFormData({...formData, clientBank: e.target.value})} 
+                                className="w-full mt-2 p-2 border border-slate-200 rounded-lg bg-white text-sm animate-in fade-in"
+                            />
+                        )}
                     </div>
                 </div>
 

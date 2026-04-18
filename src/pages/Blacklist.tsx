@@ -112,9 +112,16 @@ const Blacklist = () => {
     
     setIsLoading(true);
     try {
+      // 🚨 GARANTIA DE FORMATAÇÃO: Remove caracteres não numéricos antes de salvar
+      const cleanCpf = formData.cpf.replace(/\D/g, '');
+      const formattedCpf = cleanCpf.length > 11 
+          ? cleanCpf.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2}).*/, '$1.$2.$3/$4-$5')
+          : cleanCpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2}).*/, '$1.$2.$3-$4');
+
       if (editingId) {
         const updatedUser: any = {
           ...formData,
+          cpf: formattedCpf,
           riskLevel: formData.riskLevel as any
         };
         await blacklistService.update(editingId, updatedUser);
@@ -122,11 +129,12 @@ const Blacklist = () => {
       } else {
         const newUser: any = {
           ...formData,
+          cpf: formattedCpf,
           riskLevel: formData.riskLevel as any,
           date: new Date().toLocaleDateString('pt-BR')
         };
         await blacklistService.create(newUser);
-        alert(`⛔ BLOQUEIO CONFIRMADO\n\nO documento ${newUser.cpf} foi inserido na base de risco.`);
+        alert(`⛔ BLOQUEIO CONFIRMADO\n\nO documento ${formattedCpf} foi inserido na base de risco e suas operações foram travadas.`);
       }
       setIsModalOpen(false);
       fetchBlacklist();
@@ -279,9 +287,17 @@ const Blacklist = () => {
                 required 
                 type="text" 
                 value={formData.cpf} 
-                onChange={e => setFormData({...formData, cpf: maskCpfCnpj(e.target.value)})} 
+                onChange={e => {
+                    let val = e.target.value.replace(/\D/g, '');
+                    if (val.length <= 11) {
+                        val = val.replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+                    } else {
+                        val = val.replace(/^(\d{2})(\d)/, '$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3').replace(/\.(\d{3})(\d)/, '.$1/$2').replace(/(\d{4})(\d)/, '$1-$2').slice(0, 18);
+                    }
+                    setFormData({...formData, cpf: val});
+                }}
                 className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-500 outline-none font-mono text-lg tracking-wide" 
-                placeholder="000.000.000-00"
+                placeholder="000.000.000-00 ou 00.000.000/0000-00"
                 maxLength={18}
             />
           </div>

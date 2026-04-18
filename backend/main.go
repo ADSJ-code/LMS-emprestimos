@@ -622,6 +622,16 @@ func loansHandler(w http.ResponseWriter, r *http.Request) {
 		var l Loan
 		json.Unmarshal(bodyBytes, &l)
 
+		// 🚨 TRAVA DE SEGURANÇA: Impede contratos para clientes bloqueados (Lista Negra)
+		if l.Client != "" {
+			var client Client
+			err := clientCollection.FindOne(ctx, bson.M{"name": l.Client}).Decode(&client)
+			if err == nil && client.Status == "Bloqueado" {
+				http.Error(w, "Cliente encontra-se bloqueado (Lista Negra). Criação de contrato proibida.", http.StatusForbidden)
+				return
+			}
+		}
+
 		// --- FIX: Trava de Arredondamento para evitar dízimas no banco ---
 		l.InstallmentValue = math.Round(l.InstallmentValue*100) / 100
 		l.Amount = math.Round(l.Amount*100) / 100
@@ -694,6 +704,25 @@ func clientsHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var c Client
 		json.NewDecoder(r.Body).Decode(&c)
+
+		// 🚨 TRAVA DE DUPLICIDADE: Verifica se o CPF/CNPJ já existe
+		if c.CPF != "" {
+			var existingClient Client
+			err := clientCollection.FindOne(ctx, bson.M{"cpf": c.CPF}).Decode(&existingClient)
+			if err == nil {
+				http.Error(w, "Já existe um cliente cadastrado com este CPF/CNPJ.", http.StatusConflict)
+				return
+			}
+
+			// 🚨 TRAVA LISTA NEGRA: Verifica se está banido
+			var blacklisted BlacklistEntry
+			err = blacklistCollection.FindOne(ctx, bson.M{"cpf": c.CPF}).Decode(&blacklisted)
+			if err == nil {
+				http.Error(w, "Este CPF/CNPJ está na Lista Negra. É preciso removê-lo de lá antes de cadastrar.", http.StatusForbidden)
+				return
+			}
+		}
+
 		if c.ID == 0 {
 			c.ID = time.Now().UnixNano() / 1e6
 		}
@@ -715,6 +744,17 @@ func clientUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		var c Client
 		json.NewDecoder(r.Body).Decode(&c)
+
+		// 🚨 TRAVA DE DUPLICIDADE (EDIÇÃO): Verifica se o novo CPF pertence a outro cliente
+		if c.CPF != "" {
+			var existingClient Client
+			err := clientCollection.FindOne(ctx, bson.M{"cpf": c.CPF, "id": bson.M{"$ne": id}}).Decode(&existingClient)
+			if err == nil {
+				http.Error(w, "Já existe OUTRO cliente cadastrado com este CPF/CNPJ.", http.StatusConflict)
+				return
+			}
+		}
+
 		clientCollection.ReplaceOne(ctx, bson.M{"id": id}, c)
 		json.NewEncoder(w).Encode(c)
 	case http.MethodDelete:
@@ -767,6 +807,25 @@ func blacklistHandler(w http.ResponseWriter, r *http.Request) {
 			res = []BlacklistEntry{}
 		}
 		json.NewEncoder(w).Encode(res)
+	case http.MethodPost:
+		var entry BlacklistEntry
+		json.NewDecoder(r.Body).Decode(&entry)
+
+		entry.ID = primitive.NewObjectID().Hex()
+		if entry.Date == "" {
+			entry.Date = time.Now().Format("2006-01-02")
+		}
+
+		// Insere na lista negra
+		blacklistCollection.InsertOne(ctx, entry)
+
+		// Bloqueia o cliente na coleção principal, impedindo que atue
+		if entry.CPF != "" {
+			clientCollection.UpdateOne(ctx, bson.M{"cpf": entry.CPF}, bson.M{"$set": bson.M{"status": "Bloqueado"}})
+		}
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(entry)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -778,6 +837,16 @@ func blacklistUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	switch r.Method {
 	case http.MethodDelete:
+		// 1. Busca quem é o cliente para pegar o CPF
+		var entry BlacklistEntry
+		err := blacklistCollection.FindOne(ctx, bson.M{"id": id}).Decode(&entry)
+
+		// 2. Se achar, destranca o cliente na coleção principal
+		if err == nil && entry.CPF != "" {
+			clientCollection.UpdateOne(ctx, bson.M{"cpf": entry.CPF}, bson.M{"$set": bson.M{"status": "Ativo"}})
+		}
+
+		// 3. Remove da lista negra
 		blacklistCollection.DeleteOne(ctx, bson.M{"id": id})
 		w.WriteHeader(http.StatusNoContent)
 	default:

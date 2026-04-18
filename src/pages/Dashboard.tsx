@@ -13,6 +13,12 @@ import { loanService, clientService, settingsService, Loan, Client } from '../se
 const Dashboard = () => {
   const navigate = useNavigate();
   
+  // 🚀 EXTRAÇÃO DE APELIDO: Limpa o JSON e mostra apenas a observação
+  const getNickname = (obs?: string) => {
+      if (!obs) return '';
+      return obs.replace(/\[META:.*?\]/g, '').trim();
+  };
+  
   // --- ESTADOS DE FILTRO E VISÃO ---
   const [period, setPeriod] = useState<'hoje' | 'semana' | 'mes' | 'proximo_mes' | 'personalizado' | 'todos'>('todos');
   const [customStart, setCustomStart] = useState('');
@@ -67,6 +73,14 @@ const Dashboard = () => {
       return new Date(ty, tm - 1, td);
   };
 
+  // 🚀 LIMPADOR INTELIGENTE: Blindagem contra vírgulas brasileiras
+  const parseVal = (v: any): number => {
+      if (typeof v === 'number') return isNaN(v) ? 0 : v;
+      if (!v) return 0;
+      if (typeof v === 'string') return parseFloat(v.replace(/\./g, '').replace(',', '.')) || 0;
+      return 0;
+  };
+
   // --- NOVO MOTOR DE CÁLCULO C/ JUROS SIMPLES ---
   const getSyncedBreakdown = (loan: Loan | null) => {
       if (!loan) return { interest: 0, capital: 0, total: 0 };
@@ -82,43 +96,54 @@ const Dashboard = () => {
               loan.history.forEach(h => {
                   const hDate = new Date(h.date);
                   if (hDate > cycleStart && !h.note?.includes('[CICLO COMPLETADO]')) {
-                      capitalPaidInThisCycle += (h.capitalPaid || 0);
+                      capitalPaidInThisCycle += parseVal(h.capitalPaid);
                   }
               });
           }
 
-          const principalAtStartOfMonth = (loan.amount - (loan.totalPaidCapital || 0)) + capitalPaidInThisCycle;
-          let periodRate = loan.interestRate / 100;
+          const principalAtStartOfMonth = (parseVal(loan.amount) - parseVal(loan.totalPaidCapital)) + capitalPaidInThisCycle;
+          let periodRate = parseVal(loan.interestRate) / 100;
           if (loan.frequency === 'SEMANAL') periodRate /= 4;
           else if (loan.frequency === 'DIARIO') periodRate /= 30;
 
           const dynamicInterest = principalAtStartOfMonth * periodRate;
           let extraAcordo = 0;
-          if (loan.status === 'Acordo' && (loan.agreementValue || 0) > 0) extraAcordo = loan.agreementValue || 0;
+          if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
           
           return { interest: dynamicInterest + extraAcordo, capital: 0, total: dynamicInterest + extraAcordo };
           
       } else {
-          const totalReceivable = loan.amount + (loan.projectedProfit || 0);
-          const originalInstallments = Math.max(1, Math.round(totalReceivable / loan.installmentValue));
-          const flatInterest = (loan.projectedProfit || 0) / originalInstallments;
-          const flatCapital = loan.installmentValue - flatInterest;
+          const totalReceivable = parseVal(loan.amount) + parseVal(loan.projectedProfit);
+          const originalInstallments = Math.max(1, Math.round(totalReceivable / parseVal(loan.installmentValue)));
+          const flatInterest = parseVal(loan.projectedProfit) / originalInstallments;
+          const flatCapital = parseVal(loan.installmentValue) - flatInterest;
 
           let extraAcordo = 0;
-          if (loan.status === 'Acordo' && (loan.agreementValue || 0) > 0) extraAcordo = loan.agreementValue || 0;
+          if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
 
           return { 
               interest: Math.max(0, flatInterest) + extraAcordo, 
               capital: Math.max(0, flatCapital), 
-              total: loan.installmentValue + extraAcordo
+              total: parseVal(loan.installmentValue) + extraAcordo
           };
       }
+  };
+
+  const parseLocalDate = (dateStr: string) => {
+    if (!dateStr) return new Date();
+    let cleanStr = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+    if (cleanStr.includes('/')) {
+        const [d, m, y] = cleanStr.split('/');
+        return new Date(Number(y), Number(m) - 1, Number(d));
+    }
+    const [year, month, day] = cleanStr.split("-").map(Number);
+    return new Date(year, month - 1, day);
   };
 
   const getLoanRealStatus = (loan: Loan) => {
       if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
       if (loan.status === 'Acordo') return 'Acordo';
-      const balance = Number(loan.amount) - (Number(loan.totalPaidCapital) || 0);
+      const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
       if (balance <= 0.10) return 'Quitado'; 
       
       const today = new Date();
@@ -126,21 +151,26 @@ const Dashboard = () => {
       const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
       const dueStr = loan.nextDue.split('T')[0];
 
-      // INTEGRAÇÃO DAS FATIAS NA VERIFICAÇÃO GERAL DE STATUS DO DASHBOARD
-      const slices = (loan as any).multiDates || [];
-      if (slices.length > 0) {
-          const currentMonth = new Date(loan.nextDue).getMonth();
-          const currentYear = new Date(loan.nextDue).getFullYear();
+      const dueLocalDate = parseLocalDate(loan.nextDue);
+
+      const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+      const expectedInstallment = parseVal(loan.installmentValue);
+      const sumSlices = validSlices.reduce((acc: number, s: any) => acc + parseVal(s.amount), 0);
+      const isActuallyMultiDate = validSlices.length > 0 && Math.abs(sumSlices - expectedInstallment) <= 5.00;
+
+      if (isActuallyMultiDate) {
+          const currentMonth = dueLocalDate.getMonth();
+          const currentYear = dueLocalDate.getFullYear();
           let hasLateSlice = false;
 
-          for (const slice of slices) {
+          for (const slice of validSlices) {
               const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
               if (sliceDate < today) {
-                  const baseAmount = Number(slice.amount) || 0;
+                  const baseAmount = parseVal(slice.amount);
                   const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
-                      const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                      const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
                       if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                          return acc + h.amount;
+                          return acc + parseVal(h.amount);
                       }
                       return acc;
                   }, 0);
@@ -152,18 +182,12 @@ const Dashboard = () => {
               }
           }
           if (hasLateSlice) return 'Atrasado';
+          // 🚀 CORREÇÃO: Se nenhuma fatia falhou, o contrato está Em Dia (ignora a data base travada)
           return 'Em Dia';
       }
 
-      if (dueStr < todayStr) return 'Atrasado';
+      if (dueLocalDate < today) return 'Atrasado';
       return 'Em Dia';
-  };
-
-  const parseLocalDate = (dateStr: string) => {
-    if (!dateStr) return new Date();
-    const cleanStr = dateStr.split('T')[0];
-    const [year, month, day] = cleanStr.split('-').map(Number);
-    return new Date(year, month - 1, day);
   };
 
   const getLoanDetails = (loan: Loan) => {
@@ -176,22 +200,25 @@ const Dashboard = () => {
       const realStatus = getLoanRealStatus(loan);
       const breakdown = getSyncedBreakdown(loan);
       
-      // MOTOR DA BOLA DE NEVE PARA FATIAS
-      const slices = (loan as any).multiDates || [];
-      if (slices.length > 0) {
+      const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+      const expectedInstallment = parseVal(loan.installmentValue);
+      const sumSlices = validSlices.reduce((acc: number, s: any) => acc + parseVal(s.amount), 0);
+      const isActuallyMultiDate = validSlices.length > 0 && Math.abs(sumSlices - expectedInstallment) <= 5.00;
+
+      if (isActuallyMultiDate) {
           const currentMonth = tempDue.getMonth();
           const currentYear = tempDue.getFullYear();
           const todayDate = new Date();
           todayDate.setHours(0,0,0,0);
           
-          for (const slice of slices) {
-              const baseAmount = Number(slice.amount) || 0;
+          for (const slice of validSlices) {
+              const baseAmount = parseVal(slice.amount);
               const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
               
               const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
-                  const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                  const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
                   if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                      return acc + h.amount;
+                      return acc + parseVal(h.amount);
                   }
                   return acc;
               }, 0);
@@ -200,7 +227,8 @@ const Dashboard = () => {
               
               if (!isPaid && sliceDate < todayDate && loan.status !== 'Pago' && loan.status !== 'Quitado') {
                   const ratio = baseAmount / (breakdown.total || 1);
-                  const sliceOverdue = calculateOverdueValue(baseAmount, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), Number(loan.amount) * ratio);
+                  const sliceDateStr = sliceDate.toISOString().split('T')[0];
+                  const sliceOverdue = calculateOverdueValue(baseAmount, sliceDateStr, 'Atrasado', parseVal(loan.fineRate) || 0, parseVal(loan.moraInterestRate) || 0, parseVal(loan.amount) * ratio);
                   totalOverdue += (sliceOverdue - slicePaidAmount);
                   missedCount++;
               }
@@ -208,14 +236,14 @@ const Dashboard = () => {
           return { totalOverdue, missedCount };
       }
 
-      const baseAmount = loan.interestType === 'SIMPLE' ? breakdown.total : (realStatus === 'Acordo' ? Number(loan.installmentValue) + Number(loan.agreementValue || 0) : Number(loan.installmentValue));
+      const baseAmount = loan.interestType === 'SIMPLE' ? breakdown.total : (realStatus === 'Acordo' ? parseVal(loan.installmentValue) + parseVal(loan.agreementValue) : parseVal(loan.installmentValue));
       
-      const remainingInstallments = loan.interestType === 'SIMPLE' ? 1 : (loan.installments || 1);
+      const remainingInstallments = loan.interestType === 'SIMPLE' ? 1 : (parseVal(loan.installments) || 1);
       const pad = (n: number) => n.toString().padStart(2, '0');
       
       while (tempDue < today) {
           const dateStr = `${tempDue.getFullYear()}-${pad(tempDue.getMonth() + 1)}-${pad(tempDue.getDate())}`;
-          totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), Number(loan.amount || 0));
+          totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', parseVal(loan.fineRate) || 0, parseVal(loan.moraInterestRate) || 0, parseVal(loan.amount));
           missedCount++;
           
           if (realStatus === 'Acordo') break; 
@@ -230,8 +258,8 @@ const Dashboard = () => {
       }
 
       if (missedCount === 0 && realStatus === 'Atrasado') {
-           const dateStr = loan.nextDue.split('T')[0];
-           totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+           const dateStr = loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
+           totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', parseVal(loan.fineRate) || 2, parseVal(loan.moraInterestRate) || 1, parseVal(loan.amount));
            missedCount = 1;
       }
 
@@ -347,18 +375,18 @@ const Dashboard = () => {
                 });
             } else {
                 // --- MÁGICA DA SINCRONIA GLOBAL (PRODUÇÃO) ---
-                // FIX: O saldo global devedor de capital precisa subtrair exatamente o que o cliente já pagou
-                let gCap = (loan.interestType === 'SIMPLE') ? Math.max(0, Number(loan.amount) - (Number(loan.totalPaidCapital) || 0)) : Math.max(0, Number(loan.amount) - (Number(loan.totalPaidCapital) || 0));
+                let gCap = Math.max(0, parseVal(loan.amount) - parseVal(loan.totalPaidCapital));
+                const gExpected = parseVal(loan.projectedProfit) || Math.max(0, (parseVal(loan.installmentValue) * parseVal(loan.installments)) - parseVal(loan.amount));
                 
-                const gExpected = Number(loan.projectedProfit) || Math.max(0, (loan.installmentValue * loan.installments) - loan.amount);
-                
-                // No lucro global, a produção soma o lucro restante de Price + o juro atual de Simple
-                let gProf = (loan.interestType === 'SIMPLE') ? breakdown.interest : Math.max(0, gExpected - (Number(loan.totalPaidInterest) || 0));
+                let gProf = (loan.interestType === 'SIMPLE') ? breakdown.interest : Math.max(0, gExpected - parseVal(loan.totalPaidInterest));
                 capAcc.all += gCap; capAcc[tier] += gCap;
                 profAcc.all += gProf; profAcc[tier] += gProf;
                 
-                // Agora o Card soma a dívida inteira da Bola de Neve (Igual a tabela de baixo)
-                overAcc.all += totalOverdue; overAcc[tier] += totalOverdue;
+                // 🚨 SOMA CORRETA DA INADIMPLÊNCIA: Só soma se o status for realmente 'Atrasado'
+                if (realStatus === 'Atrasado') {
+                    overAcc.all += totalOverdue; overAcc[tier] += totalOverdue;
+                }
+
                 filteredContext.push({ 
                     ...loan, uniqueSliceId: loan.id, projectedDate: loan.nextDue,
                     projectedCapitalForPeriod: gCap, projectedInterestForPeriod: gProf
@@ -475,13 +503,14 @@ const Dashboard = () => {
           const contextIds = new Set(filteredLoansContext.map(l => l.id));
           return allLoans.filter(l => {
               const realStatus = getLoanRealStatus(l);
-              const dueDate = parseLocalDate(l.nextDue);
-              const isOverdue = realStatus !== 'Quitado' && (dueDate < today || realStatus === 'Atrasado');
+              
+              // 🚨 RODRIGO PONTO 2: Apenas 'Atrasado' entra na lista (Acordos ficam de fora)
+              const isOverdue = realStatus === 'Atrasado';
               
               let passTier = true;
-              if (tierFilters.overdue === 'low') passTier = l.interestRate < 10;
-              if (tierFilters.overdue === 'mid') passTier = l.interestRate >= 10 && l.interestRate <= 15;
-              if (tierFilters.overdue === 'high') passTier = l.interestRate > 15;
+              if (tierFilters.overdue === 'low') passTier = parseVal(l.interestRate) < 10;
+              if (tierFilters.overdue === 'mid') passTier = parseVal(l.interestRate) >= 10 && parseVal(l.interestRate) <= 15;
+              if (tierFilters.overdue === 'high') passTier = parseVal(l.interestRate) > 15;
 
               return isOverdue && contextIds.has(l.id) && passTier;
           }).sort((a, b) => a.client.localeCompare(b.client));
@@ -595,7 +624,12 @@ const Dashboard = () => {
                                          <div className="w-12 h-12 rounded-full bg-slate-50 flex items-center justify-center text-slate-600 font-black border border-slate-100 group-hover:bg-yellow-50 group-hover:text-yellow-600 group-hover:border-yellow-200 transition-colors text-lg">{l.client.charAt(0)}</div>
                                          <div>
                                              <p className="font-bold text-slate-800 group-hover:text-slate-900 leading-tight">{l.client}</p>
-                                             <p className="text-[10px] text-slate-400 font-mono mt-1">ID: {l.id}</p>
+                                             {getNickname(allClients.find(c => c.name === l.client)?.observations) && (
+                                                <p className="text-[10px] font-bold text-blue-600 truncate max-w-[150px] mt-0.5">
+                                                    {getNickname(allClients.find(c => c.name === l.client)?.observations)}
+                                                </p>
+                                             )}
+                                             <p className="text-[10px] text-slate-400 font-mono mt-0.5">ID: {l.id}</p>
                                          </div>
                                      </div>
                                      <div className="text-right">
@@ -660,7 +694,12 @@ const Dashboard = () => {
                                          <div className="w-12 h-12 rounded-full bg-slate-50 flex items-center justify-center text-slate-600 font-black border border-slate-100 group-hover:bg-orange-50 group-hover:text-orange-600 group-hover:border-orange-200 transition-colors text-lg">{l.client.charAt(0)}</div>
                                          <div>
                                              <p className="font-bold text-slate-800 group-hover:text-slate-900 leading-tight">{l.client}</p>
-                                             <p className="text-[10px] text-slate-400 font-mono mt-1">ID: {l.id}</p>
+                                             {getNickname(allClients.find(c => c.name === l.client)?.observations) && (
+                                                <p className="text-[10px] font-bold text-blue-600 truncate max-w-[150px] mt-0.5">
+                                                    {getNickname(allClients.find(c => c.name === l.client)?.observations)}
+                                                </p>
+                                             )}
+                                             <p className="text-[10px] text-slate-400 font-mono mt-0.5">ID: {l.id}</p>
                                          </div>
                                      </div>
                                      <div className="text-right">
@@ -723,8 +762,15 @@ const Dashboard = () => {
                           <tbody className="divide-y divide-slate-50">
                               {activeContractsByClient.map(c => (
                                   <tr key={c.name} className="hover:bg-blue-50 transition-colors cursor-pointer" onClick={() => goToBillingWithSearch(c.name)}>
-                                      <td className="p-4 font-bold text-slate-800">{c.name}</td>
-                                      <td className="p-4 text-center">
+                                          <td className="p-4">
+                                              <div className="font-bold text-slate-800">{c.name}</div>
+                                              {getNickname(allClients.find(client => client.name === c.name)?.observations) && (
+                                                  <div className="text-[10px] font-bold text-blue-600 truncate max-w-[250px] mt-0.5">
+                                                      {getNickname(allClients.find(client => client.name === c.name)?.observations)}
+                                                  </div>
+                                              )}
+                                          </td>
+                                          <td className="p-4 text-center">
                                           <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold">{c.contracts.length} ativos</span>
                                       </td>
                                       <td className="p-4 text-center text-[10px] text-slate-400 font-mono tracking-widest">
@@ -761,8 +807,13 @@ const Dashboard = () => {
                                   
                                   return (
                                       <tr key={loan.uniqueSliceId || loan.id} className="hover:bg-blue-50 transition-colors cursor-pointer" onClick={() => goToBillingWithSearch(loan.client)}>
-                                          <td className="p-4 font-bold text-slate-800">
-                                              {loan.client}
+                                          <td className="p-4">
+                                              <div className="font-bold text-slate-800">{loan.client}</div>
+                                              {getNickname(allClients.find(c => c.name === loan.client)?.observations) && (
+                                                  <div className="text-[10px] font-bold text-blue-600 truncate max-w-[250px] my-0.5">
+                                                      {getNickname(allClients.find(c => c.name === loan.client)?.observations)}
+                                                  </div>
+                                              )}
                                               <div className="text-[10px] font-mono text-slate-400 font-normal">{loan.id}</div>
                                           </td>
                                           
