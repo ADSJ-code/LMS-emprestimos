@@ -486,6 +486,7 @@ const Overdue = () => {
     setMetrics({ totalOverdue: sumOverdue, recoveredToday: sumRecoveredToday, recoveredCapital: sumRecoveredCapital, recoveredInterest: sumRecoveredInterest, efficiency: eff, count: overdueCount });
   }, [loans]);
 
+  // 🚀 BUSCA INTELIGENTE DO RODRIGO: Prefixo primeiro, alfabético depois.
   const filteredOverdueWithSnowball = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -510,7 +511,34 @@ const Overdue = () => {
       }
     });
 
-    return overdueList.filter((l) => (l.client || "").toLowerCase().includes(searchTerm.toLowerCase()));
+    const searchLower = searchTerm.toLowerCase();
+    
+    // 1. Filtra a lista
+    const filteredList = overdueList.filter((l) => 
+        (l.client || "").toLowerCase().includes(searchLower) ||
+        (l.id || "").toLowerCase().includes(searchLower)
+    );
+
+    // 2. Ordena de forma inteligente
+    return filteredList.sort((a, b) => {
+        if (!searchTerm) {
+             // Sem busca: Ordena pelo maior valor da dívida (Bola de Neve) para chamar mais a atenção!
+             return b.snowball.totalUpdated - a.snowball.totalUpdated;
+        }
+
+        const aClient = (a.client || "").toLowerCase();
+        const bClient = (b.client || "").toLowerCase();
+        
+        const aStarts = aClient.startsWith(searchLower);
+        const bStarts = bClient.startsWith(searchLower);
+        
+        // Coloca quem COMEÇA com a letra no topo
+        if (aStarts && !bStarts) return -1;
+        if (!aStarts && bStarts) return 1;
+        
+        // Desempate: Ordem Alfabética normal
+        return aClient.localeCompare(bClient);
+    });
   }, [loans, searchTerm]);
 
   const openDetails = (loan: any) => {

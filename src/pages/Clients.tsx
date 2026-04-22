@@ -262,13 +262,43 @@ const Clients = () => {
     return { label: 'Quitado', color: 'green' };
   };
 
+  // 🚀 BUSCA INTELIGENTE DO RODRIGO: Prefixo primeiro, alfabético depois.
   const filteredClients = useMemo(() => {
-    return processedClients.filter(c => 
-      c.status !== 'Bloqueado' && // 🚫 ESCONDE A LISTA NEGRA
-      (c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      c.cpf.includes(searchTerm) ||
-      c.displayNumber.toString().includes(searchTerm))
-    );
+    // 1. Filtra a base (esconde lista negra e aplica a busca)
+    let result = processedClients.filter(c => {
+      if (c.status === 'Bloqueado') return false; // 🚫 ESCONDE A LISTA NEGRA
+      
+      const searchLower = searchTerm.toLowerCase();
+      const searchNumbers = searchTerm.replace(/\D/g, '');
+      
+      return (
+        (c.name || '').toLowerCase().includes(searchLower) || 
+        (searchNumbers && (c.cpf || '').replace(/\D/g, '').includes(searchNumbers)) ||
+        (c.displayNumber && c.displayNumber.toString() === searchNumbers)
+      );
+    });
+
+    // 2. Ordenação Inteligente
+    result.sort((a, b) => {
+      // Se não tem busca, mantém a ordem de criação mais recente
+      if (!searchTerm) return Number(b.id) - Number(a.id);
+      
+      const searchLower = searchTerm.toLowerCase();
+      const aName = (a.name || '').toLowerCase();
+      const bName = (b.name || '').toLowerCase();
+      
+      const aStarts = aName.startsWith(searchLower);
+      const bStarts = bName.startsWith(searchLower);
+      
+      // Coloca quem COMEÇA com a letra no topo
+      if (aStarts && !bStarts) return -1;
+      if (!aStarts && bStarts) return 1;
+      
+      // Desempate: Ordem Alfabética normal
+      return aName.localeCompare(bName);
+    });
+
+    return result;
   }, [processedClients, searchTerm]);
 
   // SISTEMA DE DESEMPACOTAMENTO DE DADOS (IMPEDE A PERDA DO PIX E DADOS ANTIGOS)

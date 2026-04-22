@@ -155,6 +155,9 @@ const Billing = () => {
   const [payTotal, setPayTotal] = useState(0); 
   const [settleInterest, setSettleInterest] = useState(false);
   const [cycleAcc, setCycleAcc] = useState({ interest: 0, capital: 0 }); 
+  
+  // 🚀 NOVO ESTADO: Controlo manual para avanço do mês
+  const [forceAdvanceMonth, setForceAdvanceMonth] = useState(false);
 
   const [agreementDate, setAgreementDate] = useState('');
   const [agreementValue, setAgreementValue] = useState('');
@@ -815,9 +818,12 @@ const Billing = () => {
       setSelectedIds([]);
   }, [searchTerm, statusFilter, filterStart, filterEnd, sortOrder]);
   
+  // 🚀 BUSCA INTELIGENTE DO RODRIGO: Prefixo primeiro, alfabético depois (mantendo os filtros de data/status)
   const filteredLoans = useMemo(() => {
+      const searchLower = searchTerm.toLowerCase();
+      
       const filtered = loans.filter(l => {
-        const matchesSearch = (l.client || '').toLowerCase().includes(searchTerm.toLowerCase()) || (l.id || '').toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesSearch = (l.client || '').toLowerCase().includes(searchLower) || (l.id || '').toLowerCase().includes(searchLower);
         const realStatus = getLoanRealStatus(l);
         let matchesStatus = true;
         if (statusFilter !== 'Todos') {
@@ -842,8 +848,20 @@ const Billing = () => {
         return matchesSearch && matchesStatus && matchesDate;
       });
 
-      // NOVO: Motor de Ordenação de Data de Criação
       return filtered.sort((a, b) => {
+          // 1. Se HOUVER busca por texto, aplica a inteligência do Rodrigo (Prefixo > Alfabético)
+          if (searchTerm) {
+              const aClient = (a.client || '').toLowerCase();
+              const bClient = (b.client || '').toLowerCase();
+              const aStarts = aClient.startsWith(searchLower);
+              const bStarts = bClient.startsWith(searchLower);
+              
+              if (aStarts && !bStarts) return -1;
+              if (!aStarts && bStarts) return 1;
+              return aClient.localeCompare(bClient);
+          }
+          
+          // 2. Se NÃO houver busca por texto, mantém a ordem por data padrão
           const timeA = (a.history && a.history.length > 0 && a.history[0].registeredAt) ? new Date(a.history[0].registeredAt).getTime() : new Date(a.startDate).getTime();
           const timeB = (b.history && b.history.length > 0 && b.history[0].registeredAt) ? new Date(b.history[0].registeredAt).getTime() : new Date(b.startDate).getTime();
           
@@ -993,6 +1011,9 @@ const Billing = () => {
     }
     setCycleAcc({ interest: accInt, capital: accCap });
     
+    // 🚀 RESETAR CHECKBOX
+    setForceAdvanceMonth(false);
+
     setIsDetailsOpen(false);
     setIsCollectionModalOpen(false);
     setIsPaymentModalOpen(true);
@@ -1045,8 +1066,23 @@ const Billing = () => {
         delete (window as any).lastSelectedDay;
     }
 
-    // CORREÇÃO: O avanço do mês AGORA DEPENDE EXCLUSIVAMENTE DO VALOR.
-    let shouldAdvanceMonth = totalAccumulatedInCycle >= (totalRequiredInCycle - 1.0);
+    // 🚀 LÓGICA INTELIGENTE DE AVANÇO DE MÊS + CAIXA DE SELEÇÃO MANUAL
+    // 1. Se o Rodrigo marcar a caixa, avança sempre (sobrescreve a lógica matemática)
+    // 2. Se for contrato "Só Juros" (SIMPLE), basta pagar os juros do mês para o ciclo fechar
+    // 3. Se for contrato normal, tem de pagar o valor total da parcela exigida no ciclo
+    let shouldAdvanceMonth = false;
+    
+    if (forceAdvanceMonth) {
+        shouldAdvanceMonth = true;
+        noteText += " [AVANÇO MANUAL]";
+    } else if (isSimple) {
+        // Num contrato SIMPLE, pagar os juros do mês é suficiente para renovar o ciclo
+        const accumulatedInterest = valInterest + cycleAcc.interest;
+        shouldAdvanceMonth = accumulatedInterest >= (expectedInterest - 1.0);
+    } else {
+        // Num contrato PRICE, tem de pagar o valor total da parcela
+        shouldAdvanceMonth = totalAccumulatedInCycle >= (totalRequiredInCycle - 1.0);
+    }
 
     if (balance <= 0.10) {
         updatedLoan.status = 'Quitado';
@@ -2358,6 +2394,20 @@ const handleFinalSave = async (e: React.FormEvent) => {
             <div className="bg-slate-100 border border-slate-200 p-4 rounded-xl flex justify-between items-center shadow-inner">
                 <span className="text-xs font-bold text-slate-500 uppercase">Total Selecionado:</span>
                 <span className="text-xl font-black text-slate-900">R$ {formatMoney(Number(payCapital) + Number(payInterest))}</span>
+            </div>
+
+            {/* 🚀 CHECKBOX PARA AVANÇAR O MÊS MANUALMENTE */}
+            <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl">
+                <input 
+                    type="checkbox" 
+                    id="forceAdvanceMonth" 
+                    checked={forceAdvanceMonth} 
+                    onChange={(e) => setForceAdvanceMonth(e.target.checked)} 
+                    className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 cursor-pointer" 
+                />
+                <label htmlFor="forceAdvanceMonth" className="text-sm font-bold text-blue-800 cursor-pointer leading-tight">
+                    Forçar conclusão deste ciclo e avançar data para o próximo vencimento.
+                </label>
             </div>
 
             <button onClick={confirmPayment} className="w-full py-4 bg-green-600 text-white rounded-2xl font-black hover:bg-green-700 transition-all shadow-xl shadow-green-900/20 flex items-center justify-center gap-2 text-sm uppercase tracking-wide">

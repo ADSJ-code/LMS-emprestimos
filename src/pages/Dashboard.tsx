@@ -497,14 +497,13 @@ const Dashboard = () => {
 
   const detailedLoans = useMemo(() => {
       if (!selectedRange || selectedRange === 'clients_contracts') return [];
-      const today = getToday();
+
+      let baseList = [];
 
       if (selectedRange === 'overdue') {
           const contextIds = new Set(filteredLoansContext.map(l => l.id));
-          return allLoans.filter(l => {
+          baseList = allLoans.filter(l => {
               const realStatus = getLoanRealStatus(l);
-              
-              // 🚨 RODRIGO PONTO 2: Apenas 'Atrasado' entra na lista (Acordos ficam de fora)
               const isOverdue = realStatus === 'Atrasado';
               
               let passTier = true;
@@ -513,35 +512,64 @@ const Dashboard = () => {
               if (tierFilters.overdue === 'high') passTier = parseVal(l.interestRate) > 15;
 
               return isOverdue && contextIds.has(l.id) && passTier;
-          }).sort((a, b) => a.client.localeCompare(b.client));
+          });
+      } else {
+          baseList = filteredLoansContext.filter(l => {
+              const realStatus = getLoanRealStatus(l);
+              if (selectedRange === 'active') return realStatus !== 'Quitado';
+              if (realStatus === 'Quitado') return false; 
+              
+              let passTier = true;
+              if (selectedRange === 'capital' && tierFilters.capital !== 'all') {
+                  if (tierFilters.capital === 'low') passTier = parseVal(l.interestRate) < 10;
+                  if (tierFilters.capital === 'mid') passTier = parseVal(l.interestRate) >= 10 && parseVal(l.interestRate) <= 15;
+                  if (tierFilters.capital === 'high') passTier = parseVal(l.interestRate) > 15;
+              }
+              if (selectedRange === 'profit' && tierFilters.profit !== 'all') {
+                  if (tierFilters.profit === 'low') passTier = parseVal(l.interestRate) < 10;
+                  if (tierFilters.profit === 'mid') passTier = parseVal(l.interestRate) >= 10 && parseVal(l.interestRate) <= 15;
+                  if (tierFilters.profit === 'high') passTier = parseVal(l.interestRate) > 15;
+              }
+              
+              if (!passTier) return false;
+
+              if (selectedRange === 'capital' || selectedRange === 'profit') return true; 
+              if (selectedRange === 'low') return parseVal(l.interestRate) < 10;
+              if (selectedRange === 'mid') return parseVal(l.interestRate) >= 10 && parseVal(l.interestRate) <= 15;
+              if (selectedRange === 'high') return parseVal(l.interestRate) > 15;
+              return false;
+          });
       }
 
-      return filteredLoansContext.filter(l => {
-          const realStatus = getLoanRealStatus(l);
-          if (selectedRange === 'active') return realStatus !== 'Quitado';
-          if (realStatus === 'Quitado') return false; 
+      // 🚀 APLICA A BUSCA SE EXISTIR
+      if (searchTerm) {
+          const searchLower = searchTerm.toLowerCase();
+          const searchNumbers = searchTerm.replace(/\D/g, '');
           
-          let passTier = true;
-          if (selectedRange === 'capital' && tierFilters.capital !== 'all') {
-              if (tierFilters.capital === 'low') passTier = l.interestRate < 10;
-              if (tierFilters.capital === 'mid') passTier = l.interestRate >= 10 && l.interestRate <= 15;
-              if (tierFilters.capital === 'high') passTier = l.interestRate > 15;
-          }
-          if (selectedRange === 'profit' && tierFilters.profit !== 'all') {
-              if (tierFilters.profit === 'low') passTier = l.interestRate < 10;
-              if (tierFilters.profit === 'mid') passTier = l.interestRate >= 10 && l.interestRate <= 15;
-              if (tierFilters.profit === 'high') passTier = l.interestRate > 15;
-          }
-          
-          if (!passTier) return false;
+          baseList = baseList.filter(l => 
+              (l.client || '').toLowerCase().includes(searchLower) ||
+              (l.id || '').toLowerCase().includes(searchLower) ||
+              (searchNumbers && (allClients.find(c => c.name === l.client)?.cpf || '').replace(/\D/g, '').includes(searchNumbers))
+          );
+      }
 
-          if (selectedRange === 'capital' || selectedRange === 'profit') return true; 
-          if (selectedRange === 'low') return l.interestRate < 10;
-          if (selectedRange === 'mid') return l.interestRate >= 10 && l.interestRate <= 15;
-          if (selectedRange === 'high') return l.interestRate > 15;
-          return false;
-      }).sort((a, b) => a.client.localeCompare(b.client));
-  }, [filteredLoansContext, allLoans, selectedRange, tierFilters]);
+      // 🚀 ORDENAÇÃO INTELIGENTE DO RODRIGO (Prefixo primeiro, Alfabético depois)
+      return baseList.sort((a, b) => {
+          if (!searchTerm) return a.client.localeCompare(b.client);
+          
+          const searchLower = searchTerm.toLowerCase();
+          const aClient = (a.client || '').toLowerCase();
+          const bClient = (b.client || '').toLowerCase();
+          
+          const aStarts = aClient.startsWith(searchLower);
+          const bStarts = bClient.startsWith(searchLower);
+          
+          if (aStarts && !bStarts) return -1;
+          if (!aStarts && bStarts) return 1;
+          return aClient.localeCompare(bClient);
+      });
+
+  }, [filteredLoansContext, allLoans, allClients, selectedRange, tierFilters, searchTerm]);
 
   const activeContractsByClient = useMemo(() => {
       if (selectedRange !== 'clients_contracts') return [];
@@ -564,17 +592,33 @@ const Dashboard = () => {
       if (!searchTerm) return result.sort((a, b) => a.name.localeCompare(b.name));
 
       const term = searchTerm.toLowerCase();
-      return result.filter(c => {
+      const buscaCpf = term.replace(/\D/g, '');
+
+      // 1. Filtra
+      const filteredResult = result.filter(c => {
           const clientInfo = allClients.find(cli => cli.name === c.name);
           const cpfLimpo = clientInfo?.cpf ? clientInfo.cpf.replace(/\D/g, '') : '';
-          const buscaCpf = term.replace(/\D/g, '');
 
           const matchNome = c.name.toLowerCase().includes(term);
           const matchCpf = buscaCpf && cpfLimpo.includes(buscaCpf);
-          const matchContrato = c.contracts.some((cnt: any) => cnt.id.toString().includes(term));
+          const matchContrato = c.contracts.some((cnt: any) => cnt.id.toString().toLowerCase().includes(term));
 
           return matchNome || matchCpf || matchContrato;
-      }).sort((a, b) => a.name.localeCompare(b.name));
+      });
+
+      // 2. 🚀 Ordenação Inteligente do Rodrigo
+      return filteredResult.sort((a, b) => {
+          const aName = (a.name || '').toLowerCase();
+          const bName = (b.name || '').toLowerCase();
+          
+          const aStarts = aName.startsWith(term);
+          const bStarts = bName.startsWith(term);
+          
+          if (aStarts && !bStarts) return -1;
+          if (!aStarts && bStarts) return 1;
+          return aName.localeCompare(bName);
+      });
+
   }, [allLoans, allClients, selectedRange, searchTerm]);
 
   const rangeTitles = {
