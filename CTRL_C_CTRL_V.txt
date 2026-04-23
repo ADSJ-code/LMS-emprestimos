@@ -835,27 +835,7 @@ func blacklistUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/blacklist/")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-
 	switch r.Method {
-	case http.MethodPut:
-		// 🚀 CORREÇÃO DO ERRO 405: A API agora aceita Edições (PUT) na Lista Negra
-		var entry BlacklistEntry
-		if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
-			http.Error(w, "Dados inválidos", http.StatusBadRequest)
-			return
-		}
-		entry.ID = id // Garante que o ID não se perde
-
-		// Atualiza os dados na lista negra
-		blacklistCollection.ReplaceOne(ctx, bson.M{"id": id}, entry)
-
-		// Se houver um CPF na edição, garante o bloqueio do cliente na base principal
-		if entry.CPF != "" {
-			clientCollection.UpdateOne(ctx, bson.M{"cpf": entry.CPF}, bson.M{"$set": bson.M{"status": "Bloqueado"}})
-		}
-
-		json.NewEncoder(w).Encode(entry)
-
 	case http.MethodDelete:
 		// 1. Busca quem é o cliente para pegar o CPF
 		var entry BlacklistEntry
@@ -869,7 +849,6 @@ func blacklistUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		// 3. Remove da lista negra
 		blacklistCollection.DeleteOne(ctx, bson.M{"id": id})
 		w.WriteHeader(http.StatusNoContent)
-
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}

@@ -171,9 +171,16 @@ const Blacklist = () => {
     
     setIsLoading(true);
     try {
+      // 🚀 GARANTIA: Formata o CPF/CNPJ corretamente antes de enviar para a API
+      const cleanCpf = formData.cpf.replace(/\D/g, '');
+      const formattedCpf = cleanCpf.length > 11 
+          ? cleanCpf.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2}).*/, '$1.$2.$3/$4-$5')
+          : cleanCpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2}).*/, '$1.$2.$3-$4');
+
       if (editingId) {
         const updatedUser: any = {
           ...formData,
+          cpf: formattedCpf,
           riskLevel: formData.riskLevel as any
         };
         await blacklistService.update(editingId, updatedUser);
@@ -181,11 +188,12 @@ const Blacklist = () => {
       } else {
         const newUser: any = {
           ...formData,
+          cpf: formattedCpf,
           riskLevel: formData.riskLevel as any,
           date: new Date().toLocaleDateString('pt-BR')
         };
         await blacklistService.create(newUser);
-        alert(`⛔ BLOQUEIO CONFIRMADO\n\nO documento ${formData.cpf} foi inserido na base de risco e suas operações foram travadas.`);
+        alert(`⛔ BLOQUEIO CONFIRMADO\n\nO documento ${formattedCpf} foi inserido na base de risco e suas operações foram travadas.`);
       }
       setIsModalOpen(false);
       fetchBlacklist();
