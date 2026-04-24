@@ -271,7 +271,12 @@ const Dashboard = () => {
     try {
       const [loans, clients] = await Promise.all([ loanService.getAll(), clientService.getAll() ]);
       
-      const safeLoans = (loans || []).map(l => ({
+      // 🚀 FILTRO GLOBAL DA LISTA NEGRA: Remove clientes bloqueados de TODAS as contas e listas
+      const blockedNames = new Set((clients || []).filter(c => c.status === 'Bloqueado').map(c => c.name));
+      const cleanClients = (clients || []).filter(c => c.status !== 'Bloqueado');
+      const cleanLoans = (loans || []).filter(l => !blockedNames.has(l.client));
+
+      const safeLoans = cleanLoans.map(l => ({
           ...l,
           amount: Number(l.amount) || 0,
           installmentValue: Number(l.installmentValue) || 0,
@@ -281,8 +286,8 @@ const Dashboard = () => {
           projectedProfit: Number(l.projectedProfit) || 0
       }));
 
-      setAllLoans(safeLoans); 
-      setAllClients(clients || []);
+      setAllLoans(safeLoans); // Contratos bloqueados foram banidos daqui
+      setAllClients(cleanClients); // Clientes bloqueados foram banidos daqui
       
       const now = new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -323,8 +328,9 @@ const Dashboard = () => {
         }
         if (isPaid) return;
 
-        const breakdown = getSyncedBreakdown(loan);    const realStatus = getLoanRealStatus(loan);
-        const { totalOverdue } = getLoanDetails(loan); // Puxa a bola de neve inteira!        
+        const breakdown = getSyncedBreakdown(loan);    
+        const realStatus = getLoanRealStatus(loan);
+        const { totalOverdue } = getLoanDetails(loan);       
         let currentDue = parseLocalDate(loan.nextDue);
         let hasMatch = false;
         let capToAdd = 0;
@@ -343,7 +349,6 @@ const Dashboard = () => {
                 if (isOverdueInstallment) {
                     const baseAmount = (i === 0 && realStatus === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
                     const dateStr = `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`;
-                    // Sincronia Atraso: No card global, a produção só conta a parcela ATUAL pendente
                     if (i === 0) {
                         overToAdd = calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
                     }
@@ -374,7 +379,6 @@ const Dashboard = () => {
                     });
                 });
             } else {
-                // --- MÁGICA DA SINCRONIA GLOBAL (PRODUÇÃO) ---
                 let gCap = Math.max(0, parseVal(loan.amount) - parseVal(loan.totalPaidCapital));
                 const gExpected = parseVal(loan.projectedProfit) || Math.max(0, (parseVal(loan.installmentValue) * parseVal(loan.installments)) - parseVal(loan.amount));
                 
@@ -382,7 +386,6 @@ const Dashboard = () => {
                 capAcc.all += gCap; capAcc[tier] += gCap;
                 profAcc.all += gProf; profAcc[tier] += gProf;
                 
-                // 🚨 SOMA CORRETA DA INADIMPLÊNCIA: Só soma se o status for realmente 'Atrasado'
                 if (realStatus === 'Atrasado') {
                     overAcc.all += totalOverdue; overAcc[tier] += totalOverdue;
                 }
@@ -395,19 +398,18 @@ const Dashboard = () => {
         }
       });
 
-      // Arredondamento final para bater os centavos (.13)
       const round = (n: number) => Math.round(n * 100) / 100;
       
-      // 👉 ESSA É A LINHA QUE FALTAVA PARA A LISTA APARECER:
       setFilteredLoansContext(filteredContext);
       
       setMetrics({
-        capitalNaRua: { all: round(capAcc.all), low: round(capAcc.low), mid: round(capAcc.mid), high: round(capAcc.high) },        lucroProjetado: { all: round(profAcc.all), low: round(profAcc.low), mid: round(profAcc.mid), high: round(profAcc.high) },
+        capitalNaRua: { all: round(capAcc.all), low: round(capAcc.low), mid: round(capAcc.mid), high: round(capAcc.high) },        
+        lucroProjetado: { all: round(profAcc.all), low: round(profAcc.low), mid: round(profAcc.mid), high: round(profAcc.high) },
         atrasoGeral: { all: round(overAcc.all), low: round(overAcc.low), mid: round(overAcc.mid), high: round(overAcc.high) },
         contratosAtivosFiltro: uniqueMatchedContracts.size,
         contratosAtivosGlobais: totalGloballyActive,
         totalContratosLancados: safeLoans.length,
-        totalClientesCadastrados: allClients.length,
+        totalClientesCadastrados: cleanClients.length, // Agora a contagem só considera cadastros sem bloqueio
         clientesComDivida: activeDebtors.size,
         taxas: { 
             lowCap: round(capAcc.low), midCap: round(capAcc.mid), highCap: round(capAcc.high), 

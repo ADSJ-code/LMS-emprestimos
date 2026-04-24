@@ -305,7 +305,12 @@ const Overdue = () => {
         loanService.getAll(),
         clientService.getAll(),
       ]);
-      setLoans(loansData || []);
+
+      // 🚀 FILTRO GLOBAL DA LISTA NEGRA: Remove os bloqueados da matemática de atraso
+      const blockedNames = new Set((clientsData || []).filter(c => c.status === 'Bloqueado').map(c => c.name));
+      const activeLoans = (loansData || []).filter(l => !blockedNames.has(l.client));
+
+      setLoans(activeLoans); // <-- Agora só contratos de clientes "não bloqueados" vão para a conta!
       setClients(clientsData || []);
     } catch (err) {
       console.error(err);

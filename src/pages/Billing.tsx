@@ -365,8 +365,14 @@ const Billing = () => {
           loanService.getAll(),
           affiliateService.getAll().catch(() => []) 
       ]);
-      setAvailableClients(clientsData || []); 
-      setLoans(loansData || []);
+
+      // 🚀 FILTRO GLOBAL DA LISTA NEGRA: Remove os clientes bloqueados da tela de faturamento e cobrança
+      const blockedNames = new Set((clientsData || []).filter(c => c.status === 'Bloqueado').map(c => c.name));
+      const cleanClients = (clientsData || []).filter(c => c.status !== 'Bloqueado');
+      const cleanLoans = (loansData || []).filter(l => !blockedNames.has(l.client));
+
+      setAvailableClients(cleanClients); // Oculta bloqueados do dropdown de Novo Contrato
+      setLoans(cleanLoans); // Remove contratos de bloqueados da matemática de recebimento e cobrança
       setAvailableAffiliates(affiliatesData || []);
     } catch (err) {} 
     finally { setIsLoadingList(false); }

@@ -37,6 +37,7 @@ const Clients = () => {
   const [modalTab, setModalTab] = useState<'dados' | 'financeiro' | 'analise'>('dados');
   
   const [globalMetricModal, setGlobalMetricModal] = useState<'base' | 'ativos' | 'emprestado' | 'lucro' | null>(null);
+  const [expandedMonth, setExpandedMonth] = useState<string | null>(null); // 🚀 Controle da Sanfona Mensal
   const [isCepLoading, setIsCepLoading] = useState(false);
   const [clientType, setClientType] = useState<'PF' | 'PJ'>('PF');
 
@@ -131,8 +132,14 @@ const Clients = () => {
           clientService.getAll(),
           loanService.getAll()
       ]);
-      setClients(clientsData || []);
-      setLoans(loansData || []);
+
+      // 🚀 FILTRO GLOBAL DA LISTA NEGRA: Isola os banidos de toda a página
+      const blockedNames = new Set((clientsData || []).filter(c => c.status === 'Bloqueado').map(c => c.name));
+      const cleanClients = (clientsData || []).filter(c => c.status !== 'Bloqueado');
+      const cleanLoans = (loansData || []).filter(l => !blockedNames.has(l.client));
+
+      setClients(cleanClients); // <--- A partir de agora a matemática base só tem os limpos
+      setLoans(cleanLoans);     // <--- Idem para os contratos
     } catch (err) { console.error(err); } 
     finally { setIsLoading(false); }
   };
@@ -181,8 +188,89 @@ const Clients = () => {
           totalProfit += Number(l.totalPaidInterest) || 0;
           if (l.status !== 'Pago' && l.status !== 'Quitado') activeClientsSet.add(l.client);
       });
-      return { totalLent, totalProfit, totalClients: clients.length, activeClients: activeClientsSet.size };
+      return { 
+          totalLent, 
+          totalProfit, 
+          totalClients: clients.length, 
+          activeClients: activeClientsSet.size 
+      };
   }, [loans, clients]);
+
+  // 🚀 NOVO MOTOR: Agrupamento de Pagamentos Reais Executados por Mês/Ano
+  const monthlyData = useMemo(() => {
+      const groups: any = {};
+      loans.forEach(loan => {
+          if (!loan.history) return;
+          loan.history.forEach(h => {
+              // Ignora aberturas, acordos vazios e erros
+              if (h.amount <= 0 || h.type.includes('Abertura') || h.type === 'Acordo') return;
+              
+              const d = new Date(h.date);
+              const mStr = String(d.getMonth() + 1).padStart(2, '0');
+              const yStr = d.getFullYear();
+              const monthYear = `${yStr}-${mStr}`; // Formato de chave (Ex: "2026-04")
+              const label = `${mStr}/${yStr}`;     // Rótulo Visual (Ex: "04/2026")
+
+              if (!groups[monthYear]) {
+                  groups[monthYear] = { id: monthYear, label, cap: 0, int: 0, total: 0, clients: {} };
+              }
+              
+              const capPaid = Number(h.capitalPaid) || 0;
+              const intPaid = Number(h.interestPaid) || 0;
+              
+              groups[monthYear].cap += capPaid;
+              groups[monthYear].int += intPaid;
+              groups[monthYear].total += Number(h.amount);
+
+              if (!groups[monthYear].clients[loan.client]) {
+                  groups[monthYear].clients[loan.client] = { cap: 0, int: 0, total: 0, contracts: [] };
+              }
+              groups[monthYear].clients[loan.client].cap += capPaid;
+              groups[monthYear].clients[loan.client].int += intPaid;
+              groups[monthYear].clients[loan.client].total += Number(h.amount);
+              
+              groups[monthYear].clients[loan.client].contracts.push({
+                  id: loan.id,
+                  date: h.date,
+                  cap: capPaid,
+                  int: intPaid,
+                  total: Number(h.amount)
+              });
+          });
+      });
+      // Devolve array ordenado do Mês Mais Recente para o Mais Antigo
+      return Object.values(groups).sort((a: any, b: any) => b.id.localeCompare(a.id));
+  }, [loans]);
+
+  // 🚀 NOVO MOTOR: Agrupamento de Capital Emprestado (Dinheiro Liberado) por Mês/Ano
+  const monthlyLentData = useMemo(() => {
+      const groups: any = {};
+      loans.forEach(loan => {
+          if (!loan.startDate) return;
+          const d = new Date(loan.startDate);
+          const mStr = String(d.getMonth() + 1).padStart(2, '0');
+          const yStr = d.getFullYear();
+          const monthYear = `${yStr}-${mStr}`;
+          const label = `${mStr}/${yStr}`;
+
+          if (!groups[monthYear]) {
+              groups[monthYear] = { id: monthYear, label, total: 0, clients: {} };
+          }
+          
+          groups[monthYear].total += Number(loan.amount) || 0;
+
+          if (!groups[monthYear].clients[loan.client]) {
+              groups[monthYear].clients[loan.client] = { total: 0, contracts: [] };
+          }
+          groups[monthYear].clients[loan.client].total += Number(loan.amount) || 0;
+          groups[monthYear].clients[loan.client].contracts.push({
+              id: loan.id,
+              date: loan.startDate,
+              total: Number(loan.amount) || 0
+          });
+      });
+      return Object.values(groups).sort((a: any, b: any) => b.id.localeCompare(a.id));
+  }, [loans]);
 
   const calculateClientScore = (clientName: string) => {
       const clientLoans = loans.filter(l => l.client === clientName);
@@ -264,10 +352,8 @@ const Clients = () => {
 
   // 🚀 BUSCA INTELIGENTE DO RODRIGO: Prefixo primeiro, alfabético depois.
   const filteredClients = useMemo(() => {
-    // 1. Filtra a base (esconde lista negra e aplica a busca)
+    // 1. Filtra a base
     let result = processedClients.filter(c => {
-      if (c.status === 'Bloqueado') return false; // 🚫 ESCONDE A LISTA NEGRA
-      
       const searchLower = searchTerm.toLowerCase();
       const searchNumbers = searchTerm.replace(/\D/g, '');
       
@@ -705,9 +791,193 @@ const Clients = () => {
         )}
       </Modal>
 
-      <Modal isOpen={!!globalMetricModal} onClose={() => setGlobalMetricModal(null)} title="Consolidado">
-          <div className="max-h-[400px] overflow-y-auto pr-2 space-y-2">
-              {processedClients.map(c => (<div key={c.id} className="p-3 border rounded-xl flex justify-between items-center"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded bg-slate-900 text-white flex items-center justify-center text-[10px] font-bold">#{c.displayNumber}</div><p className="text-sm font-bold text-slate-700">{c.name}</p></div><span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${c.status === 'Bloqueado' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>{c.status}</span></div>))}
+      <Modal 
+          isOpen={!!globalMetricModal} 
+          onClose={() => { setGlobalMetricModal(null); setExpandedMonth(null); }} 
+          title={globalMetricModal === 'lucro' ? 'Fechamento Mensal (Entradas)' : globalMetricModal === 'emprestado' ? 'Histórico de Empréstimos (Saídas)' : globalMetricModal === 'ativos' ? 'Clientes com Dívida Ativa' : 'Consolidado da Base'}
+      >
+          <div className="max-h-[500px] overflow-y-auto pr-2 space-y-3 custom-scrollbar">
+              
+              {/* --- CASO 1: LUCRO (ENTRADAS DE DINHEIRO) --- */}
+              {globalMetricModal === 'lucro' && (
+                  monthlyData.length === 0 ? (
+                      <div className="text-center py-8 text-slate-400 italic">Nenhum pagamento registrado ainda.</div>
+                  ) : (
+                      monthlyData.map((month: any) => (
+                          <div key={month.id} className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-sm transition-all">
+                              {/* BARRA DO MÊS (CLICÁVEL PARA EXPANDIR) */}
+                              <div 
+                                  onClick={() => setExpandedMonth(expandedMonth === month.id ? null : month.id)}
+                                  className={`p-4 flex justify-between items-center cursor-pointer transition-colors ${expandedMonth === month.id ? 'bg-slate-50 border-b border-slate-200' : 'hover:bg-slate-50'}`}
+                              >
+                                  <div className="flex items-center gap-3">
+                                      <div className={`p-2.5 rounded-xl text-white ${expandedMonth === month.id ? 'bg-green-600' : 'bg-slate-800'}`}><Calendar size={20}/></div>
+                                      <div>
+                                          <p className="font-black text-slate-800 text-lg">{month.label}</p>
+                                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{Object.keys(month.clients).length} Clientes Pagaram</p>
+                                      </div>
+                                  </div>
+                                  <div className="text-right">
+                                      <p className="font-black text-green-600 text-lg">R$ {formatMoney(month.int)}</p>
+                                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mt-0.5">Lucro Obtido</span>
+                                  </div>
+                              </div>
+                              
+                              {/* CONTEÚDO EXPANDIDO: DETALHES DOS CLIENTES */}
+                              {expandedMonth === month.id && (
+                                  <div className="p-4 bg-slate-50/50 space-y-4">
+                                      <div className="grid grid-cols-2 gap-3 mb-4">
+                                          <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-center">
+                                              <span className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Capital Amortizado</span>
+                                              <span className="font-black text-slate-700">R$ {formatMoney(month.cap)}</span>
+                                          </div>
+                                          <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-center">
+                                              <span className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Receita Bruta Total</span>
+                                              <span className="font-black text-blue-600">R$ {formatMoney(month.total)}</span>
+                                          </div>
+                                      </div>
+                                      
+                                      {Object.entries(month.clients).map(([clientName, data]: any) => {
+                                          const clientObj = clients.find(c => c.name === clientName);
+                                          return (
+                                          <div key={clientName} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                                              <div 
+                                                  className="p-3 bg-slate-100/50 hover:bg-blue-50 border-b border-slate-100 flex justify-between items-center cursor-pointer transition-colors group"
+                                                  onClick={() => {
+                                                      if (clientObj) {
+                                                          setGlobalMetricModal(null); setExpandedMonth(null);
+                                                          handleOpenModal(clientObj, 'financeiro'); 
+                                                      }
+                                                  }}
+                                              >
+                                                  <div className="flex items-center gap-2">
+                                                      <span className="font-bold text-slate-800 text-sm group-hover:text-blue-600 transition-colors">{clientName}</span>
+                                                      <span className="text-[9px] text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded uppercase font-bold opacity-0 group-hover:opacity-100 transition-opacity">Ver Perfil</span>
+                                                  </div>
+                                                  <span className="text-[10px] font-black text-green-700 bg-green-100 px-2 py-1 rounded-md border border-green-200 uppercase">+ R$ {formatMoney(data.int)} Lucro</span>
+                                              </div>
+                                              <div className="p-3 divide-y divide-slate-50">
+                                                  {data.contracts.map((ct: any, i: number) => (
+                                                      <div key={i} className="py-2 flex justify-between items-center group/ctr">
+                                                          <div className="cursor-pointer" onClick={() => { setGlobalMetricModal(null); setExpandedMonth(null); handleGoToContract(ct.id); }}>
+                                                              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest group-hover/ctr:text-blue-600 transition-colors flex items-center gap-1">
+                                                                  CTR: {ct.id} <span className="opacity-0 group-hover/ctr:opacity-100 transition-opacity text-[8px] bg-blue-100 text-blue-600 px-1 rounded">Abrir Fatura ➔</span>
+                                                              </p>
+                                                              <p className="text-[10px] text-slate-500 font-medium mt-0.5">{new Date(ct.date).toLocaleDateString('pt-BR')} às {new Date(ct.date).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}</p>
+                                                          </div>
+                                                          <div className="text-right">
+                                                              <p className="text-xs font-black text-slate-700">R$ {formatMoney(ct.total)}</p>
+                                                              <div className="flex gap-2 justify-end mt-0.5">
+                                                                  <span className="text-[9px] font-bold text-slate-400 uppercase">Cap: {formatMoney(ct.cap)}</span>
+                                                                  <span className="text-[9px] font-bold text-green-500 uppercase">Jur: {formatMoney(ct.int)}</span>
+                                                              </div>
+                                                          </div>
+                                                      </div>
+                                                  ))}
+                                              </div>
+                                          </div>
+                                      )})}
+                                  </div>
+                              )}
+                          </div>
+                      ))
+                  )
+              )}
+
+              {/* --- CASO 2: EMPRESTADO (SAÍDAS DE DINHEIRO) --- */}
+              {globalMetricModal === 'emprestado' && (
+                  monthlyLentData.length === 0 ? (
+                      <div className="text-center py-8 text-slate-400 italic">Nenhum empréstimo registrado ainda.</div>
+                  ) : (
+                      monthlyLentData.map((month: any) => (
+                          <div key={month.id} className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-sm transition-all">
+                              <div 
+                                  onClick={() => setExpandedMonth(expandedMonth === month.id ? null : month.id)}
+                                  className={`p-4 flex justify-between items-center cursor-pointer transition-colors ${expandedMonth === month.id ? 'bg-slate-50 border-b border-slate-200' : 'hover:bg-slate-50'}`}
+                              >
+                                  <div className="flex items-center gap-3">
+                                      <div className={`p-2.5 rounded-xl text-white ${expandedMonth === month.id ? 'bg-orange-600' : 'bg-slate-800'}`}><DollarSign size={20}/></div>
+                                      <div>
+                                          <p className="font-black text-slate-800 text-lg">{month.label}</p>
+                                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{Object.keys(month.clients).length} Clientes Pegaram</p>
+                                      </div>
+                                  </div>
+                                  <div className="text-right">
+                                      <p className="font-black text-orange-600 text-lg">R$ {formatMoney(month.total)}</p>
+                                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mt-0.5">Total Liberado</span>
+                                  </div>
+                              </div>
+                              
+                              {expandedMonth === month.id && (
+                                  <div className="p-4 bg-slate-50/50 space-y-4">
+                                      {Object.entries(month.clients).map(([clientName, data]: any) => {
+                                          const clientObj = clients.find(c => c.name === clientName);
+                                          return (
+                                          <div key={clientName} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                                              <div 
+                                                  className="p-3 bg-slate-100/50 hover:bg-blue-50 border-b border-slate-100 flex justify-between items-center cursor-pointer transition-colors group"
+                                                  onClick={() => {
+                                                      if (clientObj) {
+                                                          setGlobalMetricModal(null); setExpandedMonth(null);
+                                                          handleOpenModal(clientObj, 'financeiro'); 
+                                                      }
+                                                  }}
+                                              >
+                                                  <div className="flex items-center gap-2">
+                                                      <span className="font-bold text-slate-800 text-sm group-hover:text-blue-600 transition-colors">{clientName}</span>
+                                                      <span className="text-[9px] text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded uppercase font-bold opacity-0 group-hover:opacity-100 transition-opacity">Ver Perfil</span>
+                                                  </div>
+                                                  <span className="text-[10px] font-black text-orange-700 bg-orange-100 px-2 py-1 rounded-md border border-orange-200 uppercase">R$ {formatMoney(data.total)} Liberado</span>
+                                              </div>
+                                              <div className="p-3 divide-y divide-slate-50">
+                                                  {data.contracts.map((ct: any, i: number) => (
+                                                      <div key={i} className="py-2 flex justify-between items-center group/ctr">
+                                                          <div className="cursor-pointer" onClick={() => { setGlobalMetricModal(null); setExpandedMonth(null); handleGoToContract(ct.id); }}>
+                                                              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest group-hover/ctr:text-blue-600 transition-colors flex items-center gap-1">
+                                                                  CTR: {ct.id} <span className="opacity-0 group-hover/ctr:opacity-100 transition-opacity text-[8px] bg-blue-100 text-blue-600 px-1 rounded">Abrir Fatura ➔</span>
+                                                              </p>
+                                                              <p className="text-[10px] text-slate-500 font-medium mt-0.5">{new Date(ct.date).toLocaleDateString('pt-BR')}</p>
+                                                          </div>
+                                                          <div className="text-right">
+                                                              <p className="text-xs font-black text-slate-700">R$ {formatMoney(ct.total)}</p>
+                                                          </div>
+                                                      </div>
+                                                  ))}
+                                              </div>
+                                          </div>
+                                      )})}
+                                  </div>
+                              )}
+                          </div>
+                      ))
+                  )
+              )}
+
+              {/* --- CASO 3 e 4: BASE e ATIVOS (LISTA DE CLIENTES) --- */}
+              {(globalMetricModal === 'base' || globalMetricModal === 'ativos') && (
+                  processedClients.filter(c => {
+                      if (globalMetricModal === 'ativos') {
+                          return loans.some(l => l.client === c.name && l.status !== 'Pago' && l.status !== 'Quitado');
+                      }
+                      return true;
+                  }).map(c => (
+                      <div 
+                          key={c.id} 
+                          className="p-3 border rounded-xl flex justify-between items-center bg-white hover:bg-blue-50 transition-colors cursor-pointer group"
+                          onClick={() => { setGlobalMetricModal(null); handleOpenModal(c, 'financeiro'); }}
+                      >
+                          <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center text-[10px] font-bold group-hover:bg-blue-600 transition-colors">#{c.displayNumber}</div>
+                              <p className="text-sm font-bold text-slate-700 group-hover:text-blue-700 transition-colors">{c.name}</p>
+                          </div>
+                          <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider ${c.status === 'Bloqueado' ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-green-50 text-green-600 border border-green-100'}`}>{c.status}</span>
+                      </div>
+                  ))
+              )}
+          </div>
+          
+          <div className="mt-4 pt-4 border-t border-slate-100">
+              <button onClick={() => { setGlobalMetricModal(null); setExpandedMonth(null); }} className="w-full py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/20">Fechar Janela</button>
           </div>
       </Modal>
     </Layout>
