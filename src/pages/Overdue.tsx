@@ -154,11 +154,8 @@ const Overdue = () => {
       const dueLocalDate = parseLocalDate(loan.nextDue);
 
       const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
-      const expectedInstallment = parseVal(loan.installmentValue);
-      const sumSlices = validSlices.reduce((acc: number, s: any) => acc + parseVal(s.amount), 0);
-      const isActuallyMultiDate = validSlices.length > 0 && Math.abs(sumSlices - expectedInstallment) <= 5.00;
 
-      if (isActuallyMultiDate) {
+      if (validSlices.length > 0) {
           const currentMonth = dueLocalDate.getMonth();
           const currentYear = dueLocalDate.getFullYear();
           let hasLateSlice = false;
@@ -203,11 +200,8 @@ const Overdue = () => {
     const breakdown = getSyncedBreakdown(loan);
 
     const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
-    const expectedInstallment = parseVal(loan.installmentValue);
-    const sumSlices = validSlices.reduce((acc: number, s: any) => acc + parseVal(s.amount), 0);
-    const isActuallyMultiDate = validSlices.length > 0 && Math.abs(sumSlices - expectedInstallment) <= 5.00;
 
-    if (isActuallyMultiDate) {
+    if (validSlices.length > 0) {
         const currentMonth = tempDue.getMonth();
         const currentYear = tempDue.getFullYear();
         

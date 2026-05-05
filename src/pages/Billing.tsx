@@ -406,10 +406,43 @@ const Billing = () => {
     return new Date(year, month - 1, day);
   };
 
+  // 🚀 NOVA FUNÇÃO: Descobre qual a data da próxima fatia real que o cliente deve pagar
+  const getDisplayNextDue = (loan: any) => {
+      const validSlices = (loan.multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+      
+      if (validSlices.length > 0) {
+          const baseDue = parseLocalDate(loan.nextDue);
+          const currentMonth = baseDue.getMonth();
+          const currentYear = baseDue.getFullYear();
+          // Ordena as fatias por dia (1, 5, 10...)
+          const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+          
+          for (const slice of sortedSlices) {
+              const baseAmount = parseVal(slice.amount);
+              // Calcula quanto já foi pago desta fatia específica
+              const slicePaidAmount = (loan.history || []).reduce((acc: any, h: any) => {
+                  const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+                  if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
+                      return acc + parseVal(h.amount);
+                  }
+                  return acc;
+              }, 0);
+
+              // Se ainda não pagou a fatia, ela é o nosso "Próximo Vencimento"
+              if (slicePaidAmount < (baseAmount - 0.05)) {
+                  const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+                  return sliceDate.toISOString().split('T')[0];
+              }
+          }
+      }
+      // Fallback para a data de vencimento padrão se não houver fatias
+      return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
+  };
+
   // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
     if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
-    if (loan.status === 'Acordo') return 'Acordo'; // 🚨 Acordos não são inadimplentes
+    if (loan.status === 'Acordo') return 'Acordo'; 
     const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
     if (balance <= 0.10) return 'Quitado'; 
     
@@ -418,12 +451,10 @@ const Billing = () => {
     
     const dueLocalDate = parseLocalDate(loan.nextDue);
 
+    // 🚀 REMOVIDA A TRAVA DE R$ 5,00: Agora se tem fatia, o sistema obedece a fatia.
     const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
-    const expectedInstallment = parseVal(loan.installmentValue);
-    const sumSlices = validSlices.reduce((acc: number, s: any) => acc + parseVal(s.amount), 0);
-    const isActuallyMultiDate = validSlices.length > 0 && Math.abs(sumSlices - expectedInstallment) <= 5.00;
 
-    if (isActuallyMultiDate) {
+    if (validSlices.length > 0) {
         const currentMonth = dueLocalDate.getMonth();
         const currentYear = dueLocalDate.getFullYear();
         let hasLateSlice = false;
@@ -447,7 +478,6 @@ const Billing = () => {
             }
         }
         if (hasLateSlice) return 'Atrasado';
-        // 🚀 CORREÇÃO PRINCIPAL: Se as fatias passadas estão pagas, está Em Dia. Ignora data base travada no passado.
         return 'Em Dia';
     }
 
@@ -1739,9 +1769,10 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                          </div>
                                      </div>
                                      <div className="text-right">
-                                         <p className="font-black text-slate-800 text-sm group-hover:text-yellow-600 transition-colors">R$ {formatMoney(l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : l.installmentValue)}</p>
-                                         <span className="inline-block mt-1 text-[9px] text-slate-500 uppercase font-bold bg-slate-100 px-2 py-0.5 rounded-md group-hover:bg-yellow-100 group-hover:text-yellow-700 transition-colors">Cobrar ➔</span>
-                                     </div>
+                                          {/* 🚀 Ajustado para mostrar o valor total da fatia (ou parcela) corretamente */}
+                                          <p className="font-black text-slate-800 text-sm group-hover:text-yellow-600 transition-colors">R$ {formatMoney(l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue))}</p>
+                                          <span className="inline-block mt-1 text-[9px] text-slate-500 uppercase font-bold bg-slate-100 px-2 py-0.5 rounded-md group-hover:bg-yellow-100 group-hover:text-yellow-700 transition-colors">Cobrar ➔</span>
+                                      </div>
                                  </div>
                              ))}
                          </div>
@@ -1859,7 +1890,8 @@ const handleFinalSave = async (e: React.FormEvent) => {
                           <span
                             className={`font-bold text-sm ${displayStatus === "Atrasado" ? "text-red-600" : "text-slate-700"}`}
                           >
-                            {formatDisplayDate(loan.nextDue)}
+                            {/* 🚀 Chama a nova função para mostrar a fatia real e não a data base do mês */}
+                            {formatDisplayDate(getDisplayNextDue(loan))}
                           </span>
                         </td>
 

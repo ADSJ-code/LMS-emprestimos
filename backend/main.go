@@ -932,7 +932,8 @@ func dashboardSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	totalActive, _ := loanCollection.CountDocuments(ctx, bson.M{"status": bson.M{"$ne": "Pago"}})
-	totalClients, _ := clientCollection.CountDocuments(ctx, bson.M{})
+	// 🚀 EXCLUI DA CONTAGEM DA BASE OS CLIENTES BLOQUEADOS (LISTA NEGRA)
+	totalClients, _ := clientCollection.CountDocuments(ctx, bson.M{"status": bson.M{"$ne": "Bloqueado"}})
 	json.NewEncoder(w).Encode(map[string]interface{}{"totalActive": totalActive, "clientsRegistered": totalClients})
 }
 

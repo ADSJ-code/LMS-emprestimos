@@ -340,12 +340,56 @@ const Clients = () => {
       );
   };
 
+  const parseLocalDate = (dateStr: string) => {
+    if (!dateStr) return new Date();
+    let cleanStr = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+    if (cleanStr.includes('/')) {
+        const [d, m, y] = cleanStr.split('/');
+        return new Date(Number(y), Number(m) - 1, Number(d));
+    }
+    const [year, month, day] = cleanStr.split("-").map(Number);
+    return new Date(year, month - 1, day);
+  };
+
   const getClientDebtStatus = (clientName: string) => {
     const clientLoans = loans.filter(l => l.client === clientName);
     if (clientLoans.length === 0) return { label: 'Sem Histórico', color: 'gray' };
-    const todayStr = new Date().toISOString().split('T')[0];
-    const hasOverdue = clientLoans.some(l => l.status !== 'Pago' && l.status !== 'Quitado' && l.nextDue.split('T')[0] < todayStr);
+    
+    const hasOverdue = clientLoans.some(l => {
+        if (l.status === 'Pago' || l.status === 'Quitado' || l.status === 'Acordo') return false;
+        
+        const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseFloat(s.amount) > 0) || [];
+        const today = new Date();
+        today.setHours(0,0,0,0);
+        const dueLocalDate = parseLocalDate(l.nextDue);
+
+        if (validSlices.length > 0) {
+            const currentMonth = dueLocalDate.getMonth();
+            const currentYear = dueLocalDate.getFullYear();
+            for (const slice of validSlices) {
+                const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+                if (sliceDate < today) {
+                    const baseAmount = parseFloat(slice.amount);
+                    const slicePaidAmount = (l.history || []).reduce((acc: any, h: any) => {
+                        const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+                        if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
+                            return acc + parseFloat(h.amount);
+                        }
+                        return acc;
+                    }, 0);
+                    if (slicePaidAmount < (baseAmount - 0.05)) return true;
+                }
+            }
+            return false;
+        }
+        return dueLocalDate < today;
+    });
+    
     if (hasOverdue) return { label: 'Inadimplente', color: 'red' };
+    
+    const hasAcordo = clientLoans.some(l => l.status === 'Acordo');
+    if (hasAcordo) return { label: 'Em Acordo', color: 'orange' };
+    
     if (clientLoans.some(l => l.status !== 'Pago' && l.status !== 'Quitado')) return { label: 'Em Dia (Ativo)', color: 'blue' };
     return { label: 'Quitado', color: 'green' };
   };
@@ -563,7 +607,7 @@ const Clients = () => {
                     </div>
                   </td>
                   <td className="p-4 text-xs text-slate-600"><Mail size={12} className="inline mr-1"/> {client.email || '-'}<br/><Phone size={12} className="inline mr-1"/> {client.phone}</td>
-                  <td className="p-4 text-center"><span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${ds.color === 'red' ? 'bg-red-50 text-red-600' : ds.color === 'blue' ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'}`}>{ds.label}</span></td>
+                  <td className="p-4 text-center"><span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${ds.color === 'red' ? 'bg-red-50 text-red-600' : ds.color === 'orange' ? 'bg-orange-50 text-orange-600' : ds.color === 'blue' ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'}`}>{ds.label}</span></td>
                   <td className="p-4 text-right relative">
                     <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === client.id ? null : client.id); }} className="p-2 rounded-lg hover:bg-slate-100 text-slate-400"><MoreVertical size={16} /></button>
                     {openMenuId === client.id && (

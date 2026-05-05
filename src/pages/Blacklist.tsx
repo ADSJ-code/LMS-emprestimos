@@ -193,6 +193,13 @@ const Blacklist = () => {
           date: new Date().toLocaleDateString('pt-BR')
         };
         await blacklistService.create(newUser);
+        
+        // 🚀 BLOQUEIA NA BASE DE CLIENTES PARA SUMIR DOS CADASTROS E MÉTRICAS
+        const matchingClient = allClients.find(c => (c.cpf || '').replace(/\D/g, '') === cleanCpf);
+        if (matchingClient) {
+            await clientService.update(matchingClient.id, { ...matchingClient, status: 'Bloqueado' });
+        }
+
         alert(`⛔ BLOQUEIO CONFIRMADO\n\nO documento ${formattedCpf} foi inserido na base de risco e suas operações foram travadas.`);
       }
       setIsModalOpen(false);
@@ -209,6 +216,14 @@ const Blacklist = () => {
     if (selectedUserForUnblock) {
       try {
         await blacklistService.delete(selectedUserForUnblock.id);
+        
+        // 🚀 DESBLOQUEIA NA BASE DE CLIENTES PARA VOLTAR ÀS MÉTRICAS
+        const cleanDocs = (selectedUserForUnblock.cpf || '').replace(/\D/g, '');
+        const matchingClient = allClients.find(c => (c.cpf || '').replace(/\D/g, '') === cleanDocs);
+        if (matchingClient) {
+            await clientService.update(matchingClient.id, { ...matchingClient, status: 'Ativo' });
+        }
+        
         setIsUnblockModalOpen(false);
         fetchBlacklist();
         alert(`🔓 DESBLOQUEIO REALIZADO\n\nO CPF de ${selectedUserForUnblock.name} foi removido da lista.`);

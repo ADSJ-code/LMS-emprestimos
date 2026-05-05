@@ -140,6 +140,33 @@ const Dashboard = () => {
     return new Date(year, month - 1, day);
   };
 
+  const getDisplayNextDue = (loan: any) => {
+      const validSlices = (loan.multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+      if (validSlices.length > 0) {
+          const baseDue = parseLocalDate(loan.nextDue);
+          const currentMonth = baseDue.getMonth();
+          const currentYear = baseDue.getFullYear();
+          const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+          
+          for (const slice of sortedSlices) {
+              const baseAmount = parseVal(slice.amount);
+              const slicePaidAmount = (loan.history || []).reduce((acc: any, h: any) => {
+                  const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+                  if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
+                      return acc + parseVal(h.amount);
+                  }
+                  return acc;
+              }, 0);
+
+              if (slicePaidAmount < (baseAmount - 0.05)) {
+                  const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+                  return sliceDate.toISOString().split('T')[0];
+              }
+          }
+      }
+      return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
+  };
+
   const getLoanRealStatus = (loan: Loan) => {
       if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
       if (loan.status === 'Acordo') return 'Acordo';
@@ -154,11 +181,8 @@ const Dashboard = () => {
       const dueLocalDate = parseLocalDate(loan.nextDue);
 
       const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
-      const expectedInstallment = parseVal(loan.installmentValue);
-      const sumSlices = validSlices.reduce((acc: number, s: any) => acc + parseVal(s.amount), 0);
-      const isActuallyMultiDate = validSlices.length > 0 && Math.abs(sumSlices - expectedInstallment) <= 5.00;
 
-      if (isActuallyMultiDate) {
+      if (validSlices.length > 0) {
           const currentMonth = dueLocalDate.getMonth();
           const currentYear = dueLocalDate.getFullYear();
           let hasLateSlice = false;
@@ -201,11 +225,8 @@ const Dashboard = () => {
       const breakdown = getSyncedBreakdown(loan);
       
       const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
-      const expectedInstallment = parseVal(loan.installmentValue);
-      const sumSlices = validSlices.reduce((acc: number, s: any) => acc + parseVal(s.amount), 0);
-      const isActuallyMultiDate = validSlices.length > 0 && Math.abs(sumSlices - expectedInstallment) <= 5.00;
 
-      if (isActuallyMultiDate) {
+      if (validSlices.length > 0) {
           const currentMonth = tempDue.getMonth();
           const currentYear = tempDue.getFullYear();
           const todayDate = new Date();
@@ -868,7 +889,7 @@ const Dashboard = () => {
                                                   <>
                                                       <div className="flex items-center justify-center gap-1 text-red-600 font-bold">
                                                           <Calendar size={12}/>
-                                                          {parseLocalDate(loan.nextDue).toLocaleDateString('pt-BR')}
+                                                          {parseLocalDate(getDisplayNextDue(loan)).toLocaleDateString('pt-BR')}
                                                       </div>
                                                       <div className="text-[9px] text-red-400 font-bold uppercase tracking-wider mt-0.5">Pendente</div>
                                                   </>
@@ -876,7 +897,7 @@ const Dashboard = () => {
                                                   <>
                                                       <div className="flex items-center justify-center gap-1 font-bold text-slate-700">
                                                           <Calendar size={12} className="text-blue-500"/>
-                                                          {parseLocalDate(loan.projectedDate || loan.nextDue).toLocaleDateString('pt-BR')}
+                                                          {parseLocalDate(loan.projectedDate || getDisplayNextDue(loan)).toLocaleDateString('pt-BR')}
                                                       </div>
                                                       {loan.isActualSlice && (
                                                           <div className="text-[10px] text-blue-600 font-black uppercase tracking-tighter mt-1 bg-blue-50 px-1 rounded inline-block">Fatia da Parcela</div>
