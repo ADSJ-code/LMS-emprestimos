@@ -36,6 +36,8 @@ const Clients = () => {
   // 🚨 ESTADOS ADICIONADOS PARA EXPORTAÇÃO E FILTROS INTELIGENTES
   const [selectedIds, setSelectedIds] = useState<(string|number)[]>([]);
   const [filterStatus, setFilterStatus] = useState<'Todos' | 'Ativos' | 'Quitados' | 'Inadimplentes' | 'Acordo'>('Todos');
+  // 🚀 NOVO ESTADO: Controla a ordenação da lista (A-Z, Mais Novo, Mais Antigo)
+  const [sortOrder, setSortOrder] = useState<'alpha' | 'newest' | 'oldest'>('alpha');
 
   // 🚨 NOVO ESTADO: Controla o aviso de duplicidade em tempo real
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
@@ -405,7 +407,7 @@ const Clients = () => {
       return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   };
 
-  // 🚀 BUSCA INTELIGENTE DO RODRIGO: Sem acentos, prefixo primeiro, filtro inteligente.
+  // 🚀 BUSCA INTELIGENTE DO RODRIGO: Sem acentos, obedece ao seletor de ordenação.
   const filteredClients = useMemo(() => {
     let result = processedClients.filter(c => {
       const searchLower = normalizeString(searchTerm);
@@ -434,11 +436,14 @@ const Clients = () => {
       const aName = normalizeString(a.name || '');
       const bName = normalizeString(b.name || '');
 
-      // 🚀 Se NÃO houver busca, a ordem padrão agora é Alfabética (A-Z) em vez da ordem de cadastro
+      // 🚀 Se NÃO houver busca por texto, obedece rigorosamente ao seletor escolhido
       if (!searchTerm) {
-          return aName.localeCompare(bName);
+          if (sortOrder === 'newest') return Number(b.id) - Number(a.id);
+          if (sortOrder === 'oldest') return Number(a.id) - Number(b.id);
+          return aName.localeCompare(bName); // 'alpha'
       }
       
+      // Se houver busca, mantém a inteligência de colocar quem começa com o termo no topo
       const searchLower = normalizeString(searchTerm);
       const aStarts = aName.startsWith(searchLower);
       const bStarts = bName.startsWith(searchLower);
@@ -450,7 +455,7 @@ const Clients = () => {
     });
 
     return result;
-  }, [processedClients, searchTerm, filterStatus, loans]);
+  }, [processedClients, searchTerm, filterStatus, sortOrder, loans]);
 
   const toggleSelectAll = () => { if (selectedIds.length === filteredClients.length) setSelectedIds([]); else setSelectedIds(filteredClients.map(c => c.id)); };
   const toggleSelectOne = (id: string | number) => { setSelectedIds(prev => prev.includes(id) ? prev.filter(curr => curr !== id) : [...prev, id]); };
@@ -662,16 +667,28 @@ const Clients = () => {
             <input type="text" placeholder="Buscar cliente por nome ou CPF..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500/20 shadow-sm"/>
           </div>
           <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+             {/* 🚀 DROPDOWN DE ORDENAÇÃO */}
              <div className="relative">
-                 <select value={filterStatus} onChange={(e: any) => setFilterStatus(e.target.value)} className="appearance-none bg-white pl-4 pr-10 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-slate-900/10 cursor-pointer">
+                 <select value={sortOrder} onChange={(e: any) => setSortOrder(e.target.value)} className="appearance-none bg-white pl-4 pr-8 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-slate-900/10 cursor-pointer">
+                     <option value="alpha">Ordem Alfabética (A-Z)</option>
+                     <option value="newest">Mais Recentes</option>
+                     <option value="oldest">Mais Antigos (Inicia no #1)</option>
+                 </select>
+                 <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16}/>
+             </div>
+
+             {/* FILTRO DE STATUS */}
+             <div className="relative">
+                 <select value={filterStatus} onChange={(e: any) => setFilterStatus(e.target.value)} className="appearance-none bg-white pl-4 pr-8 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-slate-900/10 cursor-pointer">
                      <option value="Todos">Toda a Base</option>
                      <option value="Ativos">Somente Ativos (Em Dia)</option>
                      <option value="Inadimplentes">Inadimplentes</option>
                      <option value="Acordo">Em Acordo</option>
                      <option value="Quitados">Quitados</option>
                  </select>
-                 <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16}/>
+                 <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16}/>
              </div>
+
              {selectedIds.length > 0 && (
                  <button onClick={handleExportExcel} className="flex items-center gap-2 bg-[#1E293B] text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-800 transition-colors shadow-lg animate-in fade-in zoom-in">
                      <Download size={18} /> Exportar ({selectedIds.length})
