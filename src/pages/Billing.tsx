@@ -107,7 +107,12 @@ const sendWhatsappApi = async (
 };
 
 const Billing = () => {
-  const [loanFlowStep, setLoanFlowStep] = useState<LoanFlowStep>('closed'); 
+  // 🚀 LIMPADOR DE ACENTOS E CARACTERES ESPECIAIS
+  const normalizeString = (str: string) => {
+      return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  };
+
+  const [loanFlowStep, setLoanFlowStep] = useState<LoanFlowStep>('closed');
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isAgreementModalOpen, setIsAgreementModalOpen] = useState(false);
@@ -701,13 +706,14 @@ const Billing = () => {
     const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
     
     const dueToday = loans.filter(l => {
-       const dStr = l.nextDue.split('T')[0];
+       // 🚀 O alerta do dia agora puxa os clientes pelas FATIAS também
+       const dStr = getDisplayNextDue(l);
        return dStr === todayStr && l.status !== 'Pago' && l.status !== 'Quitado';
     });
     setTodaysLoans(dueToday);
 
     const targetStr = collectionDate;
-    const list = loans.filter(l => l.nextDue.split('T')[0] === targetStr && l.status !== 'Pago' && l.status !== 'Quitado');
+    const list = loans.filter(l => getDisplayNextDue(l) === targetStr && l.status !== 'Pago' && l.status !== 'Quitado');
     setCollectionLoans(list);
 
     const totalOverdue = loans.reduce((acc, l) => {
@@ -854,17 +860,20 @@ const Billing = () => {
       setSelectedIds([]);
   }, [searchTerm, statusFilter, filterStart, filterEnd, sortOrder]);
   
-  // 🚀 BUSCA INTELIGENTE DO RODRIGO: Prefixo primeiro, alfabético depois (mantendo os filtros de data/status)
+  // 🚀 BUSCA INTELIGENTE DO RODRIGO: Sem acentos, prefixo primeiro, alfabético depois.
   const filteredLoans = useMemo(() => {
-      const searchLower = searchTerm.toLowerCase();
+      const searchLower = normalizeString(searchTerm);
       
       const filtered = loans.filter(l => {
-        const matchesSearch = (l.client || '').toLowerCase().includes(searchLower) || (l.id || '').toLowerCase().includes(searchLower);
+        const cNameNorm = normalizeString(l.client || '');
+        const matchesSearch = cNameNorm.includes(searchLower) || (l.id || '').toLowerCase().includes(searchLower);
         const realStatus = getLoanRealStatus(l);
         let matchesStatus = true;
+        
         if (statusFilter !== 'Todos') {
             if (statusFilter !== 'PagosNoPeriodo') matchesStatus = realStatus === statusFilter;
         }
+        
         let matchesDate = true;
         if (filterStart && filterEnd) {
             if (statusFilter === 'PagosNoPeriodo') {
@@ -875,7 +884,8 @@ const Billing = () => {
                     return hDate >= filterStart && hDate <= filterEnd;
                 });
             } else {
-                const dueStr = l.nextDue.split('T')[0];
+                // 🚀 Filtro de data agora usa a data da fatia exibida e não só a data base
+                const dueStr = getDisplayNextDue(l);
                 matchesDate = dueStr >= filterStart && dueStr <= filterEnd;
             }
         } else if (statusFilter === 'PagosNoPeriodo') {
@@ -885,10 +895,9 @@ const Billing = () => {
       });
 
       return filtered.sort((a, b) => {
-          // 1. Se HOUVER busca por texto, aplica a inteligência do Rodrigo (Prefixo > Alfabético)
           if (searchTerm) {
-              const aClient = (a.client || '').toLowerCase();
-              const bClient = (b.client || '').toLowerCase();
+              const aClient = normalizeString(a.client || '');
+              const bClient = normalizeString(b.client || '');
               const aStarts = aClient.startsWith(searchLower);
               const bStarts = bClient.startsWith(searchLower);
               
@@ -897,7 +906,6 @@ const Billing = () => {
               return aClient.localeCompare(bClient);
           }
           
-          // 2. Se NÃO houver busca por texto, mantém a ordem por data padrão
           const timeA = (a.history && a.history.length > 0 && a.history[0].registeredAt) ? new Date(a.history[0].registeredAt).getTime() : new Date(a.startDate).getTime();
           const timeB = (b.history && b.history.length > 0 && b.history[0].registeredAt) ? new Date(b.history[0].registeredAt).getTime() : new Date(b.startDate).getTime();
           
@@ -1752,29 +1760,76 @@ const handleFinalSave = async (e: React.FormEvent) => {
                              <p className="text-slate-400 text-xs mt-1">Nenhum vencimento pendente para esta data.</p>
                          </div>
                      ) : (
-                         <div className="space-y-3">
-                             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-3">Clientes para cobrar ({collectionLoans.length}):</p>
-                             {collectionLoans.map(l => (
-                                 <div key={l.id} className="flex justify-between items-center p-4 bg-white border border-slate-100 rounded-2xl hover:border-yellow-400 hover:shadow-md hover:shadow-yellow-400/10 transition-all cursor-pointer group" onClick={() => handleOpenPayment(l)}>
-                                     <div className="flex items-center gap-3">
-                                         <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center text-slate-600 font-black border border-slate-200 group-hover:bg-yellow-50 group-hover:text-yellow-600 group-hover:border-yellow-200 transition-colors">{l.client.charAt(0)}</div>
-                                         <div>
-                                             <p className="font-bold text-slate-800 text-sm group-hover:text-slate-900">{l.client}</p>
-                                             {getNickname(availableClients.find(c => c.name === l.client)?.observations) && (
-                                                <p className="text-[10px] font-bold text-blue-600 truncate max-w-[150px] mb-0.5">
-                                                  {getNickname(availableClients.find(c => c.name === l.client)?.observations)}
-                                                </p>
-                                             )}
-                                             <p className="text-[10px] text-slate-400 font-mono mt-0.5">ID: {l.id}</p>
+                         <div className="space-y-4">
+                             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Clientes para cobrar hoje ({collectionLoans.length} contratos):</p>
+                             {(() => {
+                                 // 🚀 AGRUPAMENTO DE CONTRATOS POR CLIENTE
+                                 const grouped: Record<string, { total: number, loans: Loan[] }> = {};
+                                 collectionLoans.forEach(l => {
+                                     if (!grouped[l.client]) grouped[l.client] = { total: 0, loans: [] };
+                                     
+                                     // Calcula valor da parcela/fatia exato para o dia
+                                     let amt = 0;
+                                     const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
+                                     if (validSlices.length > 0) {
+                                         const targetDay = Number(collectionDate.split('-')[2]);
+                                         const slice = validSlices.find((s:any) => Number(s.day) === targetDay);
+                                         if (slice) amt = parseVal(slice.amount);
+                                         else amt = parseVal(l.installmentValue); // Fallback
+                                     } else {
+                                         amt = l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue);
+                                     }
+                                     
+                                     grouped[l.client].total += amt;
+                                     grouped[l.client].loans.push(l);
+                                 });
+
+                                 return Object.entries(grouped).map(([clientName, data]) => (
+                                     <div key={clientName} className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm hover:border-yellow-400 transition-all">
+                                         <div className="p-4 bg-slate-50/50 flex justify-between items-center border-b border-slate-100">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center text-white font-black text-sm shadow-md">{clientName.charAt(0)}</div>
+                                                <div>
+                                                    <p className="font-bold text-slate-800">{clientName}</p>
+                                                    {getNickname(availableClients.find(c => c.name === clientName)?.observations) && (
+                                                        <p className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 truncate max-w-[150px]">
+                                                            {getNickname(availableClients.find(c => c.name === clientName)?.observations)}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-[10px] uppercase font-bold text-slate-400 mb-0.5">Total no Dia</p>
+                                                <p className="font-black text-slate-800 text-lg">R$ {formatMoney(data.total)}</p>
+                                            </div>
+                                         </div>
+                                         <div className="p-2 divide-y divide-slate-50">
+                                             {data.loans.map(l => {
+                                                 // Valor individual deste contrato na listagem
+                                                 let cAmt = 0;
+                                                 const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
+                                                 if (validSlices.length > 0) {
+                                                     const targetDay = Number(collectionDate.split('-')[2]);
+                                                     const slice = validSlices.find((s:any) => Number(s.day) === targetDay);
+                                                     if (slice) cAmt = parseVal(slice.amount);
+                                                     else cAmt = parseVal(l.installmentValue);
+                                                 } else {
+                                                     cAmt = l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue);
+                                                 }
+
+                                                 return (
+                                                 <div key={l.id} className="flex justify-between items-center p-3 hover:bg-yellow-50 rounded-xl cursor-pointer group transition-colors" onClick={() => handleOpenPayment(l)}>
+                                                     <div>
+                                                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest group-hover:text-yellow-700 transition-colors">Contrato: {l.id}</p>
+                                                         <p className="text-xs font-black text-slate-700 mt-0.5">R$ {formatMoney(cAmt)}</p>
+                                                     </div>
+                                                     <span className="text-[9px] uppercase font-bold bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg shadow-sm group-hover:bg-yellow-400 group-hover:text-yellow-900 group-hover:border-yellow-400 transition-all">Abrir Fatura ➔</span>
+                                                 </div>
+                                             )})}
                                          </div>
                                      </div>
-                                     <div className="text-right">
-                                          {/* 🚀 Ajustado para mostrar o valor total da fatia (ou parcela) corretamente */}
-                                          <p className="font-black text-slate-800 text-sm group-hover:text-yellow-600 transition-colors">R$ {formatMoney(l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue))}</p>
-                                          <span className="inline-block mt-1 text-[9px] text-slate-500 uppercase font-bold bg-slate-100 px-2 py-0.5 rounded-md group-hover:bg-yellow-100 group-hover:text-yellow-700 transition-colors">Cobrar ➔</span>
-                                      </div>
-                                 </div>
-                             ))}
+                                 ));
+                             })()}
                          </div>
                      )}
                  </div>
