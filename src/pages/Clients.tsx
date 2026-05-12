@@ -387,14 +387,19 @@ const Clients = () => {
     return { label: 'Quitado', color: 'green' };
   };
 
-  // 🚀 MOTOR DE MÉTRICAS CORRIGIDO E NO LOCAL CERTO: Lê a função acima sem dar tela branca
+  // 🚀 MOTOR DE MÉTRICAS UNIFICADO: Sincroniza a contagem dos Cards diretamente com os filtros visuais da tabela
   const globalMetrics = useMemo(() => {
       let totalLent = 0;
       let totalProfit = 0;
       let countAtivos = 0;
       let countQuitados = 0;
+      let validBaseCount = 0;
 
-      clients.forEach(c => {
+      // Filtra e valida os clientes ativos na base limpa
+      processedClients.forEach(c => {
+          if (!c.name) return; // Ignora cadastros fantasmas ou corrompidos
+          validBaseCount++;
+          
           const ds = getClientDebtStatus(c.name);
           if (ds.label.includes('Ativo') || ds.label === 'Inadimplente' || ds.label === 'Em Acordo') {
               countAtivos++;
@@ -411,11 +416,11 @@ const Clients = () => {
       return { 
           totalLent, 
           totalProfit, 
-          totalClients: clients.length, 
+          totalClients: validBaseCount, 
           activeClients: countAtivos,
           quitados: countQuitados
       };
-  }, [loans, clients]);
+  }, [loans, processedClients]);
 
   // 🚀 LIMPADOR DE ACENTOS E CARACTERES ESPECIAIS
   const normalizeString = (str: string) => {
@@ -438,7 +443,10 @@ const Clients = () => {
       let matchesStatus = true;
       if (filterStatus !== 'Todos') {
           const ds = getClientDebtStatus(c.name);
-          if (filterStatus === 'Ativos') matchesStatus = ds.label.includes('Ativo');
+          if (filterStatus === 'Ativos') {
+              // 🚀 AGORA INCLUI TUDO: Em Dia, Atrasados e Acordos
+              matchesStatus = ds.label.includes('Ativo') || ds.label === 'Inadimplente' || ds.label === 'Em Acordo';
+          }
           else if (filterStatus === 'Quitados') matchesStatus = ds.label === 'Quitado';
           else if (filterStatus === 'Inadimplentes') matchesStatus = ds.label === 'Inadimplente';
           else if (filterStatus === 'Acordo') matchesStatus = ds.label === 'Em Acordo';
@@ -656,9 +664,13 @@ const Clients = () => {
 
       {/* DASHBOARD INTELIGENTE */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+          <div onClick={() => { setFilterStatus('Todos'); }} className={`p-6 rounded-2xl border cursor-pointer hover:shadow-md transition-all flex items-center gap-4 ${filterStatus === 'Todos' ? 'bg-slate-50 border-slate-200 shadow-sm' : 'bg-white'}`}>
+              <div className="p-3 bg-slate-100 text-slate-600 rounded-xl"><Users size={24}/></div>
+              <div><p className="text-[10px] font-bold text-slate-500 uppercase">Base Válida</p><p className="text-2xl font-black text-slate-800">{globalMetrics.totalClients}</p></div>
+          </div>
           <div onClick={() => { setFilterStatus('Ativos'); }} className={`p-6 rounded-2xl border cursor-pointer hover:shadow-md transition-all flex items-center gap-4 ${filterStatus === 'Ativos' ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-white'}`}>
               <div className="p-3 bg-blue-100 text-blue-600 rounded-xl"><Activity size={24}/></div>
-              <div><p className="text-[10px] font-bold text-blue-600 uppercase">Contratos Ativos</p><p className="text-2xl font-black text-slate-800">{globalMetrics.activeClients}</p></div>
+              <div><p className="text-[10px] font-bold text-blue-600 uppercase">Clientes Ativos</p><p className="text-2xl font-black text-slate-800">{globalMetrics.activeClients}</p></div>
           </div>
           <div onClick={() => { setFilterStatus('Quitados'); }} className={`p-6 rounded-2xl border cursor-pointer hover:shadow-md transition-all flex items-center gap-4 ${filterStatus === 'Quitados' ? 'bg-green-50 border-green-200 shadow-sm' : 'bg-white'}`}>
               <div className="p-3 bg-green-100 text-green-600 rounded-xl"><CheckCircle size={24}/></div>
@@ -1174,8 +1186,11 @@ const Clients = () => {
               {/* --- CASO 3 e 4: BASE e ATIVOS (LISTA DE CLIENTES) --- */}
               {(globalMetricModal === 'base' || globalMetricModal === 'ativos') && (
                   processedClients.filter(c => {
+                      if (!c.name) return false; 
+                      const ds = getClientDebtStatus(c.name);
                       if (globalMetricModal === 'ativos') {
-                          return loans.some(l => l.client === c.name && l.status !== 'Pago' && l.status !== 'Quitado');
+                          // 🚀 Sincronizado com o Card: Mostra inadimplentes e acordos aqui também
+                          return ds.label.includes('Ativo') || ds.label === 'Inadimplente' || ds.label === 'Em Acordo';
                       }
                       return true;
                   }).map(c => (
