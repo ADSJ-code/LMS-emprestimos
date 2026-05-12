@@ -187,22 +187,7 @@ const Clients = () => {
       })).reverse(); 
   }, [clients]);
 
-  const globalMetrics = useMemo(() => {
-      let totalLent = 0;
-      let totalProfit = 0;
-      const activeClientsSet = new Set();
-      loans.forEach(l => {
-          totalLent += Number(l.amount) || 0;
-          totalProfit += Number(l.totalPaidInterest) || 0;
-          if (l.status !== 'Pago' && l.status !== 'Quitado') activeClientsSet.add(l.client);
-      });
-      return { 
-          totalLent, 
-          totalProfit, 
-          totalClients: clients.length, 
-          activeClients: activeClientsSet.size 
-      };
-  }, [loans, clients]);
+  // 🚀 globalMetrics foi movido para baixo (após o getClientDebtStatus) para evitar tela branca (Temporal Dead Zone)
 
   // 🚀 NOVO MOTOR: Agrupamento de Pagamentos Reais Executados por Mês/Ano
   const monthlyData = useMemo(() => {
@@ -401,6 +386,36 @@ const Clients = () => {
     if (clientLoans.some(l => l.status !== 'Pago' && l.status !== 'Quitado')) return { label: 'Em Dia (Ativo)', color: 'blue' };
     return { label: 'Quitado', color: 'green' };
   };
+
+  // 🚀 MOTOR DE MÉTRICAS CORRIGIDO E NO LOCAL CERTO: Lê a função acima sem dar tela branca
+  const globalMetrics = useMemo(() => {
+      let totalLent = 0;
+      let totalProfit = 0;
+      let countAtivos = 0;
+      let countQuitados = 0;
+
+      clients.forEach(c => {
+          const ds = getClientDebtStatus(c.name);
+          if (ds.label.includes('Ativo') || ds.label === 'Inadimplente' || ds.label === 'Em Acordo') {
+              countAtivos++;
+          } else if (ds.label === 'Quitado') {
+              countQuitados++;
+          }
+      });
+
+      loans.forEach(l => {
+          totalLent += Number(l.amount) || 0;
+          totalProfit += Number(l.totalPaidInterest) || 0;
+      });
+
+      return { 
+          totalLent, 
+          totalProfit, 
+          totalClients: clients.length, 
+          activeClients: countAtivos,
+          quitados: countQuitados
+      };
+  }, [loans, clients]);
 
   // 🚀 LIMPADOR DE ACENTOS E CARACTERES ESPECIAIS
   const normalizeString = (str: string) => {
@@ -647,7 +662,10 @@ const Clients = () => {
           </div>
           <div onClick={() => { setFilterStatus('Quitados'); }} className={`p-6 rounded-2xl border cursor-pointer hover:shadow-md transition-all flex items-center gap-4 ${filterStatus === 'Quitados' ? 'bg-green-50 border-green-200 shadow-sm' : 'bg-white'}`}>
               <div className="p-3 bg-green-100 text-green-600 rounded-xl"><CheckCircle size={24}/></div>
-              <div><p className="text-[10px] font-bold text-green-600 uppercase">Clientes Quitados</p><p className="text-2xl font-black text-slate-800">{globalMetrics.totalClients - globalMetrics.activeClients}</p></div>
+              <div>
+                  <p className="text-[10px] font-bold text-green-600 uppercase">Clientes Quitados</p>
+                  <p className="text-2xl font-black text-slate-800">{globalMetrics.quitados}</p>
+              </div>
           </div>
           <div onClick={() => setGlobalMetricModal('emprestado')} className="bg-white p-6 rounded-2xl border cursor-pointer hover:shadow-md transition-all flex items-center gap-4">
               <div className="p-3 bg-orange-50 text-orange-600 rounded-xl"><DollarSign size={24}/></div>
