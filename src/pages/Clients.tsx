@@ -664,13 +664,12 @@ const Clients = () => {
 
       {/* DASHBOARD INTELIGENTE */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-          <div onClick={() => { setFilterStatus('Todos'); }} className={`p-6 rounded-2xl border cursor-pointer hover:shadow-md transition-all flex items-center gap-4 ${filterStatus === 'Todos' ? 'bg-slate-50 border-slate-200 shadow-sm' : 'bg-white'}`}>
-              <div className="p-3 bg-slate-100 text-slate-600 rounded-xl"><Users size={24}/></div>
-              <div><p className="text-[10px] font-bold text-slate-500 uppercase">Base Válida</p><p className="text-2xl font-black text-slate-800">{globalMetrics.totalClients}</p></div>
-          </div>
           <div onClick={() => { setFilterStatus('Ativos'); }} className={`p-6 rounded-2xl border cursor-pointer hover:shadow-md transition-all flex items-center gap-4 ${filterStatus === 'Ativos' ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-white'}`}>
               <div className="p-3 bg-blue-100 text-blue-600 rounded-xl"><Activity size={24}/></div>
-              <div><p className="text-[10px] font-bold text-blue-600 uppercase">Clientes Ativos</p><p className="text-2xl font-black text-slate-800">{globalMetrics.activeClients}</p></div>
+              <div>
+                  <p className="text-[10px] font-bold text-blue-600 uppercase">Clientes Ativos</p>
+                  <p className="text-2xl font-black text-slate-800">{globalMetrics.activeClients}</p>
+              </div>
           </div>
           <div onClick={() => { setFilterStatus('Quitados'); }} className={`p-6 rounded-2xl border cursor-pointer hover:shadow-md transition-all flex items-center gap-4 ${filterStatus === 'Quitados' ? 'bg-green-50 border-green-200 shadow-sm' : 'bg-white'}`}>
               <div className="p-3 bg-green-100 text-green-600 rounded-xl"><CheckCircle size={24}/></div>
@@ -681,11 +680,17 @@ const Clients = () => {
           </div>
           <div onClick={() => setGlobalMetricModal('emprestado')} className="bg-white p-6 rounded-2xl border cursor-pointer hover:shadow-md transition-all flex items-center gap-4">
               <div className="p-3 bg-orange-50 text-orange-600 rounded-xl"><DollarSign size={24}/></div>
-              <div><p className="text-[10px] font-bold text-slate-400 uppercase">Emprestado</p><p className="text-xl font-black text-slate-800">R$ {formatMoney(globalMetrics.totalLent)}</p></div>
+              <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase">Emprestado</p>
+                  <p className="text-xl font-black text-slate-800">R$ {formatMoney(globalMetrics.totalLent)}</p>
+              </div>
           </div>
           <div onClick={() => setGlobalMetricModal('lucro')} className="bg-white p-6 rounded-2xl border cursor-pointer hover:shadow-md transition-all flex items-center gap-4 text-green-600">
               <div className="p-3 bg-green-50 text-green-700 rounded-xl"><TrendingUp size={24}/></div>
-              <div><p className="text-[10px] font-bold text-slate-400 uppercase">Lucro</p><p className="text-xl font-black">R$ {formatMoney(globalMetrics.totalProfit)}</p></div>
+              <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase">Lucro</p>
+                  <p className="text-xl font-black">R$ {formatMoney(globalMetrics.totalProfit)}</p>
+              </div>
           </div>
       </div>
 
