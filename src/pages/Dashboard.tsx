@@ -428,6 +428,25 @@ const Dashboard = () => {
       
       setFilteredLoansContext(filteredContext);
       
+      // 🚀 INÍCIO DA CORREÇÃO: Sincronização exata da contagem com a aba de Clientes
+      let validBaseCountContext = 0;
+      let activeClientsCount = 0;
+
+      cleanClients.forEach(c => {
+          if (!c.name) return; // Ignora cadastros fantasmas ou corrompidos
+          validBaseCountContext++;
+          
+          // Verifica se este cliente possui algum contrato ativo (não pago/quitado)
+          const hasActiveLoan = safeLoans.some(l => 
+              l.client === c.name && l.status !== 'Pago' && l.status !== 'Quitado'
+          );
+
+          if (hasActiveLoan) {
+              activeClientsCount++;
+          }
+      });
+      // 🚀 FIM DA CORREÇÃO
+      
       setMetrics({
         capitalNaRua: { all: round(capAcc.all), low: round(capAcc.low), mid: round(capAcc.mid), high: round(capAcc.high) },        
         lucroProjetado: { all: round(profAcc.all), low: round(profAcc.low), mid: round(profAcc.mid), high: round(profAcc.high) },
@@ -435,8 +454,8 @@ const Dashboard = () => {
         contratosAtivosFiltro: uniqueMatchedContracts.size,
         contratosAtivosGlobais: totalGloballyActive,
         totalContratosLancados: safeLoans.length,
-        totalClientesCadastrados: cleanClients.length, // Agora a contagem só considera cadastros sem bloqueio
-        clientesComDivida: activeDebtors.size,
+        totalClientesCadastrados: validBaseCountContext, // Espelha perfeitamente a contagem limpa da aba Clientes
+        clientesComDivida: activeClientsCount, // Sincronizado estritamente com os clientes válidos da base
         taxas: { 
             lowCap: round(capAcc.low), midCap: round(capAcc.mid), highCap: round(capAcc.high), 
             lowProf: round(profAcc.low), midProf: round(profAcc.mid), highProf: round(profAcc.high) 
