@@ -413,6 +413,11 @@ const Billing = () => {
 
   // 🚀 NOVA FUNÇÃO: Descobre qual a data da próxima fatia real que o cliente deve pagar
   const getDisplayNextDue = (loan: any) => {
+      // 🚀 FIX: Se for acordo, a nova data combinada anula qualquer fatia antiga
+      if (loan.status === 'Acordo') {
+          return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
+      }
+
       const validSlices = (loan.multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
       
       if (validSlices.length > 0) {
@@ -447,7 +452,6 @@ const Billing = () => {
   // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
     if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
-    if (loan.status === 'Acordo') return 'Acordo'; 
     const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
     if (balance <= 0.10) return 'Quitado'; 
     
@@ -455,6 +459,12 @@ const Billing = () => {
     today.setHours(0,0,0,0);
     
     const dueLocalDate = parseLocalDate(loan.nextDue);
+
+    // 🚀 FIX: Acordos perdem a blindagem e viram 'Atrasado' se o dia combinado passar
+    if (loan.status === 'Acordo') {
+        if (dueLocalDate < today) return 'Atrasado';
+        return 'Acordo';
+    }
 
     // 🚀 REMOVIDA A TRAVA DE R$ 5,00: Agora se tem fatia, o sistema obedece a fatia.
     const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
@@ -720,7 +730,8 @@ const Billing = () => {
       if (l.status === 'Pago' || l.status === 'Quitado') return acc;
       const realStatus = getLoanRealStatus(l);
       if (realStatus === 'Atrasado') {
-          const baseVal = l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : parseVal(l.installmentValue);
+          // 🚀 FIX: Usa o breakdown que já injeta o valor extra do acordo em todas as modalidades
+          const baseVal = getSyncedBreakdown(l).total;
           
           const val = calculateOverdueValue(
               baseVal, 
@@ -927,7 +938,8 @@ const Billing = () => {
               const breakdown = getSyncedBreakdown(loan);
               
               // SOMA DA PARCELA FIXA
-              installmentSum += isSimple ? breakdown.total : Number(loan.installmentValue || 0);
+              // 🚀 FIX: O breakdown.total já processa PRICE, SIMPLE e Acordos extras
+              installmentSum += breakdown.total; 
               
               // SALDO CAPITAL A RECEBER EXATO DO PRINCIPAL (Ignora filtro de data para saldo total da carteira)
               capSum += Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
@@ -1771,13 +1783,13 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                      // Calcula valor da parcela/fatia exato para o dia
                                      let amt = 0;
                                      const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
-                                     if (validSlices.length > 0) {
+                                     if (validSlices.length > 0 && l.status !== 'Acordo') {
                                          const targetDay = Number(collectionDate.split('-')[2]);
                                          const slice = validSlices.find((s:any) => Number(s.day) === targetDay);
                                          if (slice) amt = parseVal(slice.amount);
-                                         else amt = parseVal(l.installmentValue); // Fallback
+                                         else amt = getSyncedBreakdown(l).total; // Fallback seguro
                                      } else {
-                                         amt = l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue);
+                                         amt = getSyncedBreakdown(l).total; // 🚀 FIX: Cobre PRICE, SIMPLE e soma o Acordo Extra
                                      }
                                      
                                      grouped[l.client].total += amt;
@@ -1808,13 +1820,13 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                                  // Valor individual deste contrato na listagem
                                                  let cAmt = 0;
                                                  const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
-                                                 if (validSlices.length > 0) {
+                                                 if (validSlices.length > 0 && l.status !== 'Acordo') {
                                                      const targetDay = Number(collectionDate.split('-')[2]);
                                                      const slice = validSlices.find((s:any) => Number(s.day) === targetDay);
                                                      if (slice) cAmt = parseVal(slice.amount);
-                                                     else cAmt = parseVal(l.installmentValue);
+                                                     else cAmt = getSyncedBreakdown(l).total;
                                                  } else {
-                                                     cAmt = l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue);
+                                                     cAmt = getSyncedBreakdown(l).total; // 🚀 FIX: Cobre PRICE, SIMPLE e Acordo Extra
                                                  }
 
                                                  return (

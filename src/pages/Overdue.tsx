@@ -149,7 +149,6 @@ const Overdue = () => {
 
   const getLoanRealStatus = (loan: Loan) => {
       if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
-      if (loan.status === 'Acordo') return 'Acordo';
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
       if (balance <= 0.10) return 'Quitado'; 
       
@@ -157,6 +156,12 @@ const Overdue = () => {
       today.setHours(0,0,0,0);
       
       const dueLocalDate = parseLocalDate(loan.nextDue);
+
+      // 🚀 FIX: Acordos perdem a blindagem e viram 'Atrasado' se o dia combinado passar
+      if (loan.status === 'Acordo') {
+          if (dueLocalDate < today) return 'Atrasado';
+          return 'Acordo';
+      }
 
       const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
@@ -195,7 +200,13 @@ const Overdue = () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // 🚀 FIX: Se for acordo, a nova data combinada anula qualquer fatia antiga
     let tempDue = parseLocalDate(loan.nextDue);
+    if (loan.status === 'Acordo') {
+        const isoDue = loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
+        tempDue = parseLocalDate(isoDue);
+    }
+
     let totalOriginal = 0;
     let totalUpdated = 0;
     let missedInstallments: any[] = [];
@@ -204,7 +215,8 @@ const Overdue = () => {
     const realStatus = getLoanRealStatus(loan);
     const breakdown = getSyncedBreakdown(loan);
 
-    const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+    // 🚀 FIX: Fatias são ignoradas se o status atual for Acordo (vale a data do acordo)
+    const validSlices = loan.status === 'Acordo' ? [] : ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
     if (validSlices.length > 0) {
         const currentMonth = tempDue.getMonth();
@@ -240,7 +252,8 @@ const Overdue = () => {
         return { totalOriginal, totalUpdated, missedInstallments };
     }
 
-    const baseAmount = loan.interestType === 'SIMPLE' ? breakdown.total : (realStatus === "Acordo" ? parseVal(loan.installmentValue) + parseVal(loan.agreementValue) : parseVal(loan.installmentValue));
+    // 🚀 FIX: O breakdown.total já processa PRICE, SIMPLE e soma Acordos Extras automaticamente
+    const baseAmount = breakdown.total; 
     const remainingInstallments = loan.interestType === "SIMPLE" ? 999 : parseVal(loan.installments) || 1;
     const pad = (n: number) => n.toString().padStart(2, '0');
 
@@ -264,7 +277,8 @@ const Overdue = () => {
       totalOriginal += baseAmount;
       totalUpdated += updatedVal;
 
-      if (realStatus === "Acordo") break;
+      // 🚀 FIX: Se for um Acordo, o atraso é apenas de 1 parcela (o valor total do acordo), então quebra o loop
+      if (loan.status === "Acordo") break;
 
       count++;
       if (count >= remainingInstallments) break;

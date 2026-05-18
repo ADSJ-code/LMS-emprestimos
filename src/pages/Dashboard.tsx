@@ -146,6 +146,11 @@ const Dashboard = () => {
   };
 
   const getDisplayNextDue = (loan: any) => {
+      // 🚀 FIX: Se for acordo, a nova data combinada anula qualquer fatia antiga
+      if (loan.status === 'Acordo') {
+          return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
+      }
+
       const validSlices = (loan.multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
       if (validSlices.length > 0) {
           const baseDue = parseLocalDate(loan.nextDue);
@@ -174,7 +179,6 @@ const Dashboard = () => {
 
   const getLoanRealStatus = (loan: Loan) => {
       if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
-      if (loan.status === 'Acordo') return 'Acordo';
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
       if (balance <= 0.10) return 'Quitado'; 
       
@@ -184,6 +188,12 @@ const Dashboard = () => {
       const dueStr = loan.nextDue.split('T')[0];
 
       const dueLocalDate = parseLocalDate(loan.nextDue);
+
+      // 🚀 FIX: Acordos perdem a blindagem e viram 'Atrasado' se o dia combinado passar
+      if (loan.status === 'Acordo') {
+          if (dueLocalDate < today) return 'Atrasado';
+          return 'Acordo';
+      }
 
       const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
@@ -262,7 +272,7 @@ const Dashboard = () => {
           return { totalOverdue, missedCount };
       }
 
-      const baseAmount = loan.interestType === 'SIMPLE' ? breakdown.total : (realStatus === 'Acordo' ? parseVal(loan.installmentValue) + parseVal(loan.agreementValue) : parseVal(loan.installmentValue));
+      const baseAmount = breakdown.total; // 🚀 FIX: O breakdown.total já processa PRICE, SIMPLE e soma Acordos Extras automaticamente
       
       const remainingInstallments = loan.interestType === 'SIMPLE' ? 1 : (parseVal(loan.installments) || 1);
       const pad = (n: number) => n.toString().padStart(2, '0');
@@ -272,7 +282,7 @@ const Dashboard = () => {
           totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', parseVal(loan.fineRate) || 0, parseVal(loan.moraInterestRate) || 0, parseVal(loan.amount));
           missedCount++;
           
-          if (realStatus === 'Acordo') break; 
+          if (loan.status === 'Acordo') break;
           
           count++;
           if (count >= remainingInstallments) break; 
@@ -373,12 +383,12 @@ const Dashboard = () => {
                 const isOverdueInstallment = currentDue < today || (i === 0 && realStatus === 'Atrasado');
 
                 if (isOverdueInstallment) {
-                    const baseAmount = (i === 0 && realStatus === 'Acordo') ? loan.installmentValue + (loan.agreementValue || 0) : loan.installmentValue;
-                    const dateStr = `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`;
-                    if (i === 0) {
-                        overToAdd = calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
-                    }
-                } else {
+                  const baseAmount = (i === 0 && loan.status === 'Acordo') ? breakdown.total : loan.installmentValue;
+                  const dateStr = `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`;
+                  if (i === 0) {
+                      overToAdd = calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+                  }
+              } else {
                     capToAdd += (loan.interestType === 'SIMPLE' ? 0 : breakdown.capital);
                     profToAdd += breakdown.interest;
                     slices.push({ date: currentDue.toISOString(), capital: breakdown.capital, interest: breakdown.interest, index: i });
@@ -487,7 +497,7 @@ const Dashboard = () => {
       const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
       
       const dueToday = allLoans.filter(l => {
-         const dStr = l.nextDue.split('T')[0];
+         const dStr = getDisplayNextDue(l); // 🚀 FIX: Agora o pop-up lê fatias e datas renegociadas
          return dStr === todayStr && l.status !== 'Pago' && l.status !== 'Quitado';
       });
       setTodaysLoans(dueToday);
@@ -538,7 +548,7 @@ const Dashboard = () => {
       if (!maturityDate) return [];
       return allLoans.filter(l => {
           if (l.status === 'Pago' || l.status === 'Quitado') return false;
-          return l.nextDue.split('T')[0] === maturityDate;
+          return getDisplayNextDue(l) === maturityDate; // 🚀 FIX: Aplica fatias e acordos na busca do calendário
       });
   }, [allLoans, maturityDate]);
 
@@ -719,13 +729,14 @@ const Dashboard = () => {
                                      if (!grouped[l.client]) grouped[l.client] = { total: 0, loans: [] };
                                      let amt = 0;
                                      const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
-                                     if (validSlices.length > 0) {
+                                     if (validSlices.length > 0 && l.status !== 'Acordo') {
                                          const today = new Date();
                                          const targetDay = today.getDate();
                                          const slice = validSlices.find((s:any) => Number(s.day) === targetDay);
-                                         amt = slice ? parseVal(slice.amount) : parseVal(l.installmentValue);
+                                         if (slice) amt = parseVal(slice.amount);
+                                         else amt = getSyncedBreakdown(l).total;
                                      } else {
-                                         amt = l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue);
+                                         amt = getSyncedBreakdown(l).total; // 🚀 FIX: Cobre PRICE, SIMPLE e soma o Acordo Extra
                                      }
                                      grouped[l.client].total += amt;
                                      grouped[l.client].loans.push(l);
@@ -751,15 +762,28 @@ const Dashboard = () => {
                                             </div>
                                          </div>
                                          <div className="p-1 divide-y divide-slate-50">
-                                             {data.loans.map(l => (
+                                             {data.loans.map(l => {
+                                                 let cAmt = 0;
+                                                 const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
+                                                 if (validSlices.length > 0 && l.status !== 'Acordo') {
+                                                     const today = new Date();
+                                                     const targetDay = today.getDate();
+                                                     const slice = validSlices.find((s:any) => Number(s.day) === targetDay);
+                                                     if (slice) cAmt = parseVal(slice.amount);
+                                                     else cAmt = getSyncedBreakdown(l).total;
+                                                 } else {
+                                                     cAmt = getSyncedBreakdown(l).total;
+                                                 }
+
+                                                 return (
                                                  <div key={l.id} className="flex justify-between items-center p-3 hover:bg-yellow-50 rounded-xl cursor-pointer group transition-colors" onClick={() => goToBillingWithSearch(l.client)}>
                                                      <div>
                                                          <p className="text-[9px] font-bold text-slate-500 uppercase">Contrato: {l.id}</p>
-                                                         <p className="text-xs font-black text-slate-700">R$ {formatMoney(l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue))}</p>
+                                                         <p className="text-xs font-black text-slate-700">R$ {formatMoney(cAmt)}</p>
                                                      </div>
                                                      <span className="text-[8px] uppercase font-bold bg-white border border-slate-200 text-slate-500 px-2 py-1 rounded group-hover:bg-yellow-400 group-hover:text-yellow-900 group-hover:border-yellow-400 transition-all">Cobrar ➔</span>
                                                  </div>
-                                             ))}
+                                             )})}
                                          </div>
                                      </div>
                                  ));
@@ -821,12 +845,13 @@ const Dashboard = () => {
                                      
                                      let amt = 0;
                                      const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
-                                     if (validSlices.length > 0) {
+                                     if (validSlices.length > 0 && l.status !== 'Acordo') {
                                          const targetDay = Number(maturityDate.split('-')[2]);
                                          const slice = validSlices.find((s:any) => Number(s.day) === targetDay);
-                                         amt = slice ? parseVal(slice.amount) : parseVal(l.installmentValue);
+                                         if (slice) amt = parseVal(slice.amount);
+                                         else amt = getSyncedBreakdown(l).total;
                                      } else {
-                                         amt = l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue);
+                                         amt = getSyncedBreakdown(l).total; // 🚀 FIX: Cobre PRICE, SIMPLE e soma o Acordo Extra
                                      }
                                      
                                      grouped[l.client].total += amt;
@@ -853,15 +878,27 @@ const Dashboard = () => {
                                             </div>
                                          </div>
                                          <div className="p-1 divide-y divide-slate-50">
-                                             {data.loans.map(l => (
+                                             {data.loans.map(l => {
+                                                 let cAmt = 0;
+                                                 const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
+                                                 if (validSlices.length > 0 && l.status !== 'Acordo') {
+                                                     const targetDay = Number(maturityDate.split('-')[2]);
+                                                     const slice = validSlices.find((s:any) => Number(s.day) === targetDay);
+                                                     if (slice) cAmt = parseVal(slice.amount);
+                                                     else cAmt = getSyncedBreakdown(l).total;
+                                                 } else {
+                                                     cAmt = getSyncedBreakdown(l).total;
+                                                 }
+
+                                                 return (
                                                  <div key={l.id} className="flex justify-between items-center p-3 hover:bg-orange-50 rounded-xl cursor-pointer group transition-colors" onClick={() => goToBillingWithSearch(l.client)}>
                                                      <div>
                                                          <p className="text-[9px] font-bold text-slate-500 uppercase">Contrato: {l.id}</p>
-                                                         <p className="text-xs font-black text-slate-700">R$ {formatMoney(l.interestType === 'SIMPLE' ? getSyncedBreakdown(l).total : Number(l.installmentValue))}</p>
+                                                         <p className="text-xs font-black text-slate-700">R$ {formatMoney(cAmt)}</p>
                                                      </div>
                                                      <span className="text-[8px] uppercase font-bold bg-white border border-slate-200 text-slate-500 px-2 py-1 rounded group-hover:bg-orange-400 group-hover:text-orange-900 group-hover:border-orange-400 transition-all">Ver Ficha ➔</span>
                                                  </div>
-                                             ))}
+                                             )})}
                                          </div>
                                      </div>
                                  ));

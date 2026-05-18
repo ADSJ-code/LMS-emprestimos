@@ -55,6 +55,11 @@ const sendWhatsappApi = async (
 };
 
 const Overdue = () => {
+  // 🚀 LIMPADOR DE ACENTOS E CARACTERES ESPECIAIS
+  const normalizeString = (str: string) => {
+      return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  };
+
   // 🚀 EXTRAÇÃO DE APELIDO: Limpa o JSON e mostra apenas a observação
   const getNickname = (obs?: string) => {
       if (!obs) return '';
@@ -485,17 +490,17 @@ const Overdue = () => {
     setMetrics({ totalOverdue: sumOverdue, recoveredToday: sumRecoveredToday, recoveredCapital: sumRecoveredCapital, recoveredInterest: sumRecoveredInterest, efficiency: eff, count: overdueCount });
   }, [loans]);
 
-  // 🚀 BUSCA INTELIGENTE DO RODRIGO: Prefixo primeiro, alfabético depois.
+  // 🚀 BUSCA INTELIGENTE DO RODRIGO: Sem acentos, prefixo primeiro, alfabético depois.
   const filteredOverdueWithSnowball = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const overdueList: LoanExtended[] = [];
 
     loans.forEach((l) => {
-      if (l.status === "Pago") return;
+      if (l.status === "Pago" || l.status === "Quitado") return;
       const realStatus = getLoanRealStatus(l);
       
-      // 🚨 RODRIGO PONTO 2: Apenas 'Atrasado' entra na Tabela
+      // 🚨 Apenas 'Atrasado' entra na Tabela
       const isOverdue = realStatus === "Atrasado";
 
       if (isOverdue) {
@@ -510,32 +515,29 @@ const Overdue = () => {
       }
     });
 
-    const searchLower = searchTerm.toLowerCase();
+    const searchLower = normalizeString(searchTerm);
     
-    // 1. Filtra a lista
-    const filteredList = overdueList.filter((l) => 
-        (l.client || "").toLowerCase().includes(searchLower) ||
-        (l.id || "").toLowerCase().includes(searchLower)
-    );
+    // 1. Filtra a lista ignorando acentos
+    const filteredList = overdueList.filter((l) => {
+        const cNameNorm = normalizeString(l.client || '');
+        return cNameNorm.includes(searchLower) || (l.id || "").toLowerCase().includes(searchLower);
+    });
 
     // 2. Ordena de forma inteligente
     return filteredList.sort((a, b) => {
         if (!searchTerm) {
-             // Sem busca: Ordena pelo maior valor da dívida (Bola de Neve) para chamar mais a atenção!
              return b.snowball.totalUpdated - a.snowball.totalUpdated;
         }
 
-        const aClient = (a.client || "").toLowerCase();
-        const bClient = (b.client || "").toLowerCase();
+        const aClient = normalizeString(a.client || "");
+        const bClient = normalizeString(b.client || "");
         
         const aStarts = aClient.startsWith(searchLower);
         const bStarts = bClient.startsWith(searchLower);
         
-        // Coloca quem COMEÇA com a letra no topo
         if (aStarts && !bStarts) return -1;
         if (!aStarts && bStarts) return 1;
         
-        // Desempate: Ordem Alfabética normal
         return aClient.localeCompare(bClient);
     });
   }, [loans, searchTerm]);

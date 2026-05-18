@@ -107,7 +107,12 @@ const Blacklist = () => {
     return Array.from(map.values());
   }, [blockedUsers, allClients]);
 
-  // 🚀 BUSCA INTELIGENTE DO RODRIGO: Letra inicial no topo, Letra no meio pro final.
+  // 🚀 LIMPADOR DE ACENTOS E CARACTERES ESPECIAIS
+  const normalizeString = (str: string) => {
+      return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  };
+
+  // 🚀 BUSCA INTELIGENTE DO RODRIGO: Sem acentos, Letra inicial no topo, Letra no meio pro final.
   const filteredUsers = useMemo(() => {
     let result = combinedData;
     
@@ -116,17 +121,18 @@ const Blacklist = () => {
       result = result.filter(u => u.isBlocked);
     } else {
       // Se ele digitar, varre a base global de todos os clientes
-      const searchLower = searchTerm.toLowerCase();
+      const searchLower = normalizeString(searchTerm);
       const searchNumbers = searchTerm.replace(/\D/g, '');
       
-      result = result.filter(u => 
-        (u.name || '').toLowerCase().includes(searchLower) || 
-        (searchNumbers && (u.cpf || '').replace(/\D/g, '').includes(searchNumbers))
-      );
+      result = result.filter(u => {
+        const uNameNorm = normalizeString(u.name || '');
+        return uNameNorm.includes(searchLower) || 
+               (searchNumbers && (u.cpf || '').replace(/\D/g, '').includes(searchNumbers));
+      });
       
       result.sort((a, b) => {
-        const aName = (a.name || '').toLowerCase();
-        const bName = (b.name || '').toLowerCase();
+        const aName = normalizeString(a.name || '');
+        const bName = normalizeString(b.name || '');
         const aStarts = aName.startsWith(searchLower);
         const bStarts = bName.startsWith(searchLower);
         
