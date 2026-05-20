@@ -148,7 +148,7 @@ const Overdue = () => {
   };
 
   const getLoanRealStatus = (loan: Loan) => {
-      if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
+      if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
       if (balance <= 0.10) return 'Quitado'; 
       
@@ -157,7 +157,6 @@ const Overdue = () => {
       
       const dueLocalDate = parseLocalDate(loan.nextDue);
 
-      // 🚀 FIX: Acordos perdem a blindagem e viram 'Atrasado' se o dia combinado passar
       if (loan.status === 'Acordo') {
           if (dueLocalDate < today) return 'Atrasado';
           return 'Acordo';
@@ -170,19 +169,24 @@ const Overdue = () => {
           const currentYear = dueLocalDate.getFullYear();
           let hasLateSlice = false;
 
-          for (const slice of validSlices) {
+          let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+              if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
+                  return acc + parseVal(h.amount);
+              }
+              return acc;
+          }, 0);
+
+          const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+
+          for (const slice of sortedSlices) {
+              const baseAmount = parseVal(slice.amount);
               const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
-              if (sliceDate < today) {
-                  const baseAmount = parseVal(slice.amount);
-                  const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
-                      const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-                      if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                          return acc + parseVal(h.amount);
-                      }
-                      return acc;
-                  }, 0);
-                  
-                  if (slicePaidAmount < (baseAmount - 0.05)) {
+              
+              if (totalPaidInCycle >= (baseAmount - 0.05)) {
+                  totalPaidInCycle -= baseAmount;
+              } else {
+                  if (sliceDate < today) {
                       hasLateSlice = true;
                       break;
                   }
@@ -511,7 +515,7 @@ const Overdue = () => {
     const overdueList: LoanExtended[] = [];
 
     loans.forEach((l) => {
-      if (l.status === "Pago" || l.status === "Quitado") return;
+      if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return;
       const realStatus = getLoanRealStatus(l);
       
       // 🚨 Apenas 'Atrasado' entra na Tabela

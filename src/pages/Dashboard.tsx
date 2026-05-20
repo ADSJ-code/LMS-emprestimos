@@ -145,30 +145,32 @@ const Dashboard = () => {
     return new Date(year, month - 1, day);
   };
 
+  // 🚀 NOVA FUNÇÃO: Descobre qual a data da próxima fatia real que o cliente deve pagar
   const getDisplayNextDue = (loan: any) => {
-      // 🚀 FIX: Se for acordo, a nova data combinada anula qualquer fatia antiga
-      if (loan.status === 'Acordo') {
-          return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
-      }
+      if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
+      if (loan.status === 'Acordo') return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
 
       const validSlices = (loan.multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+      
       if (validSlices.length > 0) {
           const baseDue = parseLocalDate(loan.nextDue);
           const currentMonth = baseDue.getMonth();
           const currentYear = baseDue.getFullYear();
           const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
           
+          let totalPaidInCycle = (loan.history || []).reduce((acc: any, h: any) => {
+              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+              if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
+                  return acc + parseVal(h.amount);
+              }
+              return acc;
+          }, 0);
+
           for (const slice of sortedSlices) {
               const baseAmount = parseVal(slice.amount);
-              const slicePaidAmount = (loan.history || []).reduce((acc: any, h: any) => {
-                  const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-                  if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                      return acc + parseVal(h.amount);
-                  }
-                  return acc;
-              }, 0);
-
-              if (slicePaidAmount < (baseAmount - 0.05)) {
+              if (totalPaidInCycle >= (baseAmount - 0.05)) {
+                  totalPaidInCycle -= baseAmount;
+              } else {
                   const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                   return sliceDate.toISOString().split('T')[0];
               }
@@ -177,8 +179,9 @@ const Dashboard = () => {
       return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
   };
 
+  // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
-      if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
+      if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
       if (balance <= 0.10) return 'Quitado'; 
       
@@ -189,7 +192,6 @@ const Dashboard = () => {
 
       const dueLocalDate = parseLocalDate(loan.nextDue);
 
-      // 🚀 FIX: Acordos perdem a blindagem e viram 'Atrasado' se o dia combinado passar
       if (loan.status === 'Acordo') {
           if (dueLocalDate < today) return 'Atrasado';
           return 'Acordo';
@@ -202,26 +204,30 @@ const Dashboard = () => {
           const currentYear = dueLocalDate.getFullYear();
           let hasLateSlice = false;
 
-          for (const slice of validSlices) {
+          let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+              if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
+                  return acc + parseVal(h.amount);
+              }
+              return acc;
+          }, 0);
+
+          const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+
+          for (const slice of sortedSlices) {
+              const baseAmount = parseVal(slice.amount);
               const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
-              if (sliceDate < today) {
-                  const baseAmount = parseVal(slice.amount);
-                  const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
-                      const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-                      if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                          return acc + parseVal(h.amount);
-                      }
-                      return acc;
-                  }, 0);
-                  
-                  if (slicePaidAmount < (baseAmount - 0.05)) {
+              
+              if (totalPaidInCycle >= (baseAmount - 0.05)) {
+                  totalPaidInCycle -= baseAmount;
+              } else {
+                  if (sliceDate < today) {
                       hasLateSlice = true;
                       break;
                   }
               }
           }
           if (hasLateSlice) return 'Atrasado';
-          // 🚀 CORREÇÃO: Se nenhuma fatia falhou, o contrato está Em Dia (ignora a data base travada)
           return 'Em Dia';
       }
 
@@ -357,7 +363,7 @@ const Dashboard = () => {
       const pad = (n: number) => n.toString().padStart(2, '0');
 
       safeLoans.forEach((loan: any) => {
-        const isPaid = loan.status === 'Pago' || loan.status === 'Quitado';
+        const isPaid = loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado';
         if (!isPaid) {
             totalGloballyActive++;
             activeDebtors.add(loan.client);
@@ -448,7 +454,7 @@ const Dashboard = () => {
           
           // Verifica se este cliente possui algum contrato ativo (não pago/quitado)
           const hasActiveLoan = safeLoans.some(l => 
-              l.client === c.name && l.status !== 'Pago' && l.status !== 'Quitado'
+              l.client === c.name && l.status?.toLowerCase() !== 'pago' && l.status?.toLowerCase() !== 'quitado'
           );
 
           if (hasActiveLoan) {
@@ -474,7 +480,7 @@ const Dashboard = () => {
 
       const activities = [...safeLoans].sort((a, b) => new Date(b.nextDue).getTime() - new Date(a.nextDue).getTime()).slice(0, 6).map((loan: any) => {
         const dueDate = parseLocalDate(loan.nextDue);
-        const isOverdue = dueDate < today && loan.status !== 'Pago' && loan.status !== 'Quitado';
+        const isOverdue = dueDate < today && loan.status?.toLowerCase() !== 'pago' && loan.status?.toLowerCase() !== 'quitado';
         return {
           id: loan.id, type: isOverdue ? 'atraso' : 'novo_contrato',
           text: isOverdue ? `Atraso: ${loan.client}` : `Pendente: ${loan.client}`,
@@ -498,7 +504,7 @@ const Dashboard = () => {
       
       const dueToday = allLoans.filter(l => {
          const dStr = getDisplayNextDue(l); // 🚀 FIX: Agora o pop-up lê fatias e datas renegociadas
-         return dStr === todayStr && l.status !== 'Pago' && l.status !== 'Quitado';
+         return dStr === todayStr && l.status?.toLowerCase() !== 'pago' && l.status?.toLowerCase() !== 'quitado';
       });
       setTodaysLoans(dueToday);
   }, [allLoans]);
@@ -547,7 +553,7 @@ const Dashboard = () => {
   const loansOnMaturityDate = useMemo(() => {
       if (!maturityDate) return [];
       return allLoans.filter(l => {
-          if (l.status === 'Pago' || l.status === 'Quitado') return false;
+          if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return false;
           return getDisplayNextDue(l) === maturityDate; // 🚀 FIX: Aplica fatias e acordos na busca do calendário
       });
   }, [allLoans, maturityDate]);
@@ -636,7 +642,7 @@ const Dashboard = () => {
       const map = new Map();
       
       allLoans.forEach(l => {
-          if (l.status === 'Pago' || l.status === 'Quitado') return;
+          if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return;
           if (!map.has(l.client)) map.set(l.client, { name: l.client, contracts: [], totalCapital: 0, totalProfit: 0 });
           const c = map.get(l.client);
           c.contracts.push(l);

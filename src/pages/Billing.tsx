@@ -413,10 +413,8 @@ const Billing = () => {
 
   // 🚀 NOVA FUNÇÃO: Descobre qual a data da próxima fatia real que o cliente deve pagar
   const getDisplayNextDue = (loan: any) => {
-      // 🚀 FIX: Se for acordo, a nova data combinada anula qualquer fatia antiga
-      if (loan.status === 'Acordo') {
-          return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
-      }
+      if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
+      if (loan.status === 'Acordo') return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
 
       const validSlices = (loan.multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
       
@@ -424,34 +422,32 @@ const Billing = () => {
           const baseDue = parseLocalDate(loan.nextDue);
           const currentMonth = baseDue.getMonth();
           const currentYear = baseDue.getFullYear();
-          // Ordena as fatias por dia (1, 5, 10...)
           const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
           
+          let totalPaidInCycle = (loan.history || []).reduce((acc: any, h: any) => {
+              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+              if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
+                  return acc + parseVal(h.amount);
+              }
+              return acc;
+          }, 0);
+
           for (const slice of sortedSlices) {
               const baseAmount = parseVal(slice.amount);
-              // Calcula quanto já foi pago desta fatia específica
-              const slicePaidAmount = (loan.history || []).reduce((acc: any, h: any) => {
-                  const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-                  if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                      return acc + parseVal(h.amount);
-                  }
-                  return acc;
-              }, 0);
-
-              // Se ainda não pagou a fatia, ela é o nosso "Próximo Vencimento"
-              if (slicePaidAmount < (baseAmount - 0.05)) {
+              if (totalPaidInCycle >= (baseAmount - 0.05)) {
+                  totalPaidInCycle -= baseAmount;
+              } else {
                   const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                   return sliceDate.toISOString().split('T')[0];
               }
           }
       }
-      // Fallback para a data de vencimento padrão se não houver fatias
       return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
   };
 
   // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
-    if (loan.status === 'Pago' || loan.status === 'Quitado') return 'Quitado'; 
+    if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
     const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
     if (balance <= 0.10) return 'Quitado'; 
     
@@ -460,13 +456,11 @@ const Billing = () => {
     
     const dueLocalDate = parseLocalDate(loan.nextDue);
 
-    // 🚀 FIX: Acordos perdem a blindagem e viram 'Atrasado' se o dia combinado passar
     if (loan.status === 'Acordo') {
         if (dueLocalDate < today) return 'Atrasado';
         return 'Acordo';
     }
 
-    // 🚀 REMOVIDA A TRAVA DE R$ 5,00: Agora se tem fatia, o sistema obedece a fatia.
     const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
     if (validSlices.length > 0) {
@@ -474,19 +468,24 @@ const Billing = () => {
         const currentYear = dueLocalDate.getFullYear();
         let hasLateSlice = false;
 
-        for (const slice of validSlices) {
+        let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+            const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+            if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
+                return acc + parseVal(h.amount);
+            }
+            return acc;
+        }, 0);
+
+        const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+
+        for (const slice of sortedSlices) {
+            const baseAmount = parseVal(slice.amount);
             const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
-            if (sliceDate < today) {
-                const baseAmount = parseVal(slice.amount);
-                const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
-                    const hDue = parseLocalDate(h.originalDueDate || h.date);
-                    if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                        return acc + parseVal(h.amount);
-                    }
-                    return acc;
-                }, 0);
-                
-                if (slicePaidAmount < (baseAmount - 0.05)) {
+            
+            if (totalPaidInCycle >= (baseAmount - 0.05)) {
+                totalPaidInCycle -= baseAmount;
+            } else {
+                if (sliceDate < today) {
                     hasLateSlice = true;
                     break;
                 }
@@ -499,7 +498,6 @@ const Billing = () => {
     if (dueLocalDate < today) return 'Atrasado';
     return 'Em Dia';
   };
-
   const getLastPaymentDate = (loan: Loan) => {
       if (!loan.history || loan.history.length === 0) return '-';
       const paymentsOnly = loan.history.filter(h => h.amount > 0 && !h.type.toLowerCase().includes('abertura'));
@@ -716,14 +714,13 @@ const Billing = () => {
     const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
     
     const dueToday = loans.filter(l => {
-       // 🚀 O alerta do dia agora puxa os clientes pelas FATIAS também
        const dStr = getDisplayNextDue(l);
-       return dStr === todayStr && l.status !== 'Pago' && l.status !== 'Quitado';
+       return dStr === todayStr && l.status?.toLowerCase() !== 'pago' && l.status?.toLowerCase() !== 'quitado';
     });
     setTodaysLoans(dueToday);
 
     const targetStr = collectionDate;
-    const list = loans.filter(l => getDisplayNextDue(l) === targetStr && l.status !== 'Pago' && l.status !== 'Quitado');
+    const list = loans.filter(l => getDisplayNextDue(l) === targetStr && l.status?.toLowerCase() !== 'pago' && l.status?.toLowerCase() !== 'quitado');
     setCollectionLoans(list);
 
     const totalOverdue = loans.reduce((acc, l) => {
@@ -1334,24 +1331,26 @@ const handleOpenEditContract = (loan: Loan) => {
       }
 
       setEditContractData({
-          id: loan.id,
-          amount: loan.amount.toString(),
-          interestRate: loan.interestRate.toString(),
-          installments: loan.interestType === 'SIMPLE' ? '1' : loan.installments.toString(),
-          installmentValue: displayInstallment,
-          startDate: loan.startDate ? loan.startDate.split('T')[0] : '',
-          nextDue: loan.nextDue ? loan.nextDue.split('T')[0] : '',
-          fineRate: (loan.fineRate || '').toString(),
-          moraInterestRate: (loan.moraInterestRate || '').toString(),
-          clientBank: loan.clientBank || '',
-          paymentMethod: loan.paymentMethod || '',
-          guarantorName: loan.guarantorName || '',
-          guarantorCPF: loan.guarantorCPF || '',
-          guarantorAddress: loan.guarantorAddress || ''
-      });
-      setIsEditContractModalOpen(true);
-      setOpenMenuId(null);
-  };
+              id: loan.id,
+              amount: loan.amount.toString(),
+              interestRate: loan.interestRate.toString(),
+              installments: loan.interestType === 'SIMPLE' ? '1' : loan.installments.toString(),
+              installmentValue: displayInstallment,
+              startDate: loan.startDate ? loan.startDate.split('T')[0] : '',
+              nextDue: loan.nextDue ? loan.nextDue.split('T')[0] : '',
+              fineRate: (loan.fineRate || '').toString(),
+              moraInterestRate: (loan.moraInterestRate || '').toString(),
+              clientBank: loan.clientBank || '',
+              paymentMethod: loan.paymentMethod || '',
+              guarantorName: loan.guarantorName || '',
+              guarantorCPF: loan.guarantorCPF || '',
+              guarantorAddress: loan.guarantorAddress || '',
+              multiDates: loan.multiDates ? [...loan.multiDates] : [], // 🚀 FIX: Carrega as fatias existentes do banco para a tela
+              editReason: '' // 🚀 NOVO: Campo para registrar o motivo da edição
+            });
+            setIsEditContractModalOpen(true);
+            setOpenMenuId(null);
+        };
 
   useEffect(() => {
       if (isEditContractModalOpen && selectedLoan) {
@@ -1419,6 +1418,12 @@ const confirmEditContract = async () => {
           newProjectedProfit = Math.max(0, (newInstallmentValue * numInst) - newAmount);
       }
 
+      // 🚀 FIX: Limpa e prepara as fatias editadas garantindo que são números válidos
+      const finalMultiDates = (editContractData.multiDates || []).map((md: any) => ({
+          day: parseInt(md.day),
+          amount: parseFloat(md.amount)
+      })).filter((md: any) => !isNaN(md.day) && !isNaN(md.amount));
+
       const updatedLoan = { 
           ...selectedLoan, 
           id: editContractData.id,
@@ -1435,15 +1440,21 @@ const confirmEditContract = async () => {
           paymentMethod: editContractData.paymentMethod,
           guarantorName: editContractData.guarantorName,
           guarantorCPF: editContractData.guarantorCPF,
-          guarantorAddress: editContractData.guarantorAddress
+          guarantorAddress: editContractData.guarantorAddress,
+          multiDates: finalMultiDates // 🚀 FIX: Salva as novas fatias editadas
       };
 
       try {
+          // 🚀 FIX: Grava o motivo da edição no extrato financeiro para controle do Rodrigo
+          const logMessage = editContractData.editReason 
+              ? `Ficha do contrato editada pelo painel. Motivo: ${editContractData.editReason}` 
+              : `Ficha do contrato editada pelo painel.`;
+
           await loanService.update(
               selectedLoan.id,
               updatedLoan,
               'EDIÇÃO DE CONTRATO',
-              `Ficha do contrato editada pelo painel.`
+              logMessage
           );
           setLoans(prev => prev.map(l => l.id === selectedLoan.id ? updatedLoan : l));
           setIsEditContractModalOpen(false);
@@ -2646,13 +2657,24 @@ const handleFinalSave = async (e: React.FormEvent) => {
                   <div className="space-y-3">
                       <input type="text" placeholder="Nome do Fiador" value={editContractData.guarantorName} onChange={e => setEditContractData({...editContractData, guarantorName: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
                       <input type="text" placeholder="CPF do Fiador" value={editContractData.guarantorCPF} onChange={e => setEditContractData({...editContractData, guarantorCPF: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
-                      <input type="text" placeholder="Endereço do Fiador" value={editContractData.guarantorAddress} onChange={e => setEditContractData({...editContractData, guarantorAddress: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
+                          <input type="text" placeholder="Endereço do Fiador" value={editContractData.guarantorAddress} onChange={e => setEditContractData({...editContractData, guarantorAddress: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/>
+                      </div>
+                  </div>
+
+                  <div className="border-t border-slate-100 pt-4">
+                      <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Motivo da Edição / Observações (Uso Interno)</label>
+                      <textarea 
+                          value={editContractData.editReason || ''} 
+                          onChange={e => setEditContractData({...editContractData, editReason: e.target.value})} 
+                          className="w-full p-3 h-20 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20 text-sm resize-none" 
+                          placeholder="Ex: Acrescentado R$ 90,00 na fatia do dia 20 a pedido do cliente..."
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">Essa observação ficará salva no Histórico (Extrato Financeiro) do contrato para auditoria.</p>
                   </div>
               </div>
-          </div>
-          <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-100">
-              <button onClick={() => setIsEditContractModalOpen(false)} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all">Cancelar</button>
-              <button onClick={confirmEditContract} className="px-8 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all flex items-center gap-2 shadow-lg shadow-blue-900/20">
+              <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-100">
+                  <button onClick={() => setIsEditContractModalOpen(false)} className="px-6 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all">Cancelar</button>
+                  <button onClick={confirmEditContract} className="px-8 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all flex items-center gap-2 shadow-lg shadow-blue-900/20">
                   <CheckCircle size={18}/> Salvar Alterações
               </button>
           </div>
