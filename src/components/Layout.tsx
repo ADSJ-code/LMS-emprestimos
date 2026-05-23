@@ -9,7 +9,8 @@ import {
   Share2, 
   History, 
   Settings, 
-  LogOut 
+  LogOut,
+  Receipt // 🚀 NOVO: Ícone para a aba de Notas Fiscais
 } from 'lucide-react';
 import { settingsService } from '../services/api';
 
@@ -84,6 +85,7 @@ const Layout = ({ children }: LayoutProps) => {
     { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/clients', label: 'Lista de Clientes', icon: Users },
     { path: '/billing', label: 'Cobrança', icon: FileText },
+//  { path: '/invoices', label: 'Notas Fiscais', icon: Receipt }, // 🚀 Ocultado temporariamente para o Rodrigo
     { path: '/overdue', label: 'Atrasados', icon: AlertCircle },
     { path: '/blacklist', label: 'Lista Negra', icon: ShieldAlert },
     { path: '/affiliates', label: 'Lista de Afiliados', icon: Share2 },

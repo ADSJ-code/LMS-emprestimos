@@ -46,6 +46,8 @@ const Dashboard = () => {
   // --- ESTADOS DO MODAL VENCIMENTOS ---
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
   const [isDailyAlertOpen, setIsDailyAlertOpen] = useState(false);
+  const [dailySearchTerm, setDailySearchTerm] = useState(''); // 🚀 NOVO: Busca pro modal diário
+  const [welcomeSearchTerm, setWelcomeSearchTerm] = useState(''); // 🚀 NOVO: Busca pro modal de calendário
   const [todaysLoans, setTodaysLoans] = useState<Loan[]>([]);  
   const [maturityDate, setMaturityDate] = useState(() => {
       const d = new Date();
@@ -716,8 +718,14 @@ const Dashboard = () => {
                      <button onClick={() => setIsDailyAlertOpen(false)} className="text-white/40 hover:text-white hover:bg-white/10 p-2 rounded-full transition-all relative z-10"><X size={20}/></button>
                  </div>
                  
-                 {/* BODY */}
-                 <div className="p-5 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                 {/* SEARCH BAR E BODY */}
+                 <div className="px-5 pt-4 pb-2 bg-slate-50 border-b border-slate-200">
+                     <div className="relative">
+                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                         <input type="text" placeholder="Buscar cliente ou contrato..." value={dailySearchTerm} onChange={(e) => setDailySearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-yellow-400/30 transition-all bg-white shadow-sm"/>
+                     </div>
+                 </div>
+                 <div className="p-5 max-h-[50vh] overflow-y-auto custom-scrollbar">
                      {todaysLoans.length === 0 ? (
                          <div className="text-center py-10">
                              <div className="bg-white w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-slate-100">
@@ -730,8 +738,12 @@ const Dashboard = () => {
                          <div className="space-y-4">
                              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2 ml-1">Vencimentos agrupados ({todaysLoans.length} contratos):</p>
                              {(() => {
+                                 // 🚀 APLICA A BUSCA E DEPOIS AGRUPA POR CLIENTE
+                                 const filteredDaily = todaysLoans.filter(l => l.client.toLowerCase().includes(dailySearchTerm.toLowerCase()) || l.id.includes(dailySearchTerm));
+                                 if (filteredDaily.length === 0 && todaysLoans.length > 0) return <div className="text-center py-4 text-slate-400 text-sm font-medium">Nenhum resultado na busca.</div>;
+
                                  const grouped: Record<string, { total: number, loans: Loan[] }> = {};
-                                 todaysLoans.forEach(l => {
+                                 filteredDaily.forEach(l => {
                                      if (!grouped[l.client]) grouped[l.client] = { total: 0, loans: [] };
                                      let amt = 0;
                                      const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
@@ -825,14 +837,20 @@ const Dashboard = () => {
                      <button onClick={() => setShowWelcomeModal(false)} className="text-white/40 hover:text-white hover:bg-white/10 p-2 rounded-full transition-all relative z-10"><X size={20}/></button>
                  </div>
                  
-                 {/* FILTER BAR */}
-                 <div className="p-5 bg-white border-b border-slate-200 shadow-sm relative z-10">
-                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Escolha uma Data</label>
-                     <input type="date" value={maturityDate} onChange={(e) => setMaturityDate(e.target.value)} className="w-full p-3.5 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-400/30 focus:border-orange-400 transition-all bg-slate-50 hover:bg-white"/>
+                 {/* FILTER BAR E BUSCA */}
+                 <div className="p-5 bg-white border-b border-slate-200 shadow-sm relative z-10 flex flex-col gap-3">
+                     <div>
+                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">Escolha uma Data</label>
+                         <input type="date" value={maturityDate} onChange={(e) => setMaturityDate(e.target.value)} className="w-full p-3.5 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-400/30 focus:border-orange-400 transition-all bg-slate-50 hover:bg-white"/>
+                     </div>
+                     <div className="relative">
+                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                         <input type="text" placeholder="Buscar cliente ou contrato..." value={welcomeSearchTerm} onChange={(e) => setWelcomeSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-400/30 transition-all bg-white shadow-sm"/>
+                     </div>
                  </div>
 
                  {/* BODY */}
-                 <div className="p-5 max-h-[50vh] overflow-y-auto custom-scrollbar">
+                 <div className="p-5 max-h-[45vh] overflow-y-auto custom-scrollbar">
                      {loansOnMaturityDate.length === 0 ? (
                          <div className="text-center py-10">
                              <div className="bg-white w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-slate-100">
@@ -845,8 +863,12 @@ const Dashboard = () => {
                          <div className="space-y-4">
                              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2 ml-1 flex items-center gap-1.5"><Bell size={12}/> Vencimentos Agrupados nesta data:</p>
                              {(() => {
+                                 // 🚀 APLICA A BUSCA E DEPOIS AGRUPA POR CLIENTE
+                                 const filteredWelcome = loansOnMaturityDate.filter(l => l.client.toLowerCase().includes(welcomeSearchTerm.toLowerCase()) || l.id.includes(welcomeSearchTerm));
+                                 if (filteredWelcome.length === 0 && loansOnMaturityDate.length > 0) return <div className="text-center py-4 text-slate-400 text-sm font-medium">Nenhum resultado na busca.</div>;
+
                                  const grouped: Record<string, { total: number, loans: Loan[] }> = {};
-                                 loansOnMaturityDate.forEach(l => {
+                                 filteredWelcome.forEach(l => {
                                      if (!grouped[l.client]) grouped[l.client] = { total: 0, loans: [] };
                                      
                                      let amt = 0;

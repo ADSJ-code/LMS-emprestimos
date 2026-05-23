@@ -123,6 +123,9 @@ const Billing = () => {
   const [editContractData, setEditContractData] = useState<any>({});
 
   const [collectionDate, setCollectionDate] = useState(new Date().toISOString().split('T')[0]);
+  const [collectionSearchTerm, setCollectionSearchTerm] = useState(''); // 🚀 Busca do Modal
+  const [returnToModal, setReturnToModal] = useState<'collection' | null>(null); // 🚀 Efeito Bumerangue
+  const [cycleMissing, setCycleMissing] = useState(0); // 🚀 O que falta para fechar a parcela
 
   const [detailTab, setDetailTab] = useState<'info' | 'schedule' | 'history'>('info');
 
@@ -1064,6 +1067,12 @@ const Billing = () => {
     }
     setCycleAcc({ interest: accInt, capital: accCap });
     
+    // 🚀 NOVO: Calcula exato o que falta para fechar o ciclo e avançar a parcela
+    const expectedInterest = breakdown.interest;
+    const requiredTotal = loan.interestType === 'SIMPLE' ? expectedInterest : (loan.installmentValue || breakdown.total);
+    const accumulatedTotal = loan.interestType === 'SIMPLE' ? accInt : (accInt + accCap);
+    setCycleMissing(Math.max(0, requiredTotal - accumulatedTotal));
+
     // 🚀 RESETAR CHECKBOX
     setForceAdvanceMonth(false);
 
@@ -1120,21 +1129,15 @@ const Billing = () => {
     }
 
     // 🚀 LÓGICA INTELIGENTE DE AVANÇO DE MÊS + CAIXA DE SELEÇÃO MANUAL
-    // 1. Se o Rodrigo marcar a caixa, avança sempre (sobrescreve a lógica matemática)
-    // 2. Se for contrato "Só Juros" (SIMPLE), basta pagar os juros do mês para o ciclo fechar
-    // 3. Se for contrato normal, tem de pagar o valor total da parcela exigida no ciclo
     let shouldAdvanceMonth = false;
     
     if (forceAdvanceMonth) {
         shouldAdvanceMonth = true;
         noteText += " [AVANÇO MANUAL]";
-    } else if (isSimple) {
-        // Num contrato SIMPLE, pagar os juros do mês é suficiente para renovar o ciclo
-        const accumulatedInterest = valInterest + cycleAcc.interest;
-        shouldAdvanceMonth = accumulatedInterest >= (expectedInterest - 1.0);
     } else {
-        // Num contrato PRICE, tem de pagar o valor total da parcela
-        shouldAdvanceMonth = totalAccumulatedInCycle >= (totalRequiredInCycle - 1.0);
+        // 🚀 FIX: Agora só avança se o valor pago AGORA bater com o que faltava na parcela
+        const paidNow = isSimple ? valInterest : valTotal;
+        shouldAdvanceMonth = paidNow >= (cycleMissing - 0.10); // Tolerância de centavos
     }
 
     if (balance <= 0.10) {
@@ -1208,9 +1211,16 @@ const Billing = () => {
         await loanService.update(selectedLoan.id, updatedLoan, 'BAIXA DE PAGAMENTO', `Recebeu R$ ${valTotal.toFixed(2)} (Capital: R$ ${valCapital.toFixed(2)}, Juros: R$ ${valInterest.toFixed(2)}) do cliente ${selectedLoan.client}`);
         setLoans(prev => prev.map(l => l.id === updatedLoan.id ? updatedLoan : l));
         setIsPaymentModalOpen(false);
-        setSelectedLoan(updatedLoan);
-        setDetailTab('history');
-        setIsDetailsOpen(true);
+        
+        // 🚀 BUMERANGUE: Retorna pro Modal de Cobrança se ele veio de lá!
+        if (returnToModal === 'collection') {
+            setIsCollectionModalOpen(true);
+            setReturnToModal(null);
+        } else {
+            setSelectedLoan(updatedLoan);
+            setDetailTab('history');
+            setIsDetailsOpen(true);
+        }
     } catch (err) { alert("Erro ao registrar."); }
   };
 
@@ -1352,46 +1362,7 @@ const handleOpenEditContract = (loan: Loan) => {
             setOpenMenuId(null);
         };
 
-  useEffect(() => {
-      if (isEditContractModalOpen && selectedLoan) {
-          const newAmount = parseFloat(editContractData.amount) || 0;
-          const newRate = parseFloat(editContractData.interestRate) || 0;
-          const newInstallments = parseInt(editContractData.installments) || 1;
-          
-          const isSameAsOriginal = 
-              newAmount === selectedLoan.amount && 
-              newRate === selectedLoan.interestRate && 
-              newInstallments === (selectedLoan.interestType === 'SIMPLE' ? 1 : selectedLoan.installments);
-
-          if (isSameAsOriginal) return; 
-
-          let periodRate = newRate / 100;
-          if (selectedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
-          else if (selectedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
-
-          let calculatedInstallment = 0;
-
-          if (selectedLoan.interestType === 'SIMPLE') {
-              const currentBalance = Math.max(0, newAmount - (selectedLoan.totalPaidCapital || 0));
-              calculatedInstallment = currentBalance * periodRate;
-          } else {
-              if (periodRate === 0) {
-                  calculatedInstallment = newAmount / newInstallments;
-              } else {
-                  calculatedInstallment = newAmount * ( (periodRate * Math.pow(1 + periodRate, newInstallments)) / (Math.pow(1 + periodRate, newInstallments) - 1) );
-              }
-          }
-
-          // FIX: Arredondamento limpo para evitar dízimas infinitas na edição
-          const newInstallmentValue = (Math.round(calculatedInstallment * 100) / 100).toFixed(2);
-
-          if (editContractData.installmentValue !== newInstallmentValue && calculatedInstallment > 0) {
-              setEditContractData((prev: any) => ({ ...prev, installmentValue: newInstallmentValue }));
-          }
-      }
-  }, [editContractData.amount, editContractData.interestRate, editContractData.installments, isEditContractModalOpen, selectedLoan]);
-
-const confirmEditContract = async () => {
+  const confirmEditContract = async () => {
       if (!selectedLoan || !editContractData.id) return;
       
       if (editContractData.id !== selectedLoan.id && loans.some(l => l.id === editContractData.id)) {
@@ -1761,101 +1732,111 @@ const handleFinalSave = async (e: React.FormEvent) => {
         <div className="fixed inset-0 z-[60] flex items-start justify-center bg-black/40 backdrop-blur-sm pt-20 p-4 animate-in fade-in duration-200">
              <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in slide-in-from-top-8 fade-in duration-300 border border-slate-200 relative z-[70] ring-1 ring-black/5">
                  <div className="bg-slate-900 p-5 flex justify-between items-center">
-                     <div className="flex items-center gap-3 text-white font-bold">
-                         <div className="bg-yellow-400/20 p-2 rounded-lg">
-                             <Calendar className="text-yellow-400" size={20}/>
-                         </div>
-                         <span>Central de Cobrança</span>
-                     </div>
-                     <button onClick={() => setIsCollectionModalOpen(false)} className="text-white/50 hover:text-white hover:bg-white/10 p-2 rounded-full transition-all"><X size={20}/></button>
-                 </div>
-                 <div className="p-5 bg-slate-50/80 border-b border-slate-100">
-                     <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Data de Referência</label>
-                     <input type="date" value={collectionDate} onChange={(e) => setCollectionDate(e.target.value)} className="w-full p-3.5 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-yellow-400/30 focus:border-yellow-400 transition-all shadow-sm bg-white"/>
-                 </div>
-                 <div className="p-5 max-h-[55vh] overflow-y-auto custom-scrollbar bg-white">
-                     {collectionLoans.length === 0 ? (
-                         <div className="text-center py-10">
-                             <div className="bg-green-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3">
-                                 <CheckCircle size={32} className="text-green-500"/>
+                                 <div className="flex items-center gap-3 text-white font-bold">
+                                     <div className="bg-yellow-400/20 p-2 rounded-lg">
+                                         <Calendar className="text-yellow-400" size={20}/>
+                                     </div>
+                                     <span>Central de Cobrança</span>
+                                 </div>
+                                 <button onClick={() => setIsCollectionModalOpen(false)} className="text-white/50 hover:text-white hover:bg-white/10 p-2 rounded-full transition-all"><X size={20}/></button>
                              </div>
-                             <p className="text-slate-800 font-bold">Tudo limpo por aqui!</p>
-                             <p className="text-slate-400 text-xs mt-1">Nenhum vencimento pendente para esta data.</p>
-                         </div>
-                     ) : (
-                         <div className="space-y-4">
-                             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Clientes para cobrar hoje ({collectionLoans.length} contratos):</p>
-                             {(() => {
-                                 // 🚀 AGRUPAMENTO DE CONTRATOS POR CLIENTE
-                                 const grouped: Record<string, { total: number, loans: Loan[] }> = {};
-                                 collectionLoans.forEach(l => {
-                                     if (!grouped[l.client]) grouped[l.client] = { total: 0, loans: [] };
-                                     
-                                     // Calcula valor da parcela/fatia exato para o dia
-                                     let amt = 0;
-                                     const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
-                                     if (validSlices.length > 0 && l.status !== 'Acordo') {
-                                         const targetDay = Number(collectionDate.split('-')[2]);
-                                         const slice = validSlices.find((s:any) => Number(s.day) === targetDay);
-                                         if (slice) amt = parseVal(slice.amount);
-                                         else amt = getSyncedBreakdown(l).total; // Fallback seguro
-                                     } else {
-                                         amt = getSyncedBreakdown(l).total; // 🚀 FIX: Cobre PRICE, SIMPLE e soma o Acordo Extra
-                                     }
-                                     
-                                     grouped[l.client].total += amt;
-                                     grouped[l.client].loans.push(l);
-                                 });
-
-                                 return Object.entries(grouped).map(([clientName, data]) => (
-                                     <div key={clientName} className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm hover:border-yellow-400 transition-all">
-                                         <div className="p-4 bg-slate-50/50 flex justify-between items-center border-b border-slate-100">
-                                            <div className="flex items-center gap-3">
-                                                <div className="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center text-white font-black text-sm shadow-md">{clientName.charAt(0)}</div>
-                                                <div>
-                                                    <p className="font-bold text-slate-800">{clientName}</p>
-                                                    {getNickname(availableClients.find(c => c.name === clientName)?.observations) && (
-                                                        <p className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 truncate max-w-[150px]">
-                                                            {getNickname(availableClients.find(c => c.name === clientName)?.observations)}
-                                                        </p>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            <div className="text-right">
-                                                <p className="text-[10px] uppercase font-bold text-slate-400 mb-0.5">Total no Dia</p>
-                                                <p className="font-black text-slate-800 text-lg">R$ {formatMoney(data.total)}</p>
-                                            </div>
+                             <div className="p-5 bg-slate-50/80 border-b border-slate-100 flex flex-col gap-3">
+                                 <div>
+                                     <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Data de Referência</label>
+                                     <input type="date" value={collectionDate} onChange={(e) => setCollectionDate(e.target.value)} className="w-full p-3.5 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-yellow-400/30 focus:border-yellow-400 transition-all shadow-sm bg-white"/>
+                                 </div>
+                                 <div className="relative">
+                                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                                     <input type="text" placeholder="Buscar cliente ou contrato..." value={collectionSearchTerm} onChange={(e) => setCollectionSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-yellow-400/30 transition-all bg-white shadow-sm"/>
+                                 </div>
+                             </div>
+                             <div className="p-5 max-h-[55vh] overflow-y-auto custom-scrollbar bg-white">
+                                 {collectionLoans.length === 0 ? (
+                                     <div className="text-center py-10">
+                                         <div className="bg-green-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3">
+                                             <CheckCircle size={32} className="text-green-500"/>
                                          </div>
-                                         <div className="p-2 divide-y divide-slate-50">
-                                             {data.loans.map(l => {
-                                                 // Valor individual deste contrato na listagem
-                                                 let cAmt = 0;
+                                         <p className="text-slate-800 font-bold">Tudo limpo por aqui!</p>
+                                         <p className="text-slate-400 text-xs mt-1">Nenhum vencimento pendente para esta data.</p>
+                                     </div>
+                                 ) : (
+                                     <div className="space-y-4">
+                                         <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Clientes para cobrar hoje ({collectionLoans.length} contratos):</p>
+                                         {(() => {
+                                             // 🚀 APLICA A BUSCA E DEPOIS AGRUPA POR CLIENTE
+                                             const filteredCollection = collectionLoans.filter(l => 
+                                                 l.client.toLowerCase().includes(collectionSearchTerm.toLowerCase()) || 
+                                                 l.id.includes(collectionSearchTerm)
+                                             );
+                                             const grouped: Record<string, { total: number, loans: Loan[] }> = {};
+                                             filteredCollection.forEach(l => {
+                                                 if (!grouped[l.client]) grouped[l.client] = { total: 0, loans: [] };
+                                                 
+                                                 // Calcula valor da parcela/fatia exato para o dia
+                                                 let amt = 0;
                                                  const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
                                                  if (validSlices.length > 0 && l.status !== 'Acordo') {
                                                      const targetDay = Number(collectionDate.split('-')[2]);
                                                      const slice = validSlices.find((s:any) => Number(s.day) === targetDay);
-                                                     if (slice) cAmt = parseVal(slice.amount);
-                                                     else cAmt = getSyncedBreakdown(l).total;
+                                                     if (slice) amt = parseVal(slice.amount);
+                                                     else amt = getSyncedBreakdown(l).total; // Fallback seguro
                                                  } else {
-                                                     cAmt = getSyncedBreakdown(l).total; // 🚀 FIX: Cobre PRICE, SIMPLE e Acordo Extra
+                                                     amt = getSyncedBreakdown(l).total; // 🚀 FIX: Cobre PRICE, SIMPLE e soma o Acordo Extra
                                                  }
+                                                 
+                                                 grouped[l.client].total += amt;
+                                                 grouped[l.client].loans.push(l);
+                                             });
 
-                                                 return (
-                                                 <div key={l.id} className="flex justify-between items-center p-3 hover:bg-yellow-50 rounded-xl cursor-pointer group transition-colors" onClick={() => handleOpenPayment(l)}>
-                                                     <div>
-                                                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest group-hover:text-yellow-700 transition-colors">Contrato: {l.id}</p>
-                                                         <p className="text-xs font-black text-slate-700 mt-0.5">R$ {formatMoney(cAmt)}</p>
+                                             return Object.entries(grouped).map(([clientName, data]) => (
+                                                 <div key={clientName} className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm hover:border-yellow-400 transition-all">
+                                                     <div className="p-4 bg-slate-50/50 flex justify-between items-center border-b border-slate-100">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center text-white font-black text-sm shadow-md">{clientName.charAt(0)}</div>
+                                                            <div>
+                                                                <p className="font-bold text-slate-800">{clientName}</p>
+                                                                {getNickname(availableClients.find(c => c.name === clientName)?.observations) && (
+                                                                    <p className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 truncate max-w-[150px]">
+                                                                        {getNickname(availableClients.find(c => c.name === clientName)?.observations)}
+                                                                    </p>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <p className="text-[10px] uppercase font-bold text-slate-400 mb-0.5">Total no Dia</p>
+                                                            <p className="font-black text-slate-800 text-lg">R$ {formatMoney(data.total)}</p>
+                                                        </div>
                                                      </div>
-                                                     <span className="text-[9px] uppercase font-bold bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg shadow-sm group-hover:bg-yellow-400 group-hover:text-yellow-900 group-hover:border-yellow-400 transition-all">Abrir Fatura ➔</span>
+                                                     <div className="p-2 divide-y divide-slate-50">
+                                                         {data.loans.map(l => {
+                                                             // Valor individual deste contrato na listagem
+                                                             let cAmt = 0;
+                                                             const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
+                                                             if (validSlices.length > 0 && l.status !== 'Acordo') {
+                                                                 const targetDay = Number(collectionDate.split('-')[2]);
+                                                                 const slice = validSlices.find((s:any) => Number(s.day) === targetDay);
+                                                                 if (slice) cAmt = parseVal(slice.amount);
+                                                                 else cAmt = getSyncedBreakdown(l).total;
+                                                             } else {
+                                                                 cAmt = getSyncedBreakdown(l).total; // 🚀 FIX: Cobre PRICE, SIMPLE e Acordo Extra
+                                                             }
+
+                                                             return (
+                                                             <div key={l.id} className="flex justify-between items-center p-3 hover:bg-yellow-50 rounded-xl cursor-pointer group transition-colors" onClick={() => { setReturnToModal('collection'); setIsCollectionModalOpen(false); handleOpenPayment(l); }}>
+                                                                 <div>
+                                                                     <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest group-hover:text-yellow-700 transition-colors">Contrato: {l.id}</p>
+                                                                     <p className="text-xs font-black text-slate-700 mt-0.5">R$ {formatMoney(cAmt)}</p>
+                                                                 </div>
+                                                                 <span className="text-[9px] uppercase font-bold bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg shadow-sm group-hover:bg-yellow-400 group-hover:text-yellow-900 group-hover:border-yellow-400 transition-all">Abrir Fatura ➔</span>
+                                                             </div>
+                                                         )})}
+                                                     </div>
                                                  </div>
-                                             )})}
-                                         </div>
+                                             ));
+                                         })()}
                                      </div>
-                                 ));
-                             })()}
-                         </div>
-                     )}
-                 </div>
+                                 )}
+                             </div>
              </div>
         </div>
       )}
@@ -2512,6 +2493,21 @@ const handleFinalSave = async (e: React.FormEvent) => {
                 <span className="text-xl font-black text-slate-900">R$ {formatMoney(Number(payCapital) + Number(payInterest))}</span>
             </div>
 
+            {/* 🚀 BANNER DE AVISO: FALTA R$ X */}
+            {cycleMissing > 0 && !forceAdvanceMonth && (
+                <div className={`mt-2 p-3 rounded-xl border flex items-center justify-between text-sm transition-colors ${
+                    ((Number(selectedLoan?.interestType === 'SIMPLE' ? payInterest : (Number(payCapital) + Number(payInterest)))) >= (cycleMissing - 0.05)) 
+                    ? 'bg-green-50 border-green-200 text-green-800' 
+                    : 'bg-orange-50 border-orange-200 text-orange-800'
+                }`}>
+                    <span className="font-bold flex items-center gap-1.5">
+                        {((Number(selectedLoan?.interestType === 'SIMPLE' ? payInterest : (Number(payCapital) + Number(payInterest)))) >= (cycleMissing - 0.05)) ? <CheckCircle size={16}/> : <AlertCircle size={16}/>}
+                        Falta para fechar parcela:
+                    </span>
+                    <span className="font-black">R$ {formatMoney(cycleMissing)}</span>
+                </div>
+            )}
+
             {/* 🚀 CHECKBOX PARA AVANÇAR O MÊS MANUALMENTE */}
             <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl">
                 <input 
@@ -2559,19 +2555,118 @@ const handleFinalSave = async (e: React.FormEvent) => {
               </div>
 
               <div className="grid grid-cols-3 gap-4">
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Taxa (%)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="any" value={editContractData.interestRate} onChange={e => setEditContractData({...editContractData, interestRate: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Parcelas</label><input type="number" onWheel={(e) => e.currentTarget.blur()} value={selectedLoan?.interestType === 'SIMPLE' ? 1 : editContractData.installments} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installments: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none disabled:bg-slate-100 disabled:text-slate-400"/></div>
                   <div>
-    <label className="block text-xs font-bold text-slate-500 mb-1">Valor Parcela Fixa (R$)</label>
-    <input 
-        type="number" 
-        value={editContractData.installmentValue || ''} 
-        onChange={e => setEditContractData({...editContractData, installmentValue: e.target.value})} 
-        className="w-full p-2.5 border rounded-lg outline-none text-green-700 font-bold focus:ring-2 focus:ring-green-500/20"
-        placeholder="Forçar valor exato..."
-    />
-    <p className="text-[8px] text-slate-400 mt-1 leading-tight">Se preenchido, o sistema ignorará a taxa<br/>e cobrará este valor exato mensalmente.</p>
-</div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">Taxa Mensal (%)</label>
+                      <input 
+                          type="number" onWheel={(e) => e.currentTarget.blur()} step="any" 
+                          value={editContractData.interestRate} 
+                          onChange={e => {
+                              const newRateStr = e.target.value;
+                              setEditContractData((prev: any) => {
+                                  const newRateNum = parseFloat(newRateStr) || 0;
+                                  const amt = parseFloat(prev.amount) || 0;
+                                  const inst = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(prev.installments) || 1);
+                                  
+                                  let periodRate = newRateNum / 100;
+                                  if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
+                                  if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
+                                  
+                                  let calcInst = 0;
+                                  if (selectedLoan?.interestType === 'SIMPLE') {
+                                      calcInst = Math.max(0, amt - (selectedLoan?.totalPaidCapital || 0)) * periodRate;
+                                  } else {
+                                      if (periodRate === 0) calcInst = amt / inst;
+                                      else calcInst = amt * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
+                                  }
+                                  
+                                  return { ...prev, interestRate: newRateStr, installmentValue: calcInst > 0 ? (Math.round(calcInst * 100) / 100).toFixed(2) : '' };
+                              });
+                          }} 
+                          className="w-full p-2.5 border rounded-lg outline-none text-slate-800 font-bold focus:ring-2 focus:ring-blue-500/20 transition-all"
+                      />
+                  </div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Qtd. Parcelas</label><input type="number" onWheel={(e) => e.currentTarget.blur()} value={selectedLoan?.interestType === 'SIMPLE' ? 1 : editContractData.installments} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => {
+                      const newInstStr = e.target.value;
+                      setEditContractData((prev: any) => {
+                          const amt = parseFloat(prev.amount) || 0;
+                          const rateNum = parseFloat(prev.interestRate) || 0;
+                          const inst = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(newInstStr) || 1);
+                          
+                          let periodRate = rateNum / 100;
+                          if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
+                          if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
+                          
+                          let calcInst = 0;
+                          if (selectedLoan?.interestType === 'SIMPLE') {
+                              calcInst = Math.max(0, amt - (selectedLoan?.totalPaidCapital || 0)) * periodRate;
+                          } else {
+                              if (periodRate === 0) calcInst = amt / inst;
+                              else calcInst = amt * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
+                          }
+                          
+                          return { ...prev, installments: newInstStr, installmentValue: calcInst > 0 ? (Math.round(calcInst * 100) / 100).toFixed(2) : '' };
+                      });
+                  }} className="w-full p-2.5 border rounded-lg outline-none disabled:bg-slate-100 disabled:text-slate-400 focus:ring-2 focus:ring-blue-500/20 transition-all"/></div>
+                  <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1 leading-tight">Valor da Parcela (R$)</label>
+                      <input type="text" value={editContractData.installmentValue || ''} readOnly className="w-full p-2.5 border border-slate-200 rounded-lg outline-none font-bold text-slate-400 bg-slate-50 cursor-not-allowed"/>
+                  </div>
+              </div>
+
+              <div className="grid grid-cols-1 p-3 bg-slate-50 border border-slate-200 rounded-lg shadow-inner">
+                  <div>
+                      <label className="block text-[10px] font-black uppercase text-blue-600 mb-1 leading-tight">Forçar Juros Total Desejado (R$) - Opcional</label>
+                      <input 
+                          type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" 
+                          placeholder="Digite o juros exato que o sistema ajusta a taxa..."
+                          onChange={e => {
+                              const val = e.target.value;
+                              if (val === '') return;
+                              
+                              const jurosTarget = parseFloat(val) || 0;
+                              const cap = parseFloat(editContractData.amount) || 0;
+                              const parcelas = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(editContractData.installments) || 1);
+
+                              if (cap > 0 && jurosTarget >= 0) {
+                                  let bestRate = 0;
+                                  if (selectedLoan?.interestType === 'SIMPLE' || parcelas === 1) {
+                                      bestRate = (jurosTarget / cap) * 100;
+                                  } else {
+                                      let low = 0.0, high = 100.0;
+                                      for (let i = 0; i < 60; i++) {
+                                          let mid = (low + high) / 2;
+                                          let r = mid / 100;
+                                          let pmt = cap * ((r * Math.pow(1 + r, parcelas)) / (Math.pow(1 + r, parcelas) - 1));
+                                          let totalInt = (pmt * parcelas) - cap;
+                                          if (totalInt < jurosTarget) low = mid; else high = mid;
+                                          bestRate = mid;
+                                      }
+                                  }
+                                  
+                                  if (selectedLoan?.frequency === 'SEMANAL') bestRate *= 4;
+                                  if (selectedLoan?.frequency === 'DIARIO') bestRate *= 30;
+                                  if (bestRate < 0.000001) bestRate = 0;
+                                  
+                                  const formattedRate = Number(bestRate.toFixed(2));
+                                  setEditContractData((prev: any) => {
+                                      let periodRate = formattedRate / 100;
+                                      if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
+                                      if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
+                                      
+                                      let calcInst = 0;
+                                      if (selectedLoan?.interestType === 'SIMPLE') calcInst = Math.max(0, cap - (selectedLoan?.totalPaidCapital || 0)) * periodRate;
+                                      else {
+                                          if (periodRate === 0) calcInst = cap / parcelas;
+                                          else calcInst = cap * ((periodRate * Math.pow(1 + periodRate, parcelas)) / (Math.pow(1 + periodRate, parcelas) - 1));
+                                      }
+                                      
+                                      return { ...prev, interestRate: String(formattedRate), installmentValue: calcInst > 0 ? (Math.round(calcInst * 100) / 100).toFixed(2) : '' };
+                                  });
+                              }
+                          }} 
+                          className="w-full p-2.5 border border-blue-300 rounded-lg outline-none font-black text-blue-700 bg-blue-50 focus:ring-2 focus:ring-blue-500/20 shadow-sm"
+                      />
+                  </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

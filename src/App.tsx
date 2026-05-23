@@ -8,6 +8,7 @@ import Blacklist from './pages/Blacklist';
 import Affiliates from './pages/Affiliates';
 import History from './pages/History';
 import Settings from './pages/Settings';
+import Invoices from './pages/Invoices'; // 🚀 IMPORTAMOS A TELA DE NOTAS FISCAIS
 
 // --- COMPONENTE GUARDIÃO (PRIVATE ROUTE) ---
 // Verifica se existe a sessão ativa. Se não, chuta para o Login.
@@ -92,6 +93,16 @@ function App() {
           element={
             <PrivateRoute>
               <Settings />
+            </PrivateRoute>
+          } 
+        />
+        
+        {/* 🚀 ROTA DE NOTAS FISCAIS ADICIONADA AQUI */}
+        <Route 
+          path="/invoices" 
+          element={
+            <PrivateRoute>
+              <Invoices />
             </PrivateRoute>
           } 
         />

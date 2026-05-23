@@ -348,6 +348,18 @@ type BackupData struct {
 	Users    []User   `json:"users"`
 }
 
+// 🚀 NOVA ESTRUTURA: Modelo da Nota Fiscal
+type InvoiceRecord struct {
+	ID           string    `json:"id" bson:"_id,omitempty"`
+	Client       string    `json:"client" bson:"client"`
+	CPF          string    `json:"cpf" bson:"cpf"`
+	ServiceValue float64   `json:"serviceValue" bson:"serviceValue"`
+	IssueDate    time.Time `json:"issueDate" bson:"issueDate"`
+	Status       string    `json:"status" bson:"status"`
+	PdfUrl       string    `json:"pdfUrl,omitempty" bson:"pdfUrl,omitempty"`
+	ErrorMsg     string    `json:"errorMsg,omitempty" bson:"errorMsg,omitempty"`
+}
+
 var (
 	mongoClient         *mongo.Client
 	loanCollection      *mongo.Collection
@@ -357,6 +369,7 @@ var (
 	logCollection       *mongo.Collection
 	blacklistCollection *mongo.Collection
 	settingsCollection  *mongo.Collection
+	invoiceCollection   *mongo.Collection // 🚀 NOVA COLEÇÃO
 )
 
 // --- Principal ---
@@ -389,6 +402,7 @@ func main() {
 	logCollection = db.Collection("logs")
 	blacklistCollection = db.Collection("blacklist")
 	settingsCollection = db.Collection("settings")
+	invoiceCollection = db.Collection("invoices") // 🚀 CONECTA A NOVA COLEÇÃO
 	log.Println("✅ MongoDB Conectado ao CreditNow!")
 
 	seedAdminUser()
@@ -417,6 +431,10 @@ func main() {
 	mux.HandleFunc("/api/logs", authMiddleware(logsHandler))
 	mux.HandleFunc("/api/settings", authMiddleware(settingsHandler))
 	mux.HandleFunc("/api/dashboard/summary", authMiddleware(dashboardSummaryHandler))
+
+	// 🚀 NOVAS ROTAS: Notas Fiscais
+	mux.HandleFunc("/api/invoices", authMiddleware(invoicesHandler))
+	mux.HandleFunc("/api/invoices/emit", authMiddleware(invoiceEmitHandler))
 
 	// WhatsApp
 	mux.HandleFunc("/api/message", waCtrl.EnviarMensagem)
@@ -935,6 +953,87 @@ func dashboardSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	// 🚀 EXCLUI DA CONTAGEM DA BASE OS CLIENTES BLOQUEADOS (LISTA NEGRA)
 	totalClients, _ := clientCollection.CountDocuments(ctx, bson.M{"status": bson.M{"$ne": "Bloqueado"}})
 	json.NewEncoder(w).Encode(map[string]interface{}{"totalActive": totalActive, "clientsRegistered": totalClients})
+}
+
+// 🚀 HANDLER: Retorna todas as notas emitidas
+func invoicesHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Ordena das mais recentes para as mais antigas
+	opts := options.Find().SetSort(bson.D{{Key: "issueDate", Value: -1}})
+	cursor, err := invoiceCollection.Find(ctx, bson.M{}, opts)
+	if err != nil {
+		json.NewEncoder(w).Encode([]InvoiceRecord{})
+		return
+	}
+
+	var results []InvoiceRecord
+	cursor.All(ctx, &results)
+	if results == nil {
+		results = []InvoiceRecord{}
+	}
+	json.NewEncoder(w).Encode(results)
+}
+
+// 🚀 HANDLER: Emite uma nova nota fiscal
+func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var inv InvoiceRecord
+	if err := json.NewDecoder(r.Body).Decode(&inv); err != nil {
+		http.Error(w, "Dados inválidos", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 1. Gera os dados locais iniciais da nota
+	inv.ID = fmt.Sprintf("NF-%d", time.Now().UnixMilli()%100000)
+	inv.IssueDate = time.Now()
+	inv.Status = "PROCESSANDO"
+
+	// Salva imediatamente no banco para o Rodrigo já ver na tela
+	_, err := invoiceCollection.InsertOne(ctx, inv)
+	if err != nil {
+		http.Error(w, "Erro ao salvar solicitação de nota", http.StatusInternalServerError)
+		return
+	}
+
+	// 2. Simulação Assíncrona do Gateway (Focus NFe, etc)
+	// Em um ambiente real, aqui faríamos um HTTP POST para a API deles.
+	// Por enquanto, vamos simular o processamento para mostrar como a arquitetura funciona:
+	go func(invoiceID string) {
+		time.Sleep(10 * time.Second) // Simula o tempo que a prefeitura leva pra pensar
+
+		bgCtx, bgCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer bgCancel()
+
+		// Sorteia o resultado: 90% de chance de dar certo, 10% de chance de dar erro (ex: CPF falso)
+		if time.Now().Unix()%10 == 0 {
+			invoiceCollection.UpdateOne(bgCtx,
+				bson.M{"_id": invoiceID},
+				bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Prefeitura rejeitou o CPF ou o CEP está incompleto."}})
+		} else {
+			invoiceCollection.UpdateOne(bgCtx,
+				bson.M{"_id": invoiceID},
+				bson.M{"$set": bson.M{"status": "AUTORIZADA", "pdfUrl": "https://sua-api.com/download-nota.pdf"}})
+		}
+	}(inv.ID)
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(inv)
 }
 
 func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {

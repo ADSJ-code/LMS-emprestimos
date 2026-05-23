@@ -50,6 +50,18 @@ export interface Loan {
   multiDates?: MultiDate[]; // NOVO CAMPO ADICIONADO
 }
 
+// 🚀 NOVA INTERFACE: Modelo da Nota Fiscal
+export interface InvoiceRecord {
+  id: string;
+  client: string;
+  cpf: string;
+  serviceValue: number;
+  issueDate: string;
+  status: 'PROCESSANDO' | 'AUTORIZADA' | 'ERRO';
+  pdfUrl?: string;
+  errorMsg?: string;
+}
+
 export interface ClientDoc {
   name: string;
   data: string; 
@@ -359,6 +371,24 @@ save: async (settings: any) => {
 export const dashboardService = {
   getSummary: async () => {
     const response = await api.get('/dashboard/summary');
+    return response.data;
+  }
+};
+
+// 🚀 NOVO SERVIÇO: Conexão com o endpoint de Notas Fiscais no Go
+export const invoiceService = {
+  getAll: async (): Promise<InvoiceRecord[]> => {
+    try {
+      const response = await api.get('/invoices');
+      return response.data || [];
+    } catch (e) {
+      console.warn("Rota de faturas ainda não configurada no Go.");
+      return [];
+    }
+  },
+  emit: async (invoiceData: Partial<InvoiceRecord>): Promise<InvoiceRecord> => {
+    const response = await api.post('/invoices/emit', invoiceData);
+    await registerSystemLog('NOTA FISCAL', `Solicitada emissão de NF no valor de R$ ${invoiceData.serviceValue} para ${invoiceData.client}`);
     return response.data;
   }
 };
