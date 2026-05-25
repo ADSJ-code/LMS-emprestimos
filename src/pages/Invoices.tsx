@@ -6,23 +6,13 @@ import {
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
 import { formatMoney } from '../utils/finance';
-import { loanService, clientService, Loan, Client } from '../services/api';
-
-// Interface temporária para simular as Notas Fiscais
-interface InvoiceMock {
-  id: string;
-  client: string;
-  cpf: string;
-  serviceValue: number; // Valor dos Juros
-  issueDate: string;
-  status: 'PROCESSANDO' | 'AUTORIZADA' | 'ERRO';
-  pdfUrl?: string;
-  errorMsg?: string;
-}
+import { loanService, clientService, invoiceService, Loan, Client, InvoiceRecord } from '../services/api';
 
 const Invoices = () => {
   const [loans, setLoans] = useState<Loan[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [invoices, setInvoices] = useState<InvoiceRecord[]>([]); // 🚀 Dados Reais do Banco
+  
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'pendentes' | 'historico'>('pendentes');
@@ -32,21 +22,17 @@ const Invoices = () => {
   const [selectedPayment, setSelectedPayment] = useState<any>(null);
   const [isEmitting, setIsEmitting] = useState(false);
 
-  // Mock de Notas Fiscais já emitidas (Para visualização do Rodrigo)
-  const [invoices, setInvoices] = useState<InvoiceMock[]>([
-    { id: 'NF-1001', client: 'Exemplo Cliente Silva', cpf: '111.222.333-44', serviceValue: 150.00, issueDate: new Date().toISOString(), status: 'AUTORIZADA', pdfUrl: '#' },
-    { id: 'NF-1002', client: 'Teste de Acordo', cpf: '555.666.777-88', serviceValue: 90.00, issueDate: new Date().toISOString(), status: 'PROCESSANDO' }
-  ]);
-
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const [loansData, clientsData] = await Promise.all([
+      const [loansData, clientsData, invoicesData] = await Promise.all([
         loanService.getAll(),
         clientService.getAll(),
+        invoiceService.getAll() // 🚀 Puxa o histórico real do Go
       ]);
       setLoans(loansData || []);
       setClients(clientsData || []);
+      setInvoices(invoicesData || []);
     } catch (error) {
       console.error("Erro ao buscar dados:", error);
     } finally {
@@ -57,6 +43,17 @@ const Invoices = () => {
   useEffect(() => {
     fetchData();
   }, []);
+
+  // 🚀 POLLING INTELIGENTE: Se tiver nota "PROCESSANDO", atualiza a lista a cada 3 seg para ver o retorno da prefeitura
+  useEffect(() => {
+    const hasProcessing = invoices.some(inv => inv.status === 'PROCESSANDO');
+    if (hasProcessing) {
+      const interval = setInterval(() => {
+        invoiceService.getAll().then(data => setInvoices(data || []));
+      }, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [invoices]);
 
   // 🚀 Lógica Inteligente: Extrai todos os pagamentos de juros do histórico
   const availablePayments = useMemo(() => {
@@ -97,9 +94,12 @@ const Invoices = () => {
       .sort((a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime());
   }, [loans, clients, searchTerm]);
 
-  // Filtro do Histórico Mockado
+  // 🚀 Filtro do Histórico Real
   const filteredInvoices = useMemo(() => {
-    return invoices.filter(inv => inv.client.toLowerCase().includes(searchTerm.toLowerCase()) || inv.id.includes(searchTerm));
+    return invoices.filter(inv => 
+      inv.client?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+      (inv.id && inv.id.toLowerCase().includes(searchTerm.toLowerCase()))
+    );
   }, [invoices, searchTerm]);
 
   const handleOpenEmitModal = (payment: any) => {
@@ -107,25 +107,27 @@ const Invoices = () => {
     setIsEmitModalOpen(true);
   };
 
-  const confirmEmission = () => {
+  const confirmEmission = async () => {
     setIsEmitting(true);
-    // Simulando o tempo de requisição para a Prefeitura
-    setTimeout(() => {
-      const newInvoice: InvoiceMock = {
-        id: `NF-${Math.floor(Math.random() * 10000)}`,
+    try {
+      // 🚀 Chamada Real para o Backend em Go
+      await invoiceService.emit({
         client: selectedPayment.client,
         cpf: selectedPayment.cpf,
-        serviceValue: selectedPayment.interestPaid,
-        issueDate: new Date().toISOString(),
-        status: 'PROCESSANDO'
-      };
+        serviceValue: selectedPayment.interestPaid
+      });
       
-      setInvoices([newInvoice, ...invoices]);
-      setIsEmitting(false);
+      // Atualiza a lista para a nota aparecer como "PROCESSANDO" imediatamente
+      const updatedInvoices = await invoiceService.getAll();
+      setInvoices(updatedInvoices || []);
+      
       setIsEmitModalOpen(false);
       setActiveTab('historico');
-      alert("✅ Solicitação de Nota Fiscal enviada com sucesso! Aguarde o processamento da Prefeitura.");
-    }, 1500);
+    } catch (error) {
+      alert("❌ Falha ao comunicar com o servidor para emissão.");
+    } finally {
+      setIsEmitting(false);
+    }
   };
 
   return (
@@ -248,7 +250,8 @@ const Invoices = () => {
                     <tr key={inv.id} className="hover:bg-slate-50 transition-colors">
                       <td className="p-4 font-mono font-bold text-slate-700">{inv.id}</td>
                       <td className="p-4 text-sm font-medium text-slate-600">
-                        {new Date(inv.issueDate).toLocaleDateString('pt-BR')} <span className="text-slate-400 text-xs ml-1">{new Date(inv.issueDate).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</span>
+                        {inv.issueDate ? new Date(inv.issueDate).toLocaleDateString('pt-BR') : '-'} 
+                        {inv.issueDate && <span className="text-slate-400 text-xs ml-1">{new Date(inv.issueDate).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</span>}
                       </td>
                       <td className="p-4">
                         <div className="font-bold text-slate-800">{inv.client}</div>
@@ -266,12 +269,12 @@ const Invoices = () => {
                         </span>
                       </td>
                       <td className="p-4 text-center">
-                        {inv.status === 'AUTORIZADA' ? (
-                          <button className="text-blue-600 hover:text-blue-800 flex items-center gap-1 mx-auto text-xs font-bold bg-blue-50 px-3 py-1.5 rounded-lg transition-colors border border-transparent hover:border-blue-200">
+                        {inv.status === 'AUTORIZADA' && inv.pdfUrl ? (
+                          <a href={inv.pdfUrl} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 flex items-center gap-1 mx-auto text-xs font-bold bg-blue-50 px-3 py-1.5 rounded-lg transition-colors border border-transparent hover:border-blue-200 w-fit">
                             <Download size={14}/> Baixar PDF
-                          </button>
+                          </a>
                         ) : inv.status === 'ERRO' ? (
-                          <span className="text-[10px] text-red-500 font-bold cursor-help" title={inv.errorMsg || 'Erro desconhecido'}>Ver Erro</span>
+                          <span className="text-[10px] text-red-500 font-bold cursor-help max-w-[150px] inline-block leading-tight truncate" title={inv.errorMsg || 'Erro desconhecido'}>{inv.errorMsg || 'Ver Erro'}</span>
                         ) : (
                           <span className="text-[10px] text-slate-400 font-bold flex items-center justify-center gap-1"><RefreshCw size={10} className="animate-spin"/> Aguardando...</span>
                         )}

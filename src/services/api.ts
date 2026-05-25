@@ -52,12 +52,12 @@ export interface Loan {
 
 // 🚀 NOVA INTERFACE: Modelo da Nota Fiscal
 export interface InvoiceRecord {
-  id: string;
+  id?: string;
   client: string;
   cpf: string;
   serviceValue: number;
-  issueDate: string;
-  status: 'PROCESSANDO' | 'AUTORIZADA' | 'ERRO';
+  issueDate?: string;
+  status?: 'PROCESSANDO' | 'AUTORIZADA' | 'ERRO';
   pdfUrl?: string;
   errorMsg?: string;
 }

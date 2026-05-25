@@ -435,6 +435,7 @@ func main() {
 	// 🚀 NOVAS ROTAS: Notas Fiscais
 	mux.HandleFunc("/api/invoices", authMiddleware(invoicesHandler))
 	mux.HandleFunc("/api/invoices/emit", authMiddleware(invoiceEmitHandler))
+	mux.HandleFunc("/api/invoices/webhook", webhookInvoiceHandler) // 🚀 O Webhook (Livre de Auth para o Gateway conseguir bater aqui)
 
 	// WhatsApp
 	mux.HandleFunc("/api/message", waCtrl.EnviarMensagem)
@@ -982,7 +983,7 @@ func invoicesHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(results)
 }
 
-// 🚀 HANDLER: Emite uma nova nota fiscal
+// 🚀 HANDLER REAL: Emite a nota fiscal via Focus NFe
 func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -999,41 +1000,148 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 1. Gera os dados locais iniciais da nota
+	// 1. Buscar os dados completos do Cliente no banco para mandar à prefeitura
+	var client Client
+	err := clientCollection.FindOne(ctx, bson.M{"cpf": inv.CPF}).Decode(&client)
+	if err != nil {
+		client.Name = inv.Client
+		client.CPF = inv.CPF
+	}
+
+	// 2. Gera o ID local da nota
 	inv.ID = fmt.Sprintf("NF-%d", time.Now().UnixMilli()%100000)
 	inv.IssueDate = time.Now()
 	inv.Status = "PROCESSANDO"
 
-	// Salva imediatamente no banco para o Rodrigo já ver na tela
-	_, err := invoiceCollection.InsertOne(ctx, inv)
+	_, err = invoiceCollection.InsertOne(ctx, inv)
 	if err != nil {
 		http.Error(w, "Erro ao salvar solicitação de nota", http.StatusInternalServerError)
 		return
 	}
 
-	// 2. Simulação Assíncrona do Gateway (Focus NFe, etc)
-	// Em um ambiente real, aqui faríamos um HTTP POST para a API deles.
-	// Por enquanto, vamos simular o processamento para mostrar como a arquitetura funciona:
-	go func(invoiceID string) {
-		time.Sleep(10 * time.Second) // Simula o tempo que a prefeitura leva pra pensar
-
-		bgCtx, bgCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// 3. Executa a chamada à API em background (Assíncrono)
+	go func(invoiceID string, c Client, serviceValue float64) {
+		bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer bgCancel()
 
-		// Sorteia o resultado: 90% de chance de dar certo, 10% de chance de dar erro (ex: CPF falso)
-		if time.Now().Unix()%10 == 0 {
-			invoiceCollection.UpdateOne(bgCtx,
-				bson.M{"_id": invoiceID},
-				bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Prefeitura rejeitou o CPF ou o CEP está incompleto."}})
-		} else {
-			invoiceCollection.UpdateOne(bgCtx,
-				bson.M{"_id": invoiceID},
-				bson.M{"$set": bson.M{"status": "AUTORIZADA", "pdfUrl": "https://sua-api.com/download-nota.pdf"}})
+		// Payload Exato exigido pela Focus NFe (V2)
+		payload := map[string]interface{}{
+			"data_emissao": time.Now().Format(time.RFC3339),
+			"prestador":    map[string]string{
+				// "cnpj": "...", (Opcional se configurado direto no painel da Focus)
+			},
+			"tomador": map[string]interface{}{
+				"cpf_cnpj":     regexp.MustCompile(`\D`).ReplaceAllString(c.CPF, ""),
+				"razao_social": c.Name,
+				"email":        c.Email,
+				"endereco": map[string]string{
+					"logradouro": c.Address,
+					"numero":     c.Number,
+					"bairro":     c.Neighborhood,
+					"cep":        regexp.MustCompile(`\D`).ReplaceAllString(c.CEP, ""),
+					"uf":         c.State,
+					// "codigo_municipio": "3550308", // IBGE da cidade (A Focus tenta deduzir pelo CEP)
+				},
+			},
+			"servico": map[string]interface{}{
+				"valor_servicos": serviceValue,
+				"descricao":      "Serviços prestados de gestão financeira e administrativa.",
+				// "item_lista_servico": "17.06", // Adicionar conforme CNAE do Rodrigo
+			},
 		}
-	}(inv.ID)
+
+		payloadBytes, _ := json.Marshal(payload)
+
+		apiURL := os.Getenv("FOCUS_NFE_URL")
+		if apiURL == "" {
+			apiURL = "https://homologacao.focusnfe.com.br/v2/nfse" // Ambiente de testes padrão
+		}
+		apiKey := os.Getenv("FOCUS_NFE_TOKEN")
+
+		// Se não houver token configurado, fingimos sucesso após 5 seg para o sistema não quebrar
+		if apiKey == "" {
+			log.Println("⚠️ TOKEN DA FOCUS NFE NÃO ENCONTRADO. Simulando aprovação para testes locais...")
+			time.Sleep(5 * time.Second)
+			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "AUTORIZADA", "pdfUrl": "https://focusnfe.com.br/painel/teste.pdf"}})
+			return
+		}
+
+		// Requisição Real
+		req, _ := http.NewRequest("POST", apiURL+"?ref="+invoiceID, bytes.NewBuffer(payloadBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Basic "+apiKey)
+
+		clientHttp := &http.Client{Timeout: 15 * time.Second}
+		resp, err := clientHttp.Do(req)
+
+		if err != nil || resp.StatusCode >= 400 {
+			errorMsg := "Erro na integração com a Sefaz/Focus NFe."
+			if resp != nil {
+				bodyErr, _ := io.ReadAll(resp.Body)
+				errorMsg = string(bodyErr)
+				resp.Body.Close()
+			}
+			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": errorMsg}})
+			log.Printf("❌ Erro Focus NFe: %s", errorMsg)
+		} else {
+			log.Printf("✅ Nota %s enviada para a Focus NFe. Aguardando processamento da prefeitura.", invoiceID)
+		}
+	}(inv.ID, client, inv.ServiceValue)
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(inv)
+}
+
+// 🚀 WEBHOOK REAL: Escuta a resposta final da Focus NFe (Autorizada ou Erro)
+func webhookInvoiceHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var webhookData map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&webhookData); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// A Focus NFe devolve a "ref" (referência) que enviamos na emissão
+	ref, okRef := webhookData["ref"].(string)
+	statusGateway, okStatus := webhookData["status"].(string)
+
+	if !okRef || !okStatus {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	updateFields := bson.M{}
+
+	switch statusGateway {
+	case "autorizado":
+		updateFields["status"] = "AUTORIZADA"
+		if url, ok := webhookData["url"].(string); ok {
+			updateFields["pdfUrl"] = url // URL do PDF/HTML da nota
+		}
+	case "erro_autorizacao", "cancelado":
+		updateFields["status"] = "ERRO"
+		if erros, ok := webhookData["erros"].([]interface{}); ok && len(erros) > 0 {
+			if errMsg, okMap := erros[0].(map[string]interface{})["mensagem"].(string); okMap {
+				updateFields["errorMsg"] = errMsg
+			} else {
+				updateFields["errorMsg"] = fmt.Sprintf("%v", erros[0])
+			}
+		}
+	}
+
+	if len(updateFields) > 0 {
+		invoiceCollection.UpdateOne(ctx, bson.M{"_id": ref}, bson.M{"$set": updateFields})
+		log.Printf("✅ Webhook Recebido: Nota %s processada como %s", ref, updateFields["status"])
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {

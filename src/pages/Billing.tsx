@@ -1373,19 +1373,26 @@ const handleOpenEditContract = (loan: Loan) => {
       const isSimple = selectedLoan.interestType === 'SIMPLE';
       const newAmount = parseFloat(editContractData.amount) || selectedLoan.amount;
       const newInterestRate = parseFloat(editContractData.interestRate) || selectedLoan.interestRate;
+      const numInst = isSimple ? 1 : (parseInt(editContractData.installments) || selectedLoan.installments);
       
-      let newInstallmentValue = parseFloat(editContractData.installmentValue) || selectedLoan.installmentValue;
-      let newProjectedProfit = selectedLoan.projectedProfit;
+      // 🚀 MATEMÁTICA BLINDADA: O sistema recalcula o valor exato da parcela na hora de salvar
+      let newInstallmentValue = 0;
+      let periodRate = newInterestRate / 100;
+      if (selectedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
+      else if (selectedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
 
       if (isSimple) {
-          let periodRate = newInterestRate / 100;
-          if (selectedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
-          else if (selectedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
-          
           const currentBalance = Math.max(0, newAmount - (selectedLoan.totalPaidCapital || 0));
           newInstallmentValue = currentBalance * periodRate;
       } else {
-          const numInst = parseInt(editContractData.installments) || selectedLoan.installments;
+          if (periodRate === 0) newInstallmentValue = newAmount / numInst;
+          else newInstallmentValue = newAmount * ((periodRate * Math.pow(1 + periodRate, numInst)) / (Math.pow(1 + periodRate, numInst) - 1));
+      }
+      
+      newInstallmentValue = Math.round(newInstallmentValue * 100) / 100;
+
+      let newProjectedProfit = selectedLoan.projectedProfit;
+      if (!isSimple) {
           newProjectedProfit = Math.max(0, (newInstallmentValue * numInst) - newAmount);
       }
 
@@ -2549,76 +2556,34 @@ const handleFinalSave = async (e: React.FormEvent) => {
                   <p className="text-xs text-blue-700">Modifique qualquer dado base do contrato. Estas alterações substituirão os dados originais no sistema e não gerarão um "Acordo" no extrato.</p>
               </div>
               
-              <div className="grid grid-cols-2 gap-4">
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">ID do Contrato</label><input type="text" value={editContractData.id} onChange={e => setEditContractData({...editContractData, id: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-slate-800"/></div>
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Valor Emprestado Original (R$)</label><input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={editContractData.amount} onChange={e => setEditContractData({...editContractData, amount: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none"/></div>
+              <div className="mb-4">
+                  <label className="block text-xs font-bold text-slate-500 mb-1">ID do Contrato</label>
+                  <input type="text" value={editContractData.id} onChange={e => setEditContractData({...editContractData, id: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-slate-800"/>
               </div>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-3 gap-4 mb-4">
                   <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-1">Taxa Mensal (%)</label>
-                      <input 
-                          type="number" onWheel={(e) => e.currentTarget.blur()} step="any" 
-                          value={editContractData.interestRate} 
-                          onChange={e => {
-                              const newRateStr = e.target.value;
-                              setEditContractData((prev: any) => {
-                                  const newRateNum = parseFloat(newRateStr) || 0;
-                                  const amt = parseFloat(prev.amount) || 0;
-                                  const inst = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(prev.installments) || 1);
-                                  
-                                  let periodRate = newRateNum / 100;
-                                  if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
-                                  if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
-                                  
-                                  let calcInst = 0;
-                                  if (selectedLoan?.interestType === 'SIMPLE') {
-                                      calcInst = Math.max(0, amt - (selectedLoan?.totalPaidCapital || 0)) * periodRate;
-                                  } else {
-                                      if (periodRate === 0) calcInst = amt / inst;
-                                      else calcInst = amt * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
-                                  }
-                                  
-                                  return { ...prev, interestRate: newRateStr, installmentValue: calcInst > 0 ? (Math.round(calcInst * 100) / 100).toFixed(2) : '' };
-                              });
-                          }} 
-                          className="w-full p-2.5 border rounded-lg outline-none text-slate-800 font-bold focus:ring-2 focus:ring-blue-500/20 transition-all"
-                      />
+                      <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label>
+                      <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={editContractData.amount} onChange={e => setEditContractData({...editContractData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5"/>
                   </div>
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">Qtd. Parcelas</label><input type="number" onWheel={(e) => e.currentTarget.blur()} value={selectedLoan?.interestType === 'SIMPLE' ? 1 : editContractData.installments} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => {
-                      const newInstStr = e.target.value;
-                      setEditContractData((prev: any) => {
-                          const amt = parseFloat(prev.amount) || 0;
-                          const rateNum = parseFloat(prev.interestRate) || 0;
-                          const inst = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(newInstStr) || 1);
-                          
-                          let periodRate = rateNum / 100;
-                          if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
-                          if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
-                          
-                          let calcInst = 0;
-                          if (selectedLoan?.interestType === 'SIMPLE') {
-                              calcInst = Math.max(0, amt - (selectedLoan?.totalPaidCapital || 0)) * periodRate;
-                          } else {
-                              if (periodRate === 0) calcInst = amt / inst;
-                              else calcInst = amt * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
-                          }
-                          
-                          return { ...prev, installments: newInstStr, installmentValue: calcInst > 0 ? (Math.round(calcInst * 100) / 100).toFixed(2) : '' };
-                      });
-                  }} className="w-full p-2.5 border rounded-lg outline-none disabled:bg-slate-100 disabled:text-slate-400 focus:ring-2 focus:ring-blue-500/20 transition-all"/></div>
                   <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-1 leading-tight">Valor da Parcela (R$)</label>
-                      <input type="text" value={editContractData.installmentValue || ''} readOnly className="w-full p-2.5 border border-slate-200 rounded-lg outline-none font-bold text-slate-400 bg-slate-50 cursor-not-allowed"/>
+                      <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label>
+                      <input type="number" onWheel={(e) => e.currentTarget.blur()} step="any" value={editContractData.interestRate} onChange={e => setEditContractData({...editContractData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5"/>
+                  </div>
+                  <div>
+                      <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label>
+                      <input type="number" onWheel={(e) => e.currentTarget.blur()} value={selectedLoan?.interestType === 'SIMPLE' ? 1 : editContractData.installments} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 disabled:bg-slate-100 disabled:text-slate-400"/>
                   </div>
               </div>
 
-              <div className="grid grid-cols-1 p-3 bg-slate-50 border border-slate-200 rounded-lg shadow-inner">
+              <div className="grid grid-cols-1 p-4 bg-blue-50 border border-blue-200 rounded-xl shadow-inner mb-4">
                   <div>
-                      <label className="block text-[10px] font-black uppercase text-blue-600 mb-1 leading-tight">Forçar Juros Total Desejado (R$) - Opcional</label>
+                      <label className="block text-[10px] font-black uppercase text-blue-700 mb-1 leading-tight">Juros Total Desejado (R$) - Opcional</label>
                       <input 
-                          type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" 
-                          placeholder="Digite o juros exato que o sistema ajusta a taxa..."
+                          type="number" 
+                          onWheel={(e) => e.currentTarget.blur()} 
+                          step="0.01" 
+                          placeholder="Ex: 410.00 (O sistema calcula a % exata para você)"
                           onChange={e => {
                               const val = e.target.value;
                               if (val === '') return;
@@ -2632,6 +2597,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                   if (selectedLoan?.interestType === 'SIMPLE' || parcelas === 1) {
                                       bestRate = (jurosTarget / cap) * 100;
                                   } else {
+                                      // Motor de Busca Binária (Iguaizinho ao da Criação)
                                       let low = 0.0, high = 100.0;
                                       for (let i = 0; i < 60; i++) {
                                           let mid = (low + high) / 2;
@@ -2647,7 +2613,9 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                   if (selectedLoan?.frequency === 'DIARIO') bestRate *= 30;
                                   if (bestRate < 0.000001) bestRate = 0;
                                   
-                                  const formattedRate = Number(bestRate.toFixed(2));
+                                  // 🚀 FIX: Matemáica Pura! Retiramos o "Number(bestRate.toFixed(2))" daqui:
+                                  const formattedRate = bestRate;
+                                  
                                   setEditContractData((prev: any) => {
                                       let periodRate = formattedRate / 100;
                                       if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
@@ -2664,7 +2632,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                   });
                               }
                           }} 
-                          className="w-full p-2.5 border border-blue-300 rounded-lg outline-none font-black text-blue-700 bg-blue-50 focus:ring-2 focus:ring-blue-500/20 shadow-sm"
+                          className="w-full p-3 border border-blue-300 rounded-xl outline-none font-black text-blue-700 bg-white focus:ring-2 focus:ring-blue-500/20 shadow-sm"
                       />
                   </div>
               </div>
