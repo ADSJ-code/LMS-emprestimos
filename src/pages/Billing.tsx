@@ -957,7 +957,7 @@ const Billing = () => {
       return { capital: capSum, interest: intSum, expectedProfit: expectedProfitSum, installment: installmentSum, count };
   }, [filteredLoans, selectedIds, filterStart, filterEnd, statusFilter]);
 
-  // --- MOTOR INTELIGENTE DE BAIXA DE FATIAS ---
+  // --- MOTOR INTELIGENTE DE BAIXA DE FATIAS E PARCIAIS ---
   const handleOpenPayment = (loan: Loan) => {
     setSelectedLoan(loan);
     const now = new Date();
@@ -968,6 +968,18 @@ const Billing = () => {
     const breakdown = getSyncedBreakdown(loan);
     const slices = (loan as any).multiDates || [];
     const status = getLoanRealStatus(loan);
+
+    // 🚀 FIX 1: O sistema agora olha PRIMEIRO o que o cliente já pagou de picadinho no ciclo atual
+    let accInt = 0; let accCap = 0;
+    if(loan.history) {
+        for (let i = loan.history.length - 1; i >= 0; i--) {
+            const h = loan.history[i];
+            if (h.note?.includes('[CICLO COMPLETADO]') || h.type === 'Abertura') break;
+            accInt += (h.interestPaid || 0);
+            accCap += (h.capitalPaid || 0);
+        }
+    }
+    setCycleAcc({ interest: accInt, capital: accCap });
     
     let autoCapital = '';
     let autoInterest = '';
@@ -1001,7 +1013,6 @@ const Billing = () => {
             let slicePenalty = 0;
             const sliceDate = new Date(currentYear, currentMonth, Number(s.day));
             
-            // Calcula a multa APENAS se ESTA fatia específica estiver atrasada
             if (!isPaid && sliceDate < today && loan.status !== 'Pago' && loan.status !== 'Quitado') {
                 const sliceOverdue = calculateOverdueValue(baseAmount, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount * ratio);
                 slicePenalty = sliceOverdue - baseAmount;
@@ -1009,7 +1020,6 @@ const Billing = () => {
             
             const sliceTotal = baseAmount + slicePenalty;
 
-            // Achou a primeira fatia não paga por completo
             if (slicePaidAmount < (sliceTotal - 0.05) && !targetSlice) {
                 targetSlice = s;
                 targetRemaining = sliceTotal - slicePaidAmount;
@@ -1024,15 +1034,11 @@ const Billing = () => {
             const sliceIntOriginal = breakdown.interest * targetRatio;
             const sliceCapOriginal = breakdown.capital * targetRatio;
 
-            // PROTEÇÃO DE AUTO-PREENCHIMENTO: Não sugere pagar mais capital do que deve
             const remainingCapitalDebt = Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
             let autoCap = sliceCapOriginal * remRatio;
             
-            if (autoCap > remainingCapitalDebt) {
-                autoCap = remainingCapitalDebt;
-            }
+            if (autoCap > remainingCapitalDebt) autoCap = remainingCapitalDebt;
             
-            // O que sobrar (seja juros normal, multa, ou excesso de capital) vai pro campo de Juros
             const expectedTotal = targetRemaining;
             const autoInt = expectedTotal - autoCap;
 
@@ -1045,37 +1051,25 @@ const Billing = () => {
             const fullOverdue = calculateOverdueValue(breakdown.total, loan.nextDue, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount);
             totalPenalty = fullOverdue - breakdown.total;
         }
-        autoCapital = breakdown.capital > 0 ? breakdown.capital.toFixed(2) : '';
-        autoInterest = (breakdown.interest + totalPenalty) > 0 ? (breakdown.interest + totalPenalty).toFixed(2) : '';
+        // 🚀 FIX 2: Subtrai o que o cara JÁ PAGOU da sugestão na tela. Não cobra o valor cheio de novo!
+        const remainingCap = Math.max(0, breakdown.capital - accCap);
+        const remainingInt = Math.max(0, (breakdown.interest + totalPenalty) - accInt);
+
+        autoCapital = remainingCap > 0 ? remainingCap.toFixed(2) : '';
+        autoInterest = remainingInt > 0 ? remainingInt.toFixed(2) : '';
     }
 
     setPayCapital(autoCapital);
     setPayInterest(autoInterest);
     setSettleInterest(false);
-
-    let accInt = 0; let accCap = 0;
-    if(loan.history) {
-        const cycleStart = new Date(loan.nextDue);
-        cycleStart.setMonth(cycleStart.getMonth() - 1);
-        cycleStart.setHours(23, 59, 59, 999);
-        for (let i = loan.history.length - 1; i >= 0; i--) {
-            const h = loan.history[i];
-            if (h.note?.includes('[CICLO COMPLETADO]') || h.type === 'Abertura') break;
-            accInt += (h.interestPaid || 0);
-            accCap += (h.capitalPaid || 0);
-        }
-    }
-    setCycleAcc({ interest: accInt, capital: accCap });
     
-    // 🚀 NOVO: Calcula exato o que falta para fechar o ciclo e avançar a parcela
+    // 🚀 FIX 3: Base do CycleMissing blindada para considerar Acordos extras.
     const expectedInterest = breakdown.interest;
-    const requiredTotal = loan.interestType === 'SIMPLE' ? expectedInterest : (loan.installmentValue || breakdown.total);
+    const requiredTotal = loan.interestType === 'SIMPLE' ? expectedInterest : breakdown.total;
     const accumulatedTotal = loan.interestType === 'SIMPLE' ? accInt : (accInt + accCap);
     setCycleMissing(Math.max(0, requiredTotal - accumulatedTotal));
 
-    // 🚀 RESETAR CHECKBOX
     setForceAdvanceMonth(false);
-
     setIsDetailsOpen(false);
     setIsCollectionModalOpen(false);
     setIsPaymentModalOpen(true);
@@ -2500,19 +2494,27 @@ const handleFinalSave = async (e: React.FormEvent) => {
                 <span className="text-xl font-black text-slate-900">R$ {formatMoney(Number(payCapital) + Number(payInterest))}</span>
             </div>
 
-            {/* 🚀 BANNER DE AVISO: FALTA R$ X */}
+            {/* 🚀 BANNER INTELIGENTE: Calcula ao vivo o que o cliente está digitando na tela */}
             {cycleMissing > 0 && !forceAdvanceMonth && (
-                <div className={`mt-2 p-3 rounded-xl border flex items-center justify-between text-sm transition-colors ${
-                    ((Number(selectedLoan?.interestType === 'SIMPLE' ? payInterest : (Number(payCapital) + Number(payInterest)))) >= (cycleMissing - 0.05)) 
-                    ? 'bg-green-50 border-green-200 text-green-800' 
-                    : 'bg-orange-50 border-orange-200 text-orange-800'
-                }`}>
-                    <span className="font-bold flex items-center gap-1.5">
-                        {((Number(selectedLoan?.interestType === 'SIMPLE' ? payInterest : (Number(payCapital) + Number(payInterest)))) >= (cycleMissing - 0.05)) ? <CheckCircle size={16}/> : <AlertCircle size={16}/>}
-                        Falta para fechar parcela:
-                    </span>
-                    <span className="font-black">R$ {formatMoney(cycleMissing)}</span>
-                </div>
+                (() => {
+                    const paidNowDynamic = selectedLoan?.interestType === 'SIMPLE' ? (parseFloat(payInterest) || 0) : (parseFloat(payCapital) || 0) + (parseFloat(payInterest) || 0);
+                    const remainingToClose = Math.max(0, cycleMissing - paidNowDynamic);
+                    const willAdvance = paidNowDynamic >= (cycleMissing - 0.05);
+
+                    return (
+                        <div className={`mt-2 p-3 rounded-xl border flex items-center justify-between text-sm transition-colors ${
+                            willAdvance 
+                            ? 'bg-green-50 border-green-200 text-green-800' 
+                            : 'bg-orange-50 border-orange-200 text-orange-800'
+                        }`}>
+                            <span className="font-bold flex items-center gap-1.5">
+                                {willAdvance ? <CheckCircle size={16}/> : <AlertCircle size={16}/>}
+                                {willAdvance ? 'Parcela será concluída:' : 'Restará para fechar parcela:'}
+                            </span>
+                            <span className="font-black">R$ {formatMoney(remainingToClose)}</span>
+                        </div>
+                    );
+                })()
             )}
 
             {/* 🚀 CHECKBOX PARA AVANÇAR O MÊS MANUALMENTE */}
@@ -2561,18 +2563,112 @@ const handleFinalSave = async (e: React.FormEvent) => {
                   <input type="text" value={editContractData.id} onChange={e => setEditContractData({...editContractData, id: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-slate-800"/>
               </div>
 
-              <div className="grid grid-cols-3 gap-4 mb-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <div>
-                      <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Valor (R$)</label>
-                      <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={editContractData.amount} onChange={e => setEditContractData({...editContractData, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5"/>
+                      <label className="block text-[10px] font-bold uppercase text-slate-500 mb-2">Valor (R$)</label>
+                      <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={editContractData.amount} onChange={e => {
+                          const newAmtStr = e.target.value;
+                          setEditContractData((prev: any) => {
+                              const newAmtNum = parseFloat(newAmtStr) || 0;
+                              const rateNum = parseFloat(prev.interestRate) || 0;
+                              const inst = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(prev.installments) || 1);
+                              let periodRate = rateNum / 100;
+                              if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
+                              if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
+                              let calcInst = 0;
+                              if (selectedLoan?.interestType === 'SIMPLE') calcInst = Math.max(0, newAmtNum - (selectedLoan?.totalPaidCapital || 0)) * periodRate;
+                              else {
+                                  if (periodRate === 0) calcInst = newAmtNum / inst;
+                                  else calcInst = newAmtNum * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
+                              }
+                              return { ...prev, amount: newAmtStr, installmentValue: calcInst > 0 ? (Math.round(calcInst * 100) / 100).toFixed(2) : '' };
+                          });
+                      }} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5"/>
                   </div>
                   <div>
-                      <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label>
-                      <input type="number" onWheel={(e) => e.currentTarget.blur()} step="any" value={editContractData.interestRate} onChange={e => setEditContractData({...editContractData, interestRate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5"/>
+                      <label className="block text-[10px] font-bold uppercase text-slate-500 mb-2">Taxa Mensal (%)</label>
+                      <input type="number" onWheel={(e) => e.currentTarget.blur()} step="any" value={editContractData.interestRate} onChange={e => {
+                          const newRateStr = e.target.value;
+                          setEditContractData((prev: any) => {
+                              const newRateNum = parseFloat(newRateStr) || 0;
+                              const amt = parseFloat(prev.amount) || 0;
+                              const inst = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(prev.installments) || 1);
+                              let periodRate = newRateNum / 100;
+                              if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
+                              if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
+                              let calcInst = 0;
+                              if (selectedLoan?.interestType === 'SIMPLE') calcInst = Math.max(0, amt - (selectedLoan?.totalPaidCapital || 0)) * periodRate;
+                              else {
+                                  if (periodRate === 0) calcInst = amt / inst;
+                                  else calcInst = amt * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
+                              }
+                              return { ...prev, interestRate: newRateStr, installmentValue: calcInst > 0 ? (Math.round(calcInst * 100) / 100).toFixed(2) : '' };
+                          });
+                      }} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5"/>
                   </div>
                   <div>
-                      <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label>
-                      <input type="number" onWheel={(e) => e.currentTarget.blur()} value={selectedLoan?.interestType === 'SIMPLE' ? 1 : editContractData.installments} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => setEditContractData({...editContractData, installments: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 disabled:bg-slate-100 disabled:text-slate-400"/>
+                      <label className="block text-[10px] font-bold uppercase text-slate-500 mb-2">Qtd. Parcelas</label>
+                      <input type="number" onWheel={(e) => e.currentTarget.blur()} value={selectedLoan?.interestType === 'SIMPLE' ? 1 : editContractData.installments} disabled={selectedLoan?.interestType === 'SIMPLE'} onChange={e => {
+                          const newInstStr = e.target.value;
+                          setEditContractData((prev: any) => {
+                              const amt = parseFloat(prev.amount) || 0;
+                              const rateNum = parseFloat(prev.interestRate) || 0;
+                              const inst = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(newInstStr) || 1);
+                              let periodRate = rateNum / 100;
+                              if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
+                              if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
+                              let calcInst = 0;
+                              if (selectedLoan?.interestType === 'SIMPLE') calcInst = Math.max(0, amt - (selectedLoan?.totalPaidCapital || 0)) * periodRate;
+                              else {
+                                  if (periodRate === 0) calcInst = amt / inst;
+                                  else calcInst = amt * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
+                              }
+                              return { ...prev, installments: newInstStr, installmentValue: calcInst > 0 ? (Math.round(calcInst * 100) / 100).toFixed(2) : '' };
+                          });
+                      }} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 disabled:bg-slate-100 disabled:text-slate-400"/>
+                  </div>
+                  <div>
+                      <label className="block text-[10px] font-bold uppercase text-blue-600 mb-2">Valor Parcela (R$)</label>
+                      <input 
+                          type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" 
+                          value={editContractData.installmentValue || ''} 
+                          onChange={e => {
+                              const val = e.target.value;
+                              setEditContractData((prev: any) => {
+                                  if (val === '') return { ...prev, installmentValue: val };
+                                  
+                                  const pmtTarget = parseFloat(val) || 0;
+                                  const cap = parseFloat(prev.amount) || 0;
+                                  const parcelas = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(prev.installments) || 1);
+
+                                  if (cap > 0 && pmtTarget > 0) {
+                                      let bestRate = 0;
+                                      if (selectedLoan?.interestType === 'SIMPLE') {
+                                          bestRate = (pmtTarget / cap) * 100;
+                                      } else {
+                                          // Motor de Busca Binária
+                                          let low = 0.0, high = 100.0;
+                                          for (let i = 0; i < 60; i++) {
+                                              let mid = (low + high) / 2;
+                                              let r = mid / 100;
+                                              let pmt = cap * ((r * Math.pow(1 + r, parcelas)) / (Math.pow(1 + r, parcelas) - 1));
+                                              if (pmt < pmtTarget) low = mid; else high = mid;
+                                              bestRate = mid;
+                                          }
+                                      }
+                                      
+                                      if (selectedLoan?.frequency === 'SEMANAL') bestRate *= 4;
+                                      if (selectedLoan?.frequency === 'DIARIO') bestRate *= 30;
+                                      if (bestRate < 0.000001) bestRate = 0;
+                                      
+                                      return { ...prev, installmentValue: val, interestRate: String(bestRate) };
+                                  }
+                                  return { ...prev, installmentValue: val };
+                              });
+                          }} 
+                          className="w-full p-3 border border-blue-300 rounded-xl outline-none font-black text-blue-700 bg-blue-50 focus:ring-2 focus:ring-blue-500/20 shadow-sm transition-all"
+                          placeholder="Ex: 150.00"
+                      />
                   </div>
               </div>
 
@@ -2597,7 +2693,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                   if (selectedLoan?.interestType === 'SIMPLE' || parcelas === 1) {
                                       bestRate = (jurosTarget / cap) * 100;
                                   } else {
-                                      // Motor de Busca Binária (Iguaizinho ao da Criação)
+                                      // Motor de Busca Binária
                                       let low = 0.0, high = 100.0;
                                       for (let i = 0; i < 60; i++) {
                                           let mid = (low + high) / 2;
@@ -2613,7 +2709,6 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                   if (selectedLoan?.frequency === 'DIARIO') bestRate *= 30;
                                   if (bestRate < 0.000001) bestRate = 0;
                                   
-                                  // 🚀 FIX: Matemáica Pura! Retiramos o "Number(bestRate.toFixed(2))" daqui:
                                   const formattedRate = bestRate;
                                   
                                   setEditContractData((prev: any) => {
