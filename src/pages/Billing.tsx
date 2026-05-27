@@ -928,20 +928,29 @@ const Billing = () => {
       let capSum = 0;
       let intSum = 0;
       let expectedProfitSum = 0;
-      let installmentSum = 0; // NOVA VARIÁVEL AQUI
+      let installmentSum = 0; 
       let count = 0;
 
       filteredLoans.forEach(loan => {
           if (selectedIds.includes(loan.id)) {
-              intSum += (loan.totalPaidInterest || 0);
+              // 🚀 FIX: Se houver filtro de data, soma APENAS o que pingou naqueles dias!
+              let periodIntSum = 0;
+              if (filterStart && filterEnd && statusFilter === 'PagosNoPeriodo' && loan.history) {
+                  loan.history.forEach(h => {
+                      const hDate = h.date.split('T')[0];
+                      if (hDate >= filterStart && hDate <= filterEnd && !h.type.toLowerCase().includes('abertura')) {
+                          periodIntSum += (h.interestPaid || 0);
+                      }
+                  });
+                  intSum += periodIntSum;
+              } else {
+                  intSum += (loan.totalPaidInterest || 0);
+              }
+              
               const isSimple = loan.interestType === 'SIMPLE';
               const breakdown = getSyncedBreakdown(loan);
               
-              // SOMA DA PARCELA FIXA
-              // 🚀 FIX: O breakdown.total já processa PRICE, SIMPLE e Acordos extras
               installmentSum += breakdown.total; 
-              
-              // SALDO CAPITAL A RECEBER EXATO DO PRINCIPAL (Ignora filtro de data para saldo total da carteira)
               capSum += Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
 
               if (!isSimple) {
@@ -1921,6 +1930,19 @@ const handleFinalSave = async (e: React.FormEvent) => {
             <tbody className="divide-y divide-slate-50">
                 {filteredLoans.length === 0 ? (<tr><td colSpan={10} className="p-8 text-center text-slate-400">Nenhum contrato encontrado.</td></tr>) : (filteredLoans.map(loan => {
                     const displayStatus = getLoanRealStatus(loan);
+                    
+                    // 🚀 FIX: Calcula os juros para exibir na coluna da tabela respeitando o filtro de data
+                    let displayInterestPaid = loan.totalPaidInterest || 0;
+                    if (filterStart && filterEnd && statusFilter === 'PagosNoPeriodo' && loan.history) {
+                        displayInterestPaid = 0;
+                        loan.history.forEach(h => {
+                            const hDate = h.date.split('T')[0];
+                            if (hDate >= filterStart && hDate <= filterEnd && !h.type.toLowerCase().includes('abertura')) {
+                                displayInterestPaid += (h.interestPaid || 0);
+                            }
+                        });
+                    }
+
                     return (
                       <tr
                         key={loan.id}
@@ -1976,7 +1998,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                         </td>
 
                         <td className="p-4 text-right font-bold text-green-600 bg-green-50/30 rounded">
-                          R$ {formatMoney(loan.totalPaidInterest || 0)}
+                          R$ {formatMoney(displayInterestPaid)}
                         </td>
                         <td className="p-4 text-right font-bold text-slate-500">
                           R$ {formatMoney(loan.installmentValue)}
