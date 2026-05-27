@@ -1489,6 +1489,12 @@ const handleOpenEditContract = (loan: Loan) => {
 
         if (loan.history && loan.history.length > 0) {
             loan.history.forEach(record => {
+                // 🚀 FIX: Se houver filtro de data, ignora os registros que estão fora do período!
+                if (filterStart && filterEnd) {
+                    const recordDate = record.date.split('T')[0];
+                    if (recordDate < filterStart || recordDate > filterEnd) return;
+                }
+
                 if (record.amount > 0 || record.type === 'Abertura') {
                     hasRecords = true;
                     worksheet.addRow({
