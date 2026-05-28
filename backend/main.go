@@ -1052,24 +1052,35 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 
 		payloadBytes, _ := json.Marshal(payload)
 
-		apiURL := os.Getenv("FOCUS_NFE_URL")
-		if apiURL == "" {
-			apiURL = "https://homologacao.focusnfe.com.br/v2/nfse" // Ambiente de testes padrão
+		// 🚀 FIX: Inteligência de Ambiente (Produção vs Testes)
+		env := os.Getenv("FOCUS_NFE_ENV")
+		apiURL := "https://homologacao.focusnfe.com.br/v2/nfse"
+		if env == "producao" {
+			apiURL = "https://api.focusnfe.com.br/v2/nfse"
 		}
+
 		apiKey := os.Getenv("FOCUS_NFE_TOKEN")
 
-		// Se não houver token configurado, fingimos sucesso após 5 seg para o sistema não quebrar
+		// Se não houver token, fingimos sucesso após 5 seg para não quebrar a tela em desenvolvimento
 		if apiKey == "" {
 			log.Println("⚠️ TOKEN DA FOCUS NFE NÃO ENCONTRADO. Simulando aprovação para testes locais...")
 			time.Sleep(5 * time.Second)
-			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "AUTORIZADA", "pdfUrl": "https://focusnfe.com.br/painel/teste.pdf"}})
+			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "AUTORIZADA", "pdfUrl": "https://focusnfe.com.br/painel/teste_nfe.pdf"}})
 			return
 		}
 
 		// Requisição Real
-		req, _ := http.NewRequest("POST", apiURL+"?ref="+invoiceID, bytes.NewBuffer(payloadBytes))
+		req, err := http.NewRequest("POST", apiURL+"?ref="+invoiceID, bytes.NewBuffer(payloadBytes))
+		if err != nil {
+			log.Printf("❌ Erro ao criar requisição NFe: %v", err)
+			return
+		}
+
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Basic "+apiKey)
+
+		// 🚀 O PULO DO GATO: A Focus NFe exige Basic Auth (Usuário = Token, Senha = Vazio).
+		// O método SetBasicAuth do Go converte isso para Base64 perfeitamente, evitando o Erro 401.
+		req.SetBasicAuth(apiKey, "")
 
 		clientHttp := &http.Client{Timeout: 15 * time.Second}
 		resp, err := clientHttp.Do(req)
