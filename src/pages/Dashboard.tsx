@@ -21,7 +21,9 @@ const Dashboard = () => {
   // 🚀 EXTRAÇÃO DE APELIDO: Limpa o JSON e mostra apenas a observação
   const getNickname = (obs?: string) => {
       if (!obs) return '';
-      return obs.replace(/\[META:.*?\]/g, '').trim();
+      let clean = obs.split('[META:')[0].trim();
+      // Limpa o rastro do bug antigo (chaves que ficaram salvas no banco)
+      return clean.replace(/\}\]$/, '').trim();
   };
   
   // --- ESTADOS DE FILTRO E VISÃO ---
@@ -374,7 +376,7 @@ const Dashboard = () => {
 
         const breakdown = getSyncedBreakdown(loan);    
         const realStatus = getLoanRealStatus(loan);
-        const { totalOverdue } = getLoanDetails(loan);       
+        const { totalOverdue, missedCount } = getLoanDetails(loan);       
         let currentDue = parseLocalDate(loan.nextDue);
         let hasMatch = false;
         let capToAdd = 0;
@@ -425,8 +427,47 @@ const Dashboard = () => {
             } else {
                 let gCap = Math.max(0, parseVal(loan.amount) - parseVal(loan.totalPaidCapital));
                 const gExpected = parseVal(loan.projectedProfit) || Math.max(0, (parseVal(loan.installmentValue) * parseVal(loan.installments)) - parseVal(loan.amount));
-                
                 let gProf = (loan.interestType === 'SIMPLE') ? breakdown.interest : Math.max(0, gExpected - parseVal(loan.totalPaidInterest));
+                
+                // 🚀 FIX RODRIGO: DEDUZIR O VALOR ATRASADO DO CAPITAL E LUCRO PARA NÃO DUPLICAR NOS CARDS GLOBAIS
+                if (missedCount > 0 && realStatus === 'Atrasado') {
+                    const isMulti = loan.multiDates && loan.multiDates.length > 0;
+                    const todayDate = getToday();
+
+                    if (loan.interestType === 'SIMPLE') {
+                        gCap = 0; 
+                        gProf = 0;
+                    } else if (isMulti) {
+                        const currentMonth = parseLocalDate(loan.nextDue).getMonth();
+                        const currentYear = parseLocalDate(loan.nextDue).getFullYear();
+                        
+                        loan.multiDates.forEach((md: any) => {
+                            const sliceDate = new Date(currentYear, currentMonth, Number(md.day));
+                            const baseAmount = Number(md.amount) || 0;
+                            
+                            const slicePaidAmount = (loan.history || []).reduce((acc: number, h: any) => {
+                                const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                                if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${md.day}`)) {
+                                    return acc + h.amount;
+                                }
+                                return acc;
+                            }, 0);
+                            
+                            if (slicePaidAmount < (baseAmount - 0.05) && sliceDate < todayDate) {
+                                const ratio = breakdown.total > 0 ? (baseAmount / breakdown.total) : 0;
+                                gCap -= (breakdown.capital * ratio);
+                                gProf -= (breakdown.interest * ratio);
+                            }
+                        });
+                    } else {
+                        gCap -= (breakdown.capital * missedCount);
+                        gProf -= (breakdown.interest * missedCount);
+                    }
+                    
+                    gCap = Math.max(0, gCap);
+                    gProf = Math.max(0, gProf);
+                }
+
                 capAcc.all += gCap; capAcc[tier] += gCap;
                 profAcc.all += gProf; profAcc[tier] += gProf;
                 
@@ -988,7 +1029,7 @@ const Dashboard = () => {
                                           <td className="p-4">
                                               <div className="font-bold text-slate-800">{c.name}</div>
                                               {getNickname(allClients.find(client => client.name === c.name)?.observations) && (
-                                                  <div className="text-[10px] font-bold text-blue-600 truncate max-w-[250px] mt-0.5">
+                                                  <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 mb-1 w-fit truncate max-w-[200px]" title={getNickname(allClients.find(client => client.name === c.name)?.observations)}>
                                                       {getNickname(allClients.find(client => client.name === c.name)?.observations)}
                                                   </div>
                                               )}
@@ -1033,7 +1074,7 @@ const Dashboard = () => {
                                           <td className="p-4">
                                               <div className="font-bold text-slate-800">{loan.client}</div>
                                               {getNickname(allClients.find(c => c.name === loan.client)?.observations) && (
-                                                  <div className="text-[10px] font-bold text-blue-600 truncate max-w-[250px] my-0.5">
+                                                  <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 mb-1 w-fit truncate max-w-[200px]" title={getNickname(allClients.find(c => c.name === loan.client)?.observations)}>
                                                       {getNickname(allClients.find(c => c.name === loan.client)?.observations)}
                                                   </div>
                                               )}

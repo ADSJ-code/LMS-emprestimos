@@ -63,7 +63,9 @@ const Overdue = () => {
   // 🚀 EXTRAÇÃO DE APELIDO: Limpa o JSON e mostra apenas a observação
   const getNickname = (obs?: string) => {
       if (!obs) return '';
-      return obs.replace(/\[META:.*?\]/g, '').trim();
+      let clean = obs.split('[META:')[0].trim();
+      // Limpa o rastro do bug antigo (chaves que ficaram salvas no banco)
+      return clean.replace(/\}\]$/, '').trim();
   };
 
   const [loans, setLoans] = useState<Loan[]>([]);
@@ -650,11 +652,11 @@ const Overdue = () => {
                     <td className="p-4">
                       <div className="font-bold text-slate-800">{loan.client}</div>
                       {getNickname(clients.find(c => c.name === loan.client)?.observations) && (
-                          <div className="text-[10px] font-bold text-blue-600 truncate max-w-[250px] mt-0.5">
+                          <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 mb-1 w-fit truncate max-w-[200px]" title={getNickname(clients.find(c => c.name === loan.client)?.observations)}>
                               {getNickname(clients.find(c => c.name === loan.client)?.observations)}
                           </div>
                       )}
-                      <div className="text-[10px] text-slate-400 font-mono mt-0.5">ID: {loan.id}</div>
+                      <div className="text-[10px] text-slate-400 font-mono">ID: {loan.id}</div>
                     </td>
                     <td className="p-4">
                       <div className="flex items-center gap-2 text-red-600 font-bold text-sm">

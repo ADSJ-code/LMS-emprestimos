@@ -17,6 +17,13 @@ const Invoices = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'pendentes' | 'historico'>('pendentes');
 
+  // 🚀 EXTRAÇÃO DE APELIDO: Limpa o JSON e mostra apenas a observação
+  const getNickname = (obs?: string) => {
+      if (!obs) return '';
+      let clean = obs.split('[META:')[0].trim();
+      return clean.replace(/\}\]$/, '').trim();
+  };
+
   // Estado Modal de Emissão
   const [isEmitModalOpen, setIsEmitModalOpen] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState<any>(null);
@@ -203,6 +210,11 @@ const Invoices = () => {
                       </td>
                       <td className="p-4">
                         <div className="font-bold text-slate-800">{payment.client}</div>
+                        {getNickname(clients.find(c => c.name === payment.client)?.observations) && (
+                            <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 mb-1 w-fit truncate max-w-[200px]" title={getNickname(clients.find(c => c.name === payment.client)?.observations)}>
+                                {getNickname(clients.find(c => c.name === payment.client)?.observations)}
+                            </div>
+                        )}
                         <div className="text-[10px] text-slate-500 font-mono">Contrato: {payment.contractId}</div>
                       </td>
                       <td className="p-4 text-right font-bold text-slate-600">
@@ -255,6 +267,11 @@ const Invoices = () => {
                       </td>
                       <td className="p-4">
                         <div className="font-bold text-slate-800">{inv.client}</div>
+                        {getNickname(clients.find(c => c.name === inv.client)?.observations) && (
+                            <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 mb-1 w-fit truncate max-w-[200px]" title={getNickname(clients.find(c => c.name === inv.client)?.observations)}>
+                                {getNickname(clients.find(c => c.name === inv.client)?.observations)}
+                            </div>
+                        )}
                         <div className="text-[10px] text-slate-500">{inv.cpf}</div>
                       </td>
                       <td className="p-4 text-right font-black text-slate-800">R$ {formatMoney(inv.serviceValue)}</td>

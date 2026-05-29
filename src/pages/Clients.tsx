@@ -23,7 +23,9 @@ const Clients = () => {
   // 🚀 EXTRAÇÃO DE APELIDO: Limpa o JSON [META:...] e mostra apenas a observação
   const getNickname = (obs?: string) => {
       if (!obs) return '';
-      return obs.replace(/\[META:.*?\]/g, '').trim();
+      let clean = obs.split('[META:')[0].trim();
+      // Limpa o rastro do bug antigo (chaves que ficaram salvas no banco)
+      return clean.replace(/\}\]$/, '').trim();
   };
 
   const [clients, setClients] = useState<Client[]>([]);
@@ -1085,10 +1087,17 @@ const Clients = () => {
                                                       }
                                                   }}
                                               >
-                                                  <div className="flex items-center gap-2">
-                                                      <span className="font-bold text-slate-800 text-sm group-hover:text-blue-600 transition-colors">{clientName}</span>
-                                                      <span className="text-[9px] text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded uppercase font-bold opacity-0 group-hover:opacity-100 transition-opacity">Ver Perfil</span>
-                                                  </div>
+                                                  <div className="flex flex-col">
+      <div className="flex items-center gap-2">
+          <span className="font-bold text-slate-800 text-sm group-hover:text-blue-600 transition-colors">{clientName}</span>
+          <span className="text-[9px] text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded uppercase font-bold opacity-0 group-hover:opacity-100 transition-opacity">Ver Perfil</span>
+      </div>
+      {clientObj && getNickname(clientObj.observations) && (
+          <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 w-fit truncate max-w-[200px]" title={getNickname(clientObj.observations)}>
+              {getNickname(clientObj.observations)}
+          </span>
+      )}
+  </div>
                                                   <span className="text-[10px] font-black text-green-700 bg-green-100 px-2 py-1 rounded-md border border-green-200 uppercase">+ R$ {formatMoney(data.int)} Lucro</span>
                                               </div>
                                               <div className="p-3 divide-y divide-slate-50">
@@ -1158,10 +1167,17 @@ const Clients = () => {
                                                       }
                                                   }}
                                               >
-                                                  <div className="flex items-center gap-2">
-                                                      <span className="font-bold text-slate-800 text-sm group-hover:text-blue-600 transition-colors">{clientName}</span>
-                                                      <span className="text-[9px] text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded uppercase font-bold opacity-0 group-hover:opacity-100 transition-opacity">Ver Perfil</span>
-                                                  </div>
+                                                  <div className="flex flex-col">
+      <div className="flex items-center gap-2">
+          <span className="font-bold text-slate-800 text-sm group-hover:text-blue-600 transition-colors">{clientName}</span>
+          <span className="text-[9px] text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded uppercase font-bold opacity-0 group-hover:opacity-100 transition-opacity">Ver Perfil</span>
+      </div>
+      {clientObj && getNickname(clientObj.observations) && (
+          <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 w-fit truncate max-w-[200px]" title={getNickname(clientObj.observations)}>
+              {getNickname(clientObj.observations)}
+          </span>
+      )}
+  </div>
                                                   <span className="text-[10px] font-black text-orange-700 bg-orange-100 px-2 py-1 rounded-md border border-orange-200 uppercase">R$ {formatMoney(data.total)} Liberado</span>
                                               </div>
                                               <div className="p-3 divide-y divide-slate-50">
@@ -1205,9 +1221,16 @@ const Clients = () => {
                           onClick={() => { setGlobalMetricModal(null); handleOpenModal(c, 'financeiro'); }}
                       >
                           <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center text-[10px] font-bold group-hover:bg-blue-600 transition-colors">#{c.displayNumber}</div>
-                              <p className="text-sm font-bold text-slate-700 group-hover:text-blue-700 transition-colors">{c.name}</p>
-                          </div>
+      <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center text-[10px] font-bold group-hover:bg-blue-600 transition-colors shrink-0">#{c.displayNumber}</div>
+      <div className="flex flex-col">
+          <p className="text-sm font-bold text-slate-700 group-hover:text-blue-700 transition-colors">{c.name}</p>
+          {getNickname(c.observations) && (
+              <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 w-fit truncate max-w-[200px]" title={getNickname(c.observations)}>
+                  {getNickname(c.observations)}
+              </span>
+          )}
+      </div>
+  </div>
                           <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider ${c.status === 'Bloqueado' ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-green-50 text-green-600 border border-green-100'}`}>{c.status}</span>
                       </div>
                   ))

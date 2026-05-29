@@ -100,12 +100,24 @@ const Blacklist = () => {
       if (!map.has(cleanCpf)) {
         map.set(cleanCpf, {
           id: c.id, name: c.name, cpf: c.cpf,
-          reason: '-', date: '-', riskLevel: 'Nenhum', isBlocked: false
+          reason: '-', date: '-', riskLevel: 'Nenhum', isBlocked: false,
+          obs: c.observations // Transportando a observação
         });
+      } else {
+        // Se já está bloqueado, também injeta a observação no registro
+        const existing = map.get(cleanCpf);
+        map.set(cleanCpf, { ...existing, obs: c.observations });
       }
     });
     return Array.from(map.values());
   }, [blockedUsers, allClients]);
+
+  // 🚀 EXTRAÇÃO DE APELIDO: Limpa o JSON e mostra apenas a observação
+  const getNickname = (obs?: string) => {
+      if (!obs) return '';
+      let clean = obs.split('[META:')[0].trim();
+      return clean.replace(/\}\]$/, '').trim();
+  };
 
   // 🚀 LIMPADOR DE ACENTOS E CARACTERES ESPECIAIS
   const normalizeString = (str: string) => {
@@ -298,8 +310,15 @@ const Blacklist = () => {
             {filteredUsers.length > 0 ? (
               filteredUsers.map((user) => (
                 <tr key={user.id} className="hover:bg-red-50/50 transition-colors group">
-                  <td className="p-4 font-bold text-slate-800">{user.name}</td>
-                  <td className="p-4 font-mono text-slate-600 bg-slate-50 rounded w-fit text-sm border border-slate-100 px-3 py-1">
+                  <td className="p-4 font-bold text-slate-800">
+                      {user.name}
+                      {getNickname(user.obs) && (
+                          <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 truncate max-w-[200px]" title={getNickname(user.obs)}>
+                            {getNickname(user.obs)}
+                          </div>
+                      )}
+                  </td>
+                  <td className="p-4 font-mono text-slate-600 bg-slate-50 rounded w-fit text-sm border border-slate-100 px-3 py-1 mt-3">
                     {user.cpf}
                   </td>
                   <td className="p-4 text-slate-600 max-w-xs truncate" title={user.reason}>{user.reason}</td>

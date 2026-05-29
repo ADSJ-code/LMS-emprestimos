@@ -400,7 +400,9 @@ const Billing = () => {
   // 🚀 EXTRAÇÃO DE APELIDO: Limpa o JSON e mostra apenas a observação
   const getNickname = (obs?: string) => {
       if (!obs) return '';
-      return obs.replace(/\[META:.*?\]/g, '').trim();
+      let clean = obs.split('[META:')[0].trim();
+      // Limpa o rastro do bug antigo (chaves que ficaram salvas no banco)
+      return clean.replace(/\}\]$/, '').trim();
   };
 
   const parseLocalDate = (dateStr: string) => {
@@ -889,13 +891,20 @@ const Billing = () => {
         if (filterStart && filterEnd) {
             if (statusFilter === 'PagosNoPeriodo') {
                 if (!l.history) return false;
+                // 🚀 FIX CLÓVIS: Para "Pagos no Período", exige que o pagamento tenha ocorrido no mês 
+                // AND que a referência desse pagamento pertença ao mês filtrado.
                 matchesDate = l.history.some(h => {
                     if (h.amount <= 0 || h.type.toLowerCase().includes('abertura')) return false;
                     const hDate = h.date.split('T')[0];
-                    return hDate >= filterStart && hDate <= filterEnd;
+                    const refDate = h.originalDueDate ? h.originalDueDate.split('T')[0] : hDate;
+                    
+                    const paidInPeriod = hDate >= filterStart && hDate <= filterEnd;
+                    const refInPeriod = refDate >= filterStart && refDate <= filterEnd;
+                    
+                    return paidInPeriod && refInPeriod;
                 });
             } else {
-                // 🚀 Filtro de data agora usa a data da fatia exibida e não só a data base
+                // Filtro normal pelas fatias
                 const dueStr = getDisplayNextDue(l);
                 matchesDate = dueStr >= filterStart && dueStr <= filterEnd;
             }
@@ -1931,13 +1940,18 @@ const handleFinalSave = async (e: React.FormEvent) => {
                 {filteredLoans.length === 0 ? (<tr><td colSpan={10} className="p-8 text-center text-slate-400">Nenhum contrato encontrado.</td></tr>) : (filteredLoans.map(loan => {
                     const displayStatus = getLoanRealStatus(loan);
                     
-                    // 🚀 FIX: Calcula os juros para exibir na coluna da tabela respeitando o filtro de data
+                    // 🚀 FIX: Calcula os juros respeitando o mês de referência para evitar inflar o card com atrasados
                     let displayInterestPaid = loan.totalPaidInterest || 0;
                     if (filterStart && filterEnd && statusFilter === 'PagosNoPeriodo' && loan.history) {
                         displayInterestPaid = 0;
                         loan.history.forEach(h => {
                             const hDate = h.date.split('T')[0];
-                            if (hDate >= filterStart && hDate <= filterEnd && !h.type.toLowerCase().includes('abertura')) {
+                            const refDate = h.originalDueDate ? h.originalDueDate.split('T')[0] : hDate;
+                            
+                            const paidInPeriod = hDate >= filterStart && hDate <= filterEnd;
+                            const refInPeriod = refDate >= filterStart && refDate <= filterEnd;
+
+                            if (paidInPeriod && refInPeriod && !h.type.toLowerCase().includes('abertura')) {
                                 displayInterestPaid += (h.interestPaid || 0);
                             }
                         });
@@ -1961,7 +1975,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                             {loan.client}
                           </div>
                           {getNickname(availableClients.find(c => c.name === loan.client)?.observations) && (
-                              <div className="text-[10px] font-bold text-blue-600 truncate max-w-[200px] mb-0.5">
+                              <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 mb-1 w-fit truncate max-w-[200px]" title={getNickname(availableClients.find(c => c.name === loan.client)?.observations)}>
                                 {getNickname(availableClients.find(c => c.name === loan.client)?.observations)}
                               </div>
                           )}
