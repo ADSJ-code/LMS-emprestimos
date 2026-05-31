@@ -260,7 +260,13 @@ const Overdue = () => {
 
     // 🚀 FIX: O breakdown.total já processa PRICE, SIMPLE e soma Acordos Extras automaticamente
     const baseAmount = breakdown.total; 
-    const remainingInstallments = loan.interestType === "SIMPLE" ? 999 : parseVal(loan.installments) || 1;
+    
+    // 🚀 FIX RODRIGO: Contratos em Acordo (que não venceram) NÃO geram bola de neve e não aparecem na lista de atrasados
+    if (realStatus === 'Acordo') {
+        return { totalOriginal: 0, totalUpdated: 0, missedInstallments: [] };
+    }
+
+    const remainingInstallments = parseVal(loan.installments) || 1;
     const pad = (n: number) => n.toString().padStart(2, '0');
 
     while (tempDue < today) {
@@ -283,12 +289,11 @@ const Overdue = () => {
       totalOriginal += baseAmount;
       totalUpdated += updatedVal;
 
-      // 🚀 FIX: Se for um Acordo, o atraso é apenas de 1 parcela (o valor total do acordo), então quebra o loop
-      if (loan.status === "Acordo") break;
-
       count++;
-      if (count >= remainingInstallments) break;
-      if (count > 60) break;
+      
+      // 🚀 FIX RODRIGO: Em "Só Juros" (SIMPLE), a dívida acumula infinito mês a mês.
+      if (loan.interestType !== 'SIMPLE' && count >= remainingInstallments) break;
+      if (count > 60) break; // Trava de 5 anos
 
       if (loan.frequency === "SEMANAL") tempDue.setDate(tempDue.getDate() + 7);
       else if (loan.frequency === "DIARIO") tempDue.setDate(tempDue.getDate() + 1);

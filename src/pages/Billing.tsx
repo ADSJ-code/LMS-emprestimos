@@ -891,12 +891,14 @@ const Billing = () => {
         if (filterStart && filterEnd) {
             if (statusFilter === 'PagosNoPeriodo') {
                 if (!l.history) return false;
-                // 🚀 FIX CLÓVIS: Para "Pagos no Período", exige que o pagamento tenha ocorrido no mês 
+                // 🚀 FIX: Para "Pagos no Período", exige que o pagamento tenha ocorrido no mês 
                 // AND que a referência desse pagamento pertença ao mês filtrado.
                 matchesDate = l.history.some(h => {
-                    if (h.amount <= 0 || h.type.toLowerCase().includes('abertura')) return false;
-                    const hDate = h.date.split('T')[0];
-                    const refDate = h.originalDueDate ? h.originalDueDate.split('T')[0] : hDate;
+                    if (h.amount <= 0 || h.type.toLowerCase().includes('abertura') || h.type === 'Acordo') return false;
+                    
+                    // Converte para string absoluta YYYY-MM-DD para não bugar com fuso horário
+                    const hDate = new Date(h.date).toISOString().split('T')[0];
+                    const refDate = h.originalDueDate ? new Date(h.originalDueDate).toISOString().split('T')[0] : hDate;
                     
                     const paidInPeriod = hDate >= filterStart && hDate <= filterEnd;
                     const refInPeriod = refDate >= filterStart && refDate <= filterEnd;
@@ -942,25 +944,33 @@ const Billing = () => {
 
       filteredLoans.forEach(loan => {
           if (selectedIds.includes(loan.id)) {
-              // 🚀 FIX: Se houver filtro de data, soma APENAS o que pingou naqueles dias!
-              let periodIntSum = 0;
-              if (filterStart && filterEnd && statusFilter === 'PagosNoPeriodo' && loan.history) {
-                  loan.history.forEach(h => {
-                      const hDate = h.date.split('T')[0];
-                      if (hDate >= filterStart && hDate <= filterEnd && !h.type.toLowerCase().includes('abertura')) {
-                          periodIntSum += (h.interestPaid || 0);
-                      }
-                  });
-                  intSum += periodIntSum;
-              } else {
-                  intSum += (loan.totalPaidInterest || 0);
-              }
-              
               const isSimple = loan.interestType === 'SIMPLE';
               const breakdown = getSyncedBreakdown(loan);
               
               installmentSum += breakdown.total; 
-              capSum += Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
+
+              // 🚀 FIX: Isola tanto os Juros quanto o Capital APENAS do período filtrado para o rodapé
+              if (filterStart && filterEnd && statusFilter === 'PagosNoPeriodo' && loan.history) {
+                  let periodIntSum = 0;
+                  let periodCapSum = 0; 
+                  loan.history.forEach((h: any) => {
+                      const hDate = new Date(h.date).toISOString().split('T')[0];
+                      const refDate = h.originalDueDate ? new Date(h.originalDueDate).toISOString().split('T')[0] : hDate;
+                      
+                      const paidInPeriod = hDate >= filterStart && hDate <= filterEnd;
+                      const refInPeriod = refDate >= filterStart && refDate <= filterEnd;
+
+                      if (paidInPeriod && refInPeriod && !h.type.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                          periodIntSum += (h.interestPaid || 0);
+                          periodCapSum += (h.capitalPaid || 0);
+                      }
+                  });
+                  intSum += periodIntSum;
+                  capSum += periodCapSum; // Soma apenas o capital amortizado no mês
+              } else {
+                  intSum += (loan.totalPaidInterest || 0);
+                  capSum += Math.max(0, loan.amount - (loan.totalPaidCapital || 0)); // Saldo devedor normal
+              }
 
               if (!isSimple) {
                   const totalExpected = loan.projectedProfit || ((loan.installmentValue * loan.installments) - loan.amount);
@@ -1507,13 +1517,28 @@ const handleOpenEditContract = (loan: Loan) => {
 
         if (loan.history && loan.history.length > 0) {
             loan.history.forEach(record => {
-                // 🚀 FIX: Se houver filtro de data, ignora os registros que estão fora do período!
-                if (filterStart && filterEnd) {
-                    const recordDate = record.date.split('T')[0];
-                    if (recordDate < filterStart || recordDate > filterEnd) return;
+                // 🚀 FIX: Trava da exportação limpa baseada no Filtro de Datas de Pagos no Período
+                let shouldExport = false;
+                
+                if (filterStart && filterEnd && statusFilter === 'PagosNoPeriodo') {
+                    const hDate = new Date(record.date).toISOString().split('T')[0];
+                    const refDate = record.originalDueDate ? new Date(record.originalDueDate).toISOString().split('T')[0] : hDate;
+                    
+                    const paidInPeriod = hDate >= filterStart && hDate <= filterEnd;
+                    const refInPeriod = refDate >= filterStart && refDate <= filterEnd;
+                    
+                    // Exige que cumpra a competência e o caixa. Ignora Abertura e Acordo.
+                    if (paidInPeriod && refInPeriod && record.amount > 0 && !record.type.toLowerCase().includes('abertura') && record.type !== 'Acordo') {
+                        shouldExport = true;
+                    }
+                } else {
+                    // Comportamento normal para visões gerais
+                    if (record.amount > 0 || record.type === 'Abertura') {
+                        shouldExport = true;
+                    }
                 }
 
-                if (record.amount > 0 || record.type === 'Abertura') {
+                if (shouldExport) {
                     hasRecords = true;
                     worksheet.addRow({
                         paymentDate: new Date(record.date).toLocaleDateString('pt-BR') + ' ' + new Date(record.date).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'}),

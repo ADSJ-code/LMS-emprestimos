@@ -392,11 +392,13 @@ const Dashboard = () => {
                 hasMatch = true;
                 const isOverdueInstallment = currentDue < today || (i === 0 && realStatus === 'Atrasado');
 
-                if (isOverdueInstallment) {
-                  const baseAmount = (i === 0 && loan.status === 'Acordo') ? breakdown.total : loan.installmentValue;
+                // 🚀 FIX: Protege a matemática caso o usuário use o filtro de Datas
+                if (isOverdueInstallment && realStatus !== 'Acordo') {
+                  // Mudei o breakdown.total para parseVal(loan.installmentValue) por segurança
+                  const baseAmount = loan.interestType === 'SIMPLE' ? breakdown.total : parseVal(loan.installmentValue);
                   const dateStr = `${currentDue.getFullYear()}-${pad(currentDue.getMonth() + 1)}-${pad(currentDue.getDate())}`;
                   if (i === 0) {
-                      overToAdd = calculateOverdueValue(baseAmount, dateStr, 'Atrasado', loan.fineRate ?? 2, loan.moraInterestRate ?? 1, loan.amount);
+                      overToAdd += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', parseVal(loan.fineRate) || 0, parseVal(loan.moraInterestRate) || 0, parseVal(loan.amount));
                   }
               } else {
                     capToAdd += (loan.interestType === 'SIMPLE' ? 0 : breakdown.capital);
@@ -435,7 +437,8 @@ const Dashboard = () => {
                     const todayDate = getToday();
 
                     if (loan.interestType === 'SIMPLE') {
-                        gCap = 0; 
+                        // 🚀 FIX CLÓVIS/RODRIGO: Em "Só Juros", o Capital nunca atrasa (não abate). Ele fica preservado no Card Azul.
+                        // Tiramos apenas o lucro futuro projetado, pois ele já venceu e vai para o Card Vermelho de Atrasados.
                         gProf = 0;
                     } else if (isMulti) {
                         const currentMonth = parseLocalDate(loan.nextDue).getMonth();
@@ -523,7 +526,9 @@ const Dashboard = () => {
 
       const activities = [...safeLoans].sort((a, b) => new Date(b.nextDue).getTime() - new Date(a.nextDue).getTime()).slice(0, 6).map((loan: any) => {
         const dueDate = parseLocalDate(loan.nextDue);
-        const isOverdue = dueDate < today && loan.status?.toLowerCase() !== 'pago' && loan.status?.toLowerCase() !== 'quitado';
+        const rStatus = getLoanRealStatus(loan);
+        // 🚀 FIX RODRIGO: Remove Acordos da notificação visual de Atraso
+        const isOverdue = dueDate < today && rStatus !== 'Quitado' && rStatus !== 'Acordo';
         return {
           id: loan.id, type: isOverdue ? 'atraso' : 'novo_contrato',
           text: isOverdue ? `Atraso: ${loan.client}` : `Pendente: ${loan.client}`,
@@ -610,7 +615,8 @@ const Dashboard = () => {
           const contextIds = new Set(filteredLoansContext.map(l => l.id));
           baseList = allLoans.filter(l => {
               const realStatus = getLoanRealStatus(l);
-              const isOverdue = realStatus === 'Atrasado';
+              // 🚀 FIX RODRIGO: Garante que "Acordos" não apareçam na lista de detalhamento do Card Vermelho
+              const isOverdue = realStatus !== 'Quitado' && realStatus !== 'Acordo' && realStatus === 'Atrasado';
               
               let passTier = true;
               if (tierFilters.overdue === 'low') passTier = parseVal(l.interestRate) < 10;
