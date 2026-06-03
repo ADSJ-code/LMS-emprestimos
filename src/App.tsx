@@ -9,6 +9,7 @@ import Affiliates from './pages/Affiliates';
 import History from './pages/History';
 import Settings from './pages/Settings';
 import Invoices from './pages/Invoices'; // 🚀 IMPORTAMOS A TELA DE NOTAS FISCAIS
+import CashFlow from './pages/CashFlow'; // 🚀 IMPORTAMOS A TELA DE FLUXO DE CAIXA
 
 // --- COMPONENTE GUARDIÃO (PRIVATE ROUTE) ---
 // Verifica se existe a sessão ativa. Se não, chuta para o Login.
@@ -97,6 +98,16 @@ function App() {
           } 
         />
         
+        {/* 🚀 ROTA DE FLUXO DE CAIXA ADICIONADA AQUI */}
+        <Route 
+          path="/cashflow" 
+          element={
+            <PrivateRoute>
+              <CashFlow />
+            </PrivateRoute>
+          } 
+        />
+
         {/* 🚀 ROTA DE NOTAS FISCAIS ADICIONADA AQUI */}
         <Route 
           path="/invoices" 

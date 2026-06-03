@@ -62,26 +62,42 @@ const Invoices = () => {
     }
   }, [invoices]);
 
-  // 🚀 Lógica Inteligente: Extrai todos os pagamentos de juros do histórico
+  // 🚀 LIMPADOR INTELIGENTE: Blindagem contra strings no banco
+  const parseVal = (v: any): number => {
+      if (typeof v === 'number') return isNaN(v) ? 0 : v;
+      if (!v) return 0;
+      if (typeof v === 'string') return parseFloat(v.replace(/\./g, '').replace(',', '.')) || 0;
+      return 0;
+  };
+
+  // 🚀 Lógica Inteligente: Extrai pagamentos de juros NÃO EMITIDOS
   const availablePayments = useMemo(() => {
     const paymentsList: any[] = [];
     
+    // Lista negra para não faturar clientes bloqueados
+    const blockedNames = new Set(clients.filter(c => c.status === 'Bloqueado').map(c => c.name));
+
     loans.forEach(loan => {
-      if (!loan.history) return;
+      if (!loan.history || blockedNames.has(loan.client)) return;
       
       const clientInfo = clients.find(c => c.name === loan.client);
 
       loan.history.forEach((record, index) => {
-        // Ignora aberturas e foca apenas em pagamentos reais que tiveram Juros > 0
         const type = record.type?.toLowerCase() || '';
-        if (type.includes('abertura') || type.includes('empréstimo') || record.amount <= 0) return;
+        // 🚀 FIX: Ignora Abertura, Acordo e pagamentos zerados
+        if (type.includes('abertura') || type.includes('empréstimo') || type.includes('acordo') || parseVal(record.amount) <= 0) return;
         
-        const jurosRecebido = record.interestPaid || 0;
+        const jurosRecebido = parseVal(record.interestPaid);
+        const uniquePaymentId = `${loan.id}-${index}`;
         
-        // Só exibe se houver lucro para emitir nota
-        if (jurosRecebido > 0) {
+        // 🚀 FIX CRÍTICO: Agora a trava verifica o uniquePaymentId exato. 
+        // Não esconde o contrato todo, só a parcela faturada.
+        const isAlreadyInvoiced = invoices.some(inv => inv.id === uniquePaymentId);
+
+        // Só exibe se houver lucro e se não foi faturado
+        if (jurosRecebido > 0 && !isAlreadyInvoiced) {
           paymentsList.push({
-            uniqueId: `${loan.id}-${index}`,
+            uniqueId: uniquePaymentId,
             contractId: loan.id,
             client: loan.client,
             cpf: clientInfo?.cpf || 'Não cadastrado',
@@ -99,7 +115,7 @@ const Invoices = () => {
     return paymentsList
       .filter(p => p.client.toLowerCase().includes(searchTerm.toLowerCase()) || p.contractId.includes(searchTerm))
       .sort((a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime());
-  }, [loans, clients, searchTerm]);
+  }, [loans, clients, searchTerm, invoices]);
 
   // 🚀 Filtro do Histórico Real
   const filteredInvoices = useMemo(() => {
@@ -117,8 +133,9 @@ const Invoices = () => {
   const confirmEmission = async () => {
     setIsEmitting(true);
     try {
-      // 🚀 Chamada Real para o Backend em Go
+      // 🚀 Chamada Real para o Backend em Go (agora enviando a Chave Única de Pagamento)
       await invoiceService.emit({
+        id: selectedPayment.uniqueId, // O Go deve salvar esse ID para travar a emissão dupla
         client: selectedPayment.client,
         cpf: selectedPayment.cpf,
         serviceValue: selectedPayment.interestPaid
@@ -130,8 +147,14 @@ const Invoices = () => {
       
       setIsEmitModalOpen(false);
       setActiveTab('historico');
-    } catch (error) {
-      alert("❌ Falha ao comunicar com o servidor para emissão.");
+    } catch (error: any) {
+      // 🚀 FIX: Mostra o erro real devolvido pelo Go (Ex: Trava de Duplicidade)
+      const backendMsg = error.response?.data;
+      if (backendMsg && typeof backendMsg === 'string') {
+          alert(`⚠️ Aviso do Sistema: ${backendMsg}`);
+      } else {
+          alert("❌ Falha ao comunicar com o servidor para emissão.");
+      }
     } finally {
       setIsEmitting(false);
     }

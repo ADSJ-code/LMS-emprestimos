@@ -221,6 +221,11 @@ type CompanySettings struct {
 	Address  string `json:"address" bson:"address"`
 	City     string `json:"city"`
 	BankName string `json:"bankName"`
+	// 🚀 NOVOS CAMPOS: Configuração NF-e (Focus NFe)
+	IbgeCode         string `json:"ibgeCode" bson:"ibgeCode"`
+	Im               string `json:"im" bson:"im"`
+	FocusNfeToken    string `json:"focusNfeToken" bson:"focusNfeToken"`
+	ItemListaServico string `json:"itemListaServico" bson:"itemListaServico"`
 }
 
 type SystemSettings struct {
@@ -299,6 +304,8 @@ type Client struct {
 	Phone        string      `json:"phone" bson:"phone"`
 	Address      string      `json:"address" bson:"address"`
 	Number       string      `json:"number" bson:"number"`
+	Block        string      `json:"block,omitempty" bson:"block,omitempty"` // 🚀 ADICIONADO
+	Floor        string      `json:"floor,omitempty" bson:"floor,omitempty"` // 🚀 ADICIONADO
 	Neighborhood string      `json:"neighborhood" bson:"neighborhood"`
 	City         string      `json:"city" bson:"city"`
 	State        string      `json:"state" bson:"state"`
@@ -360,6 +367,18 @@ type InvoiceRecord struct {
 	ErrorMsg     string    `json:"errorMsg,omitempty" bson:"errorMsg,omitempty"`
 }
 
+// 🚀 NOVA ESTRUTURA: Modelo de Fluxo de Caixa (Caixa Interno)
+type CashFlowEntry struct {
+	ID          string    `json:"id" bson:"_id,omitempty"`
+	Type        string    `json:"type" bson:"type"`             // "ENTRADA" ou "SAIDA"
+	Category    string    `json:"category" bson:"category"`     // "Parcela", "Empréstimo", "Despesa", "Aporte"
+	Description string    `json:"description" bson:"description"`
+	Amount      float64   `json:"amount" bson:"amount"`
+	Date        time.Time `json:"date" bson:"date"`
+	ReferenceID string    `json:"referenceId,omitempty" bson:"referenceId,omitempty"` // ID do contrato ligado
+	Status      string    `json:"status" bson:"status"`         // "Efetivado", "Pendente"
+}
+
 var (
 	mongoClient         *mongo.Client
 	loanCollection      *mongo.Collection
@@ -369,7 +388,8 @@ var (
 	logCollection       *mongo.Collection
 	blacklistCollection *mongo.Collection
 	settingsCollection  *mongo.Collection
-	invoiceCollection   *mongo.Collection // 🚀 NOVA COLEÇÃO
+	invoiceCollection   *mongo.Collection
+	cashFlowCollection  *mongo.Collection // 🚀 NOVA COLEÇÃO FLUXO DE CAIXA
 )
 
 // --- Principal ---
@@ -402,7 +422,8 @@ func main() {
 	logCollection = db.Collection("logs")
 	blacklistCollection = db.Collection("blacklist")
 	settingsCollection = db.Collection("settings")
-	invoiceCollection = db.Collection("invoices") // 🚀 CONECTA A NOVA COLEÇÃO
+	invoiceCollection = db.Collection("invoices")
+	cashFlowCollection = db.Collection("cashflow") // 🚀 CONECTA A NOVA COLEÇÃO CAIXA
 	log.Println("✅ MongoDB Conectado ao CreditNow!")
 
 	seedAdminUser()
@@ -431,6 +452,10 @@ func main() {
 	mux.HandleFunc("/api/logs", authMiddleware(logsHandler))
 	mux.HandleFunc("/api/settings", authMiddleware(settingsHandler))
 	mux.HandleFunc("/api/dashboard/summary", authMiddleware(dashboardSummaryHandler))
+
+	// 🚀 NOVAS ROTAS: Fluxo de Caixa
+	mux.HandleFunc("/api/cashflow", authMiddleware(cashFlowHandler))
+	mux.HandleFunc("/api/cashflow/", authMiddleware(cashFlowHandler)) // 🚀 ROTA COM A BARRA PARA ACEITAR O ID NA EXCLUSÃO
 
 	// 🚀 NOVAS ROTAS: Notas Fiscais
 	mux.HandleFunc("/api/invoices", authMiddleware(invoicesHandler))
@@ -676,6 +701,20 @@ func loansHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		loanCollection.InsertOne(ctx, l)
+
+		// 🚀 AUTOMAÇÃO DO CAIXA: Registra a saída do dinheiro do empréstimo automaticamente
+		cf := CashFlowEntry{
+			ID:          fmt.Sprintf("CF-%d", time.Now().UnixNano()/1e6),
+			Type:        "SAIDA",
+			Category:    "Empréstimo Liberado",
+			Description: fmt.Sprintf("Empréstimo concedido a %s", l.Client),
+			Amount:      l.Amount,
+			Date:        time.Now(),
+			ReferenceID: l.ID,
+			Status:      "Efetivado",
+		}
+		cashFlowCollection.InsertOne(ctx, cf)
+
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(l)
 	default:
@@ -696,6 +735,48 @@ func loanUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		// --- FIX: Trava de Arredondamento para evitar dízimas no banco ---
 		l.InstallmentValue = math.Round(l.InstallmentValue*100) / 100
 		l.Amount = math.Round(l.Amount*100) / 100
+
+		// 🚀 AUTOMAÇÃO DO CAIXA: Compara o histórico antigo com o novo para achar a Baixa da Parcela
+		var oldLoan Loan
+		if err := loanCollection.FindOne(ctx, bson.M{"id": id}).Decode(&oldLoan); err == nil {
+			if len(l.History) > len(oldLoan.History) {
+				// 🟢 Descobriu que tem pagamento(s) novo(s)! (BAIXA)
+				for i := len(oldLoan.History); i < len(l.History); i++ {
+					payment := l.History[i]
+					if payment.Amount > 0 {
+						cf := CashFlowEntry{
+							ID:          fmt.Sprintf("CF-%d", time.Now().UnixNano()/1e6 + int64(i)),
+							Type:        "ENTRADA",
+							Category:    "Recebimento de Parcela",
+							Description: fmt.Sprintf("Pagamento (%s) - %s", payment.Type, l.Client),
+							Amount:      payment.Amount,
+							Date:        time.Now(),
+							ReferenceID: l.ID,
+							Status:      "Efetivado",
+						}
+						cashFlowCollection.InsertOne(ctx, cf)
+					}
+				}
+			} else if len(l.History) < len(oldLoan.History) {
+				// 🔴 Descobriu que um pagamento foi removido! (DESFAZER BAIXA)
+				for i := len(l.History); i < len(oldLoan.History); i++ {
+					removedPayment := oldLoan.History[i]
+					if removedPayment.Amount > 0 {
+						cf := CashFlowEntry{
+							ID:          fmt.Sprintf("CF-%d", time.Now().UnixNano()/1e6 + int64(i)),
+							Type:        "SAIDA", // Lança uma saída para anular a entrada
+							Category:    "Estorno de Parcela",
+							Description: fmt.Sprintf("Estorno de Pagamento (%s) - %s", removedPayment.Type, l.Client),
+							Amount:      removedPayment.Amount,
+							Date:        time.Now(),
+							ReferenceID: l.ID,
+							Status:      "Efetivado",
+						}
+						cashFlowCollection.InsertOne(ctx, cf)
+					}
+				}
+			}
+		}
 
 		loanCollection.ReplaceOne(ctx, bson.M{"id": id}, l)
 		json.NewEncoder(w).Encode(l)
@@ -1008,8 +1089,22 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		client.CPF = inv.CPF
 	}
 
-	// 2. Gera o ID local da nota
-	inv.ID = fmt.Sprintf("NF-%d", time.Now().UnixMilli()%100000)
+	// 2. Gera o ID local da nota (ou mantém o inv.ID enviado pelo React para evitar duplicidade)
+	if inv.ID == "" {
+		inv.ID = fmt.Sprintf("NF-%d", time.Now().UnixMilli()%100000)
+	}
+
+	// 🚀 Trava Anti-Duplicação: Verifica se já tramitou
+	count, _ := invoiceCollection.CountDocuments(ctx, bson.M{"_id": inv.ID})
+	if count > 0 {
+		http.Error(w, "Uma nota fiscal já está em andamento para este pagamento.", http.StatusConflict)
+		return
+	}
+
+	// Puxar as configurações da empresa do banco
+	var s Settings
+	settingsCollection.FindOne(ctx, bson.M{}).Decode(&s)
+
 	inv.IssueDate = time.Now()
 	inv.Status = "PROCESSANDO"
 
@@ -1020,67 +1115,88 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Executa a chamada à API em background (Assíncrono)
-	go func(invoiceID string, c Client, serviceValue float64) {
+	go func(invoiceID string, c Client, serviceValue float64, comp CompanySettings) {
 		bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer bgCancel()
 
-		// Payload Exato exigido pela Focus NFe (V2)
-		payload := map[string]interface{}{
-			"data_emissao": time.Now().Format(time.RFC3339),
-			"prestador":    map[string]string{
-				// "cnpj": "...", (Opcional se configurado direto no painel da Focus)
-			},
-			"tomador": map[string]interface{}{
-				"cpf_cnpj":     regexp.MustCompile(`\D`).ReplaceAllString(c.CPF, ""),
-				"razao_social": c.Name,
-				"email":        c.Email,
-				"endereco": map[string]string{
-					"logradouro": c.Address,
-					"numero":     c.Number,
-					"bairro":     c.Neighborhood,
-					"cep":        regexp.MustCompile(`\D`).ReplaceAllString(c.CEP, ""),
-					"uf":         c.State,
-					// "codigo_municipio": "3550308", // IBGE da cidade (A Focus tenta deduzir pelo CEP)
-				},
-			},
-			"servico": map[string]interface{}{
-				"valor_servicos": serviceValue,
-				"descricao":      "Serviços prestados de gestão financeira e administrativa.",
-				// "item_lista_servico": "17.06", // Adicionar conforme CNAE do Rodrigo
-			},
+		// 🚀 MODO HOMOLOGAÇÃO HARDCODED: Substitua o texto abaixo pela chave que você copiou
+		apiKey := "nWXe2dVIiwLASEsIOr1OmwbKMIzpvoAp"
+
+		// Se o front já estiver mandando do banco, ele sobrepõe
+		if comp.FocusNfeToken != "" {
+			apiKey = comp.FocusNfeToken
 		}
 
-		payloadBytes, _ := json.Marshal(payload)
-
-		// 🚀 FIX: Inteligência de Ambiente (Produção vs Testes)
-		env := os.Getenv("FOCUS_NFE_ENV")
-		apiURL := "https://homologacao.focusnfe.com.br/v2/nfse"
-		if env == "producao" {
-			apiURL = "https://api.focusnfe.com.br/v2/nfse"
-		}
-
-		apiKey := os.Getenv("FOCUS_NFE_TOKEN")
-
-		// Se não houver token, fingimos sucesso após 5 seg para não quebrar a tela em desenvolvimento
-		if apiKey == "" {
-			log.Println("⚠️ TOKEN DA FOCUS NFE NÃO ENCONTRADO. Simulando aprovação para testes locais...")
-			time.Sleep(5 * time.Second)
-			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "AUTORIZADA", "pdfUrl": "https://focusnfe.com.br/painel/teste_nfe.pdf"}})
+		// Trava de Teste Local (Se esquecer a chave vazia)
+		if apiKey == "" || apiKey == "COLE_O_SEU_TOKEN_AQUI_DENTRO" {
+			log.Println("⚠️ NENHUM TOKEN ENCONTRADO. Simulando aprovação local...")
+			time.Sleep(3 * time.Second)
+			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "AUTORIZADA", "pdfUrl": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"}})
 			return
 		}
 
-		// Requisição Real
-		req, err := http.NewRequest("POST", apiURL+"?ref="+invoiceID, bytes.NewBuffer(payloadBytes))
-		if err != nil {
-			log.Printf("❌ Erro ao criar requisição NFe: %v", err)
-			return
-		}
+		// Pega os dados do banco ou chumba os de teste caso estejam vazios
+        cnpjPrestador := comp.CNPJ
+        if cnpjPrestador == "" {
+            cnpjPrestador = "12345678000195" // CNPJ Teste
+        }
+        imPrestador := comp.Im
+        if imPrestador == "" {
+            imPrestador = "123456" // IM Teste
+        }
+        ibgePrestador := comp.IbgeCode
+        if ibgePrestador == "" {
+            ibgePrestador = "3550308" // IBGE São Paulo Teste
+        }
+        itemServico := comp.ItemListaServico
+        if itemServico == "" {
+            itemServico = "15.08"
+        }
 
-		req.Header.Set("Content-Type", "application/json")
+        // 🚀 PADRÃO MAUÁ: Emissão limpa via Focus NFe sem as travas exclusivas de SP
+        payload := map[string]interface{}{
+            "data_emissao": time.Now().Format(time.RFC3339),
+            "prestador": map[string]string{
+                "cnpj":                regexp.MustCompile(`\D`).ReplaceAllString(cnpjPrestador, ""),
+                "inscricao_municipal": regexp.MustCompile(`\D`).ReplaceAllString(imPrestador, ""),
+                "codigo_municipio":    regexp.MustCompile(`\D`).ReplaceAllString(ibgePrestador, ""), // IBGE Mauá (3529401) salvo nas configurações
+            },
+            "tomador": map[string]interface{}{
+                "cpf_cnpj":     regexp.MustCompile(`\D`).ReplaceAllString(c.CPF, ""),
+                "razao_social": c.Name,
+                "email":        c.Email,
+                "endereco": map[string]string{
+                    "logradouro": c.Address,
+                    "numero":     c.Number,
+                    "bairro":     c.Neighborhood,
+                    "cep":        regexp.MustCompile(`\D`).ReplaceAllString(c.CEP, ""),
+                    "uf":         c.State,
+                },
+            },
+            "servico": map[string]interface{}{
+                "valor_servicos":     serviceValue,
+                "item_lista_servico": itemServico, // Padrão LC 116 (Ex: 15.08)
+                "descricao":          "Intermediação de negócios, serviços de consultoria e gestão financeira.",
+            },
+        }
 
-		// 🚀 O PULO DO GATO: A Focus NFe exige Basic Auth (Usuário = Token, Senha = Vazio).
-		// O método SetBasicAuth do Go converte isso para Base64 perfeitamente, evitando o Erro 401.
-		req.SetBasicAuth(apiKey, "")
+        payloadBytes, _ := json.Marshal(payload)
+        
+        // 🚀 Alterando para a URL de Produção para bater com o seu Token de Produção
+        apiURL := "https://api.focusnfe.com.br/v2/nfse"
+
+        // Requisição Real
+        req, err := http.NewRequest("POST", apiURL+"?ref="+invoiceID, bytes.NewBuffer(payloadBytes))
+        if err != nil {
+            log.Printf("❌ Erro ao criar requisição NFe: %v", err)
+            return
+        }
+
+        req.Header.Set("Content-Type", "application/json")
+
+        // 🚀 O PULO DO GATO: A Focus NFe exige Basic Auth (Usuário = Token, Senha = Vazio).
+        // O método SetBasicAuth do Go converte isso para Base64 perfeitamente, evitando o Erro 401.
+        req.SetBasicAuth(apiKey, "")
 
 		clientHttp := &http.Client{Timeout: 15 * time.Second}
 		resp, err := clientHttp.Do(req)
@@ -1097,7 +1213,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			log.Printf("✅ Nota %s enviada para a Focus NFe. Aguardando processamento da prefeitura.", invoiceID)
 		}
-	}(inv.ID, client, inv.ServiceValue)
+	}(inv.ID, client, inv.ServiceValue, s.Company) // 🚀 FIX: Passando as configurações da empresa (s.Company) para a função!
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(inv)
@@ -1167,6 +1283,80 @@ func resetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 
 func restoreDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// 🚀 HANDLER: Gestão do Fluxo de Caixa (Atualizado com DELETE)
+func cashFlowHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Verifica se a URL contém um ID (ex: /api/cashflow/CF-12345)
+	idParam := strings.TrimPrefix(r.URL.Path, "/api/cashflow")
+	idParam = strings.TrimPrefix(idParam, "/")
+
+	switch r.Method {
+	case http.MethodGet:
+		if idParam != "" {
+			var entry CashFlowEntry
+			err := cashFlowCollection.FindOne(ctx, bson.M{"_id": idParam}).Decode(&entry)
+			if err != nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			json.NewEncoder(w).Encode(entry)
+			return
+		}
+
+		opts := options.Find().SetSort(bson.D{{Key: "date", Value: -1}})
+		cursor, err := cashFlowCollection.Find(ctx, bson.M{}, opts)
+		if err != nil {
+			json.NewEncoder(w).Encode([]CashFlowEntry{})
+			return
+		}
+		var results []CashFlowEntry
+		cursor.All(ctx, &results)
+		if results == nil {
+			results = []CashFlowEntry{}
+		}
+		json.NewEncoder(w).Encode(results)
+
+	case http.MethodPost:
+		var entry CashFlowEntry
+		if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+			http.Error(w, "Dados inválidos", http.StatusBadRequest)
+			return
+		}
+		
+		entry.ID = fmt.Sprintf("CF-%d", time.Now().UnixNano()/1e6)
+		if entry.Date.IsZero() {
+			entry.Date = time.Now()
+		}
+
+		entry.Amount = math.Round(entry.Amount*100) / 100
+
+		cashFlowCollection.InsertOne(ctx, entry)
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(entry)
+
+	case http.MethodDelete:
+		// 🚀 CASO DE EXCLUSÃO ADICIONADO
+		if idParam == "" {
+			http.Error(w, "ID de lançamento não fornecido", http.StatusBadRequest)
+			return
+		}
+		
+		_, err := cashFlowCollection.DeleteOne(ctx, bson.M{"_id": idParam})
+		if err != nil {
+			http.Error(w, "Erro ao remover lançamento", http.StatusInternalServerError)
+			return
+		}
+		
+		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 // --- WhatsApp Controller e Service ---

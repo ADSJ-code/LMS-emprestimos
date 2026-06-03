@@ -10,7 +10,8 @@ import {
   History, 
   Settings, 
   LogOut,
-  Receipt // 🚀 NOVO: Ícone para a aba de Notas Fiscais
+  Receipt, // 🚀 NOVO: Ícone para a aba de Notas Fiscais
+  Wallet // 🚀 NOVO: Ícone para o Fluxo de Caixa
 } from 'lucide-react';
 import { settingsService } from '../services/api';
 
@@ -85,7 +86,8 @@ const Layout = ({ children }: LayoutProps) => {
     { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/clients', label: 'Lista de Clientes', icon: Users },
     { path: '/billing', label: 'Cobrança', icon: FileText },
-//  { path: '/invoices', label: 'Notas Fiscais', icon: Receipt }, // 🚀 Ocultado temporariamente para o Rodrigo
+    { path: '/cashflow', label: 'Fluxo de Caixa', icon: Wallet }, // 🚀 NOVO: Rota do Caixa
+    { path: '/invoices', label: 'Notas Fiscais', icon: Receipt }, 
     { path: '/overdue', label: 'Atrasados', icon: AlertCircle },
     { path: '/blacklist', label: 'Lista Negra', icon: ShieldAlert },
     { path: '/affiliates', label: 'Lista de Afiliados', icon: Share2 },

@@ -20,6 +20,7 @@ import {
   MessageCircle,
   ArrowRight,
   Activity,
+  Receipt
 } from "lucide-react";
 import Layout from "../components/Layout";
 import {
@@ -103,6 +104,11 @@ const Settings = () => {
       address: "",
       city: "",
       bankName: "",
+      // 🚀 NOVOS CAMPOS: Configurações Fiscais e NFS-e
+      ibgeCode: "",
+      im: "",
+      focusNfeToken: "",
+      itemListaServico: "15.08",
     },
     system: {
       autoBackup: false,
@@ -573,6 +579,35 @@ const Settings = () => {
                       className="w-full p-3 border border-slate-200 rounded-xl outline-none disabled:bg-slate-50 disabled:text-slate-500"
                     />
                   </div>
+                </div>
+
+                {/* 🚀 NOVA SEÇÃO: INTEGRAÇÃO FISCAL (NFS-e) */}
+                <div className="space-y-6">
+                    <div className="flex items-center gap-3 border-b border-gray-100 pb-2">
+                    <Receipt className="text-purple-500" />
+                    <h3 className="text-lg font-bold text-slate-800">Integração Fiscal (NFS-e via Focus NFe)</h3>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="md:col-span-2">
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Token da API (Focus NFe)</label>
+                          <input type="text" placeholder="Cole o token de produção ou homologação aqui..." value={settings.company.focusNfeToken || ""} onChange={(e) => updateCompany("focusNfeToken", e.target.value)} disabled={!isAdmin} className="w-full p-3 border border-slate-200 rounded-xl bg-white font-mono text-sm" />
+                          <p className="text-[10px] text-slate-400 mt-1">Se estiver vazio, o sistema operará em Modo Simulação (Testes Locais).</p>
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Inscrição Municipal (IM)</label>
+                          <input type="text" placeholder="Apenas números" value={settings.company.im || ""} onChange={(e) => updateCompany("im", e.target.value)} disabled={!isAdmin} className="w-full p-3 border border-slate-200 rounded-xl bg-white" />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Código IBGE da Cidade</label>
+                          <input type="text" placeholder="Ex: 3550308 (São Paulo)" value={settings.company.ibgeCode || ""} onChange={(e) => updateCompany("ibgeCode", e.target.value)} disabled={!isAdmin} className="w-full p-3 border border-slate-200 rounded-xl bg-white" />
+                      </div>
+                      <div className="md:col-span-2">
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Código do Serviço (Item da LC 116/03)</label>
+                          <input type="text" placeholder="Ex: 15.08" value={settings.company.itemListaServico || ""} onChange={(e) => updateCompany("itemListaServico", e.target.value)} disabled={!isAdmin} className="w-full p-3 border border-slate-200 rounded-xl bg-white" />
+                          <p className="text-[10px] text-slate-400 mt-1">15.08 = Faturização / Gestão de Crédito.</p>
+                      </div>
+                    </div>
                 </div>
                 
                 {isAdmin && (

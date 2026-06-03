@@ -50,6 +50,18 @@ export interface Loan {
   multiDates?: MultiDate[]; // NOVO CAMPO ADICIONADO
 }
 
+// 🚀 NOVA INTERFACE: Modelo de Fluxo de Caixa (Conta Corrente)
+export interface CashFlowEntry {
+  id?: string;
+  type: 'ENTRADA' | 'SAIDA';
+  category: string;
+  description: string;
+  amount: number;
+  date?: string;
+  referenceId?: string;
+  status: 'Efetivado' | 'Pendente';
+}
+
 // 🚀 NOVA INTERFACE: Modelo da Nota Fiscal
 export interface InvoiceRecord {
   id?: string;
@@ -372,6 +384,29 @@ export const dashboardService = {
   getSummary: async () => {
     const response = await api.get('/dashboard/summary');
     return response.data;
+  }
+};
+
+// 🚀 NOVO SERVIÇO: Fluxo de Caixa (Conta Corrente Atualizado com Delete)
+export const cashFlowService = {
+  getAll: async (): Promise<CashFlowEntry[]> => {
+    try {
+      const response = await api.get('/cashflow');
+      return response.data || [];
+    } catch (e) {
+      console.warn("Rota de Fluxo de Caixa ainda não disponível.");
+      return [];
+    }
+  },
+  addEntry: async (entry: Partial<CashFlowEntry>): Promise<CashFlowEntry> => {
+    const response = await api.post('/cashflow', entry);
+    await registerSystemLog('CAIXA', `Lançamento manual de ${entry.type} (R$ ${entry.amount}) - ${entry.description}`);
+    return response.data;
+  },
+  deleteEntry: async (id: string): Promise<void> => {
+    // 🚀 ENVIA O COMANDO DELETE PRO BACKEND GO
+    await api.delete(`/cashflow/${id}`);
+    await registerSystemLog('EXCLUSÃO CAIXA', `Lançamento ID ${id} foi removido do caixa.`);
   }
 };
 

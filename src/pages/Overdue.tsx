@@ -84,6 +84,36 @@ const Overdue = () => {
     count: 0,
   });
 
+  // 🚀 ESTADO DO DIÁRIO DE COBRANÇA
+  const [clientObs, setClientObs] = useState('');
+  const [isSavingObs, setIsSavingObs] = useState(false);
+
+  // Carrega a anotação do cliente sempre que abrir o modal de detalhes
+  useEffect(() => {
+      if (selectedSnowball && isModalOpen) {
+          const clientInfo = clients.find(c => c.name === selectedSnowball.client);
+          setClientObs(clientInfo?.observations || '');
+      }
+  }, [selectedSnowball, isModalOpen, clients]);
+
+  const handleSaveObs = async () => {
+      if (!selectedSnowball) return;
+      setIsSavingObs(true);
+      try {
+          const clientInfo = clients.find(c => c.name === selectedSnowball.client);
+          if (clientInfo) {
+              const updatedClient = { ...clientInfo, observations: clientObs };
+              await clientService.update(clientInfo.id, updatedClient as any);
+              setClients(prev => prev.map(c => c.id === clientInfo.id ? updatedClient : c));
+              alert("✅ Diário de cobrança atualizado com sucesso!");
+          }
+      } catch (error) {
+          alert("❌ Erro ao salvar anotação.");
+      } finally {
+          setIsSavingObs(false);
+      }
+  };
+
   const parseLocalDate = (dateStr: string) => {
     if (!dateStr) return new Date();
     let cleanStr = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
@@ -727,7 +757,30 @@ const Overdue = () => {
                 </div>
               </div>
             </div>
-            <div className="pt-2">
+
+            {/* 🚀 DIÁRIO DE COBRANÇA DIRETO NO MODAL DE ATRASADOS */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-inner mt-4">
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">
+                    <MessageCircle size={14}/> Diário de Cobrança / Anotações
+                </label>
+                <textarea
+                    value={clientObs}
+                    onChange={(e) => setClientObs(e.target.value)}
+                    className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20 text-sm text-slate-700 resize-none min-h-[80px] bg-white shadow-sm"
+                    placeholder="Anote aqui as promessas de pagamento: 'Liguei hoje, pediu para aguardar até dia 15...'"
+                />
+                <div className="flex justify-end mt-2">
+                    <button
+                        onClick={handleSaveObs}
+                        disabled={isSavingObs}
+                        className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-blue-600 transition-colors shadow-sm disabled:opacity-50"
+                    >
+                        {isSavingObs ? 'Gravando...' : 'Salvar Anotação'}
+                    </button>
+                </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 mt-4">
               <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 flex items-center gap-2"><List size={16} /> Detalhamento Mês a Mês</h4>
               <div className="bg-slate-50 rounded-xl border border-slate-200 overflow-hidden">
                 <table className="w-full text-left text-sm">

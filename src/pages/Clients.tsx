@@ -945,10 +945,11 @@ const Clients = () => {
                         <select value={formData.houseType} onChange={e => setFormData({...formData, houseType: e.target.value as any})} className="w-full p-2.5 border rounded-lg bg-white text-xs font-bold"><option value="CASA">Casa</option><option value="APARTAMENTO">Apto</option></select>
                         <input placeholder="Bairro" value={formData.neighborhood} onChange={e => setFormData({...formData, neighborhood: e.target.value})} className="w-full p-2.5 border rounded-lg" />
                     </div>
+                    {/* 🚀 Renderização Dinâmica: Só aparece se for Apto */}
                     {formData.houseType === 'APARTAMENTO' && (
                         <div className="grid grid-cols-2 gap-3 animate-in slide-in-from-top-1">
-                            <div className="flex items-center gap-2 bg-white p-1 border rounded-lg"><Home size={14} className="text-slate-400 ml-1" /><input placeholder="Bloco" value={formData.block} onChange={e => setFormData({...formData, block: e.target.value})} className="w-full p-1 outline-none text-xs" /></div>
-                            <div className="flex items-center gap-2 bg-white p-1 border rounded-lg"><Layers size={14} className="text-slate-400 ml-1" /><input placeholder="Andar / Apto" value={formData.floor} onChange={e => setFormData({...formData, floor: e.target.value})} className="w-full p-1 outline-none text-xs" /></div>
+                            <div className="flex items-center gap-2 bg-white p-1 border rounded-lg"><Home size={14} className="text-slate-400 ml-1" /><input placeholder="Bloco (Ex: A)" value={formData.block || ''} onChange={e => setFormData({...formData, block: e.target.value})} className="w-full p-1 outline-none text-xs" /></div>
+                            <div className="flex items-center gap-2 bg-white p-1 border rounded-lg"><Layers size={14} className="text-slate-400 ml-1" /><input placeholder="Andar / Apto (Ex: 402)" value={formData.floor || ''} onChange={e => setFormData({...formData, floor: e.target.value})} className="w-full p-1 outline-none text-xs" /></div>
                         </div>
                     )}
                     <div className="grid grid-cols-3 gap-3">
