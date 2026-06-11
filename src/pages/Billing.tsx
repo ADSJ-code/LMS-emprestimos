@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Search, Plus, AlertCircle, CheckCircle, Clock, Trash2,
   MoreVertical, Loader2, RefreshCw, ShieldAlert, ShieldCheck, 
@@ -126,6 +126,7 @@ const Billing = () => {
   const [collectionSearchTerm, setCollectionSearchTerm] = useState(''); // 🚀 Busca do Modal
   const [returnToModal, setReturnToModal] = useState<'collection' | null>(null); // 🚀 Efeito Bumerangue
   const [cycleMissing, setCycleMissing] = useState(0); // 🚀 O que falta para fechar a parcela
+  const collectionScrollRef = useRef<number>(0); // 🚀 MEMÓRIA DE SCROLL DO RODRIGO
 
   const [detailTab, setDetailTab] = useState<'info' | 'schedule' | 'history'>('info');
 
@@ -1751,6 +1752,23 @@ const handleFinalSave = async (e: React.FormEvent) => {
 
   const handleDelete = async (id: string) => { if (confirm('Deseja excluir?')) { try { await loanService.delete(id); fetchLoans(); setIsDetailsOpen(false); } catch (err) { alert("Erro ao excluir."); } } };
 
+  // 🚀 MOTOR DE SCROLL BUMERANGUE: Devolve a tela para onde o Rodrigo estava!
+  useEffect(() => {
+      if (isCollectionModalOpen && collectionScrollRef.current > 0) {
+          // 150ms é o tempo exato para o Modal abrir, o React renderizar a lista e nós aplicarmos o Scroll.
+          const timer = setTimeout(() => {
+              const scrollableDiv = document.querySelector('.collection-scroll-container');
+              if (scrollableDiv) {
+                  scrollableDiv.scrollTop = collectionScrollRef.current;
+              }
+          }, 150);
+          return () => clearTimeout(timer);
+      } else if (!isCollectionModalOpen && returnToModal !== 'collection') {
+          // Se ele cancelou ou fechou a tela no 'X', limpa a memória para a próxima vez abrir no topo.
+          collectionScrollRef.current = 0;
+      }
+  }, [isCollectionModalOpen, collectionLoans, returnToModal]);
+
   return (
     <Layout>
       <header className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
@@ -1779,28 +1797,29 @@ const handleFinalSave = async (e: React.FormEvent) => {
       </datalist>
 
       {isCollectionModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-start justify-center bg-black/40 backdrop-blur-sm pt-20 p-4 animate-in fade-in duration-200">
-             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in slide-in-from-top-8 fade-in duration-300 border border-slate-200 relative z-[70] ring-1 ring-black/5">
-                 <div className="bg-slate-900 p-5 flex justify-between items-center">
-                                 <div className="flex items-center gap-3 text-white font-bold">
-                                     <div className="bg-yellow-400/20 p-2 rounded-lg">
-                                         <Calendar className="text-yellow-400" size={20}/>
-                                     </div>
-                                     <span>Central de Cobrança</span>
-                                 </div>
-                                 <button onClick={() => setIsCollectionModalOpen(false)} className="text-white/50 hover:text-white hover:bg-white/10 p-2 rounded-full transition-all"><X size={20}/></button>
-                             </div>
-                             <div className="p-5 bg-slate-50/80 border-b border-slate-100 flex flex-col gap-3">
-                                 <div>
-                                     <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Data de Referência</label>
-                                     <input type="date" value={collectionDate} onChange={(e) => setCollectionDate(e.target.value)} className="w-full p-3.5 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-yellow-400/30 focus:border-yellow-400 transition-all shadow-sm bg-white"/>
-                                 </div>
-                                 <div className="relative">
-                                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                                     <input type="text" placeholder="Buscar cliente ou contrato..." value={collectionSearchTerm} onChange={(e) => setCollectionSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-yellow-400/30 transition-all bg-white shadow-sm"/>
-                                 </div>
-                             </div>
-                             <div className="p-5 max-h-[55vh] overflow-y-auto custom-scrollbar bg-white">
+        <div className="fixed inset-0 z-[60] flex items-start justify-center pt-6 px-4 pb-6 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto">
+             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md flex flex-col max-h-[85vh] overflow-hidden animate-in slide-in-from-top-4 duration-300 border border-slate-200 relative z-[70] ring-1 ring-black/5 mt-0 sm:mt-2">
+                 <div className="bg-slate-900 p-5 flex justify-between items-center shrink-0">
+                     <div className="flex items-center gap-3 text-white font-bold">
+                         <div className="bg-yellow-400/20 p-2 rounded-lg">
+                             <Calendar className="text-yellow-400" size={20}/>
+                         </div>
+                         <span>Central de Cobrança</span>
+                     </div>
+                     <button onClick={() => setIsCollectionModalOpen(false)} className="text-white/50 hover:text-white hover:bg-white/10 p-2 rounded-full transition-all"><X size={20}/></button>
+                 </div>
+                 <div className="p-5 bg-slate-50/80 border-b border-slate-100 flex flex-col gap-3 shrink-0">
+                     <div>
+                         <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Data de Referência</label>
+                         <input type="date" value={collectionDate} onChange={(e) => setCollectionDate(e.target.value)} className="w-full p-3.5 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-yellow-400/30 focus:border-yellow-400 transition-all shadow-sm bg-white"/>
+                     </div>
+                     <div className="relative">
+                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                         <input type="text" placeholder="Buscar cliente ou contrato..." value={collectionSearchTerm} onChange={(e) => setCollectionSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-yellow-400/30 transition-all bg-white shadow-sm"/>
+                     </div>
+                 </div>
+                 {/* 🚀 O segredo está aqui: flex-1 forçará a lista a consumir o espaço interno corretamente! */}
+                 <div className="p-5 flex-1 overflow-y-auto custom-scrollbar collection-scroll-container bg-white">
                                  {collectionLoans.length === 0 ? (
                                      <div className="text-center py-10">
                                          <div className="bg-green-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3">
@@ -1872,7 +1891,15 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                                              }
 
                                                              return (
-                                                             <div key={l.id} className="flex justify-between items-center p-3 hover:bg-yellow-50 rounded-xl cursor-pointer group transition-colors" onClick={() => { setReturnToModal('collection'); setIsCollectionModalOpen(false); handleOpenPayment(l); }}>
+                                                             <div key={l.id} className="flex justify-between items-center p-3 hover:bg-yellow-50 rounded-xl cursor-pointer group transition-colors" onClick={(e) => { 
+                                                                 // 🚀 CAPTURA O SCROLL ATUAL DA CAIXA
+                                                                 const scrollableDiv = e.currentTarget.closest('.collection-scroll-container');
+                                                                 if (scrollableDiv) collectionScrollRef.current = scrollableDiv.scrollTop;
+                                                                 
+                                                                 setReturnToModal('collection'); 
+                                                                 setIsCollectionModalOpen(false); 
+                                                                 handleOpenPayment(l); 
+                                                             }}>
                                                                  <div>
                                                                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest group-hover:text-yellow-700 transition-colors">Contrato: {l.id}</p>
                                                                      <p className="text-xs font-black text-slate-700 mt-0.5">R$ {formatMoney(cAmt)}</p>
