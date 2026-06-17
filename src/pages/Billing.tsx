@@ -317,39 +317,41 @@ const Billing = () => {
   // --- MOTOR DE CÁLCULO TRAVADO E LINEAR ---
   const getSyncedBreakdown = (loan: Loan | null) => {
     if (!loan) return { interest: 0, capital: 0, total: 0 };
+
+    const dueDate = new Date(loan.nextDue);
+    const cycleStart = new Date(dueDate);
+    cycleStart.setMonth(cycleStart.getMonth() - 1);
+    cycleStart.setHours(23, 59, 59, 999);
+
+    let capitalPaidInThisCycle = 0;
+    if (loan.history) {
+        loan.history.forEach(h => {
+            const hDate = new Date(h.date);
+            // 🚀 BLINDAGEM: Ignora "Ajuste de Migração" e "Abertura" no cálculo do ciclo!
+            if (hDate > cycleStart && !h.note?.includes('[CICLO COMPLETADO]') && h.type !== 'Abertura' && h.type !== 'Ajuste de Migração') {
+                capitalPaidInThisCycle += parseVal(h.capitalPaid);
+            }
+        });
+    }
+
+    const principalAtStartOfCycle = (parseVal(loan.amount) - parseVal(loan.totalPaidCapital)) + capitalPaidInThisCycle;
     
     if (loan.interestType === 'SIMPLE') {
-        const dueDate = new Date(loan.nextDue);
-        const cycleStart = new Date(dueDate);
-        cycleStart.setMonth(cycleStart.getMonth() - 1);
-        cycleStart.setHours(23, 59, 59, 999);
-
-        let capitalPaidInThisCycle = 0;
-        if (loan.history) {
-            loan.history.forEach(h => {
-                const hDate = new Date(h.date);
-                if (hDate > cycleStart && !h.note?.includes('[CICLO COMPLETADO]')) {
-                    capitalPaidInThisCycle += parseVal(h.capitalPaid);
-                }
-            });
-        }
-
-        const principalAtStartOfMonth = (parseVal(loan.amount) - parseVal(loan.totalPaidCapital)) + capitalPaidInThisCycle;
         let periodRate = parseVal(loan.interestRate) / 100;
         if (loan.frequency === 'SEMANAL') periodRate /= 4;
         else if (loan.frequency === 'DIARIO') periodRate /= 30;
 
-        const dynamicInterest = principalAtStartOfMonth * periodRate;
+        const dynamicInterest = principalAtStartOfCycle * periodRate;
         let extraAcordo = 0;
         if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
         
         return { interest: dynamicInterest + extraAcordo, capital: 0, total: dynamicInterest + extraAcordo };
         
     } else {
-        const totalReceivable = parseVal(loan.amount) + parseVal(loan.projectedProfit);
-        const originalInstallments = Math.max(1, Math.round(totalReceivable / parseVal(loan.installmentValue)));
-        const flatInterest = parseVal(loan.projectedProfit) / originalInstallments;
-        const flatCapital = parseVal(loan.installmentValue) - flatInterest;
+        // 🚀 MATEMÁTICA PERFEITA PARA PRICE/LINEAR: Lê a dívida e divide pelas parcelas restantes!
+        const activeInst = Math.max(1, loan.installments);
+        const flatCapital = principalAtStartOfCycle / activeInst;
+        const flatInterest = parseVal(loan.installmentValue) - flatCapital;
 
         let extraAcordo = 0;
         if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
@@ -1005,7 +1007,8 @@ const Billing = () => {
     if(loan.history) {
         for (let i = loan.history.length - 1; i >= 0; i--) {
             const h = loan.history[i];
-            if (h.note?.includes('[CICLO COMPLETADO]') || h.type === 'Abertura') break;
+            // 🚀 BLINDAGEM: Trava a leitura no Ajuste de Migração para não engolir o Capital Inicial
+            if (h.note?.includes('[CICLO COMPLETADO]') || h.type === 'Abertura' || h.type === 'Ajuste de Migração') break;
             accInt += (h.interestPaid || 0);
             accCap += (h.capitalPaid || 0);
         }
@@ -2698,10 +2701,11 @@ const handleFinalSave = async (e: React.FormEvent) => {
                               if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
                               if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
                               let calcInst = 0;
-                              if (selectedLoan?.interestType === 'SIMPLE') calcInst = Math.max(0, newAmtNum - (selectedLoan?.totalPaidCapital || 0)) * periodRate;
+                              const currentBalance = Math.max(0, newAmtNum - (selectedLoan?.totalPaidCapital || 0));
+                              if (selectedLoan?.interestType === 'SIMPLE') calcInst = currentBalance * periodRate;
                               else {
-                                  if (periodRate === 0) calcInst = newAmtNum / inst;
-                                  else calcInst = newAmtNum * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
+                                  if (periodRate === 0) calcInst = currentBalance / inst;
+                                  else calcInst = currentBalance * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
                               }
                               return { ...prev, amount: newAmtStr, installmentValue: calcInst > 0 ? (Math.round(calcInst * 100) / 100).toFixed(2) : '' };
                           });
@@ -2719,10 +2723,11 @@ const handleFinalSave = async (e: React.FormEvent) => {
                               if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
                               if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
                               let calcInst = 0;
-                              if (selectedLoan?.interestType === 'SIMPLE') calcInst = Math.max(0, amt - (selectedLoan?.totalPaidCapital || 0)) * periodRate;
+                              const currentBalance = Math.max(0, amt - (selectedLoan?.totalPaidCapital || 0));
+                              if (selectedLoan?.interestType === 'SIMPLE') calcInst = currentBalance * periodRate;
                               else {
-                                  if (periodRate === 0) calcInst = amt / inst;
-                                  else calcInst = amt * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
+                                  if (periodRate === 0) calcInst = currentBalance / inst;
+                                  else calcInst = currentBalance * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
                               }
                               return { ...prev, interestRate: newRateStr, installmentValue: calcInst > 0 ? (Math.round(calcInst * 100) / 100).toFixed(2) : '' };
                           });
@@ -2740,10 +2745,11 @@ const handleFinalSave = async (e: React.FormEvent) => {
                               if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
                               if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
                               let calcInst = 0;
-                              if (selectedLoan?.interestType === 'SIMPLE') calcInst = Math.max(0, amt - (selectedLoan?.totalPaidCapital || 0)) * periodRate;
+                              const currentBalance = Math.max(0, amt - (selectedLoan?.totalPaidCapital || 0));
+                              if (selectedLoan?.interestType === 'SIMPLE') calcInst = currentBalance * periodRate;
                               else {
-                                  if (periodRate === 0) calcInst = amt / inst;
-                                  else calcInst = amt * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
+                                  if (periodRate === 0) calcInst = currentBalance / inst;
+                                  else calcInst = currentBalance * ((periodRate * Math.pow(1 + periodRate, inst)) / (Math.pow(1 + periodRate, inst) - 1));
                               }
                               return { ...prev, installments: newInstStr, installmentValue: calcInst > 0 ? (Math.round(calcInst * 100) / 100).toFixed(2) : '' };
                           });
@@ -2760,7 +2766,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                   if (val === '') return { ...prev, installmentValue: val };
                                   
                                   const pmtTarget = parseFloat(val) || 0;
-                                  const cap = parseFloat(prev.amount) || 0;
+                                  const cap = Math.max(0, (parseFloat(prev.amount) || 0) - (selectedLoan?.totalPaidCapital || 0));
                                   const parcelas = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(prev.installments) || 1);
 
                                   if (cap > 0 && pmtTarget > 0) {
@@ -2788,7 +2794,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                   return { ...prev, installmentValue: val };
                               });
                           }} 
-                          className="w-full p-3 border border-blue-300 rounded-xl outline-none font-black text-blue-700 bg-blue-50 focus:ring-2 focus:ring-blue-500/20 shadow-sm transition-all"
+                          className="w-full p-3 border border-blue-300 rounded-xl outline-none font-black text-blue-700 bg-white focus:ring-2 focus:ring-blue-500/20 shadow-sm transition-all"
                           placeholder="Ex: 150.00"
                       />
                   </div>
@@ -2807,7 +2813,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                               if (val === '') return;
                               
                               const jurosTarget = parseFloat(val) || 0;
-                              const cap = parseFloat(editContractData.amount) || 0;
+                              const cap = Math.max(0, (parseFloat(editContractData.amount) || 0) - (selectedLoan?.totalPaidCapital || 0));
                               const parcelas = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(editContractData.installments) || 1);
 
                               if (cap > 0 && jurosTarget >= 0) {
@@ -2849,7 +2855,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                   });
                               }
                           }} 
-                          className="w-full p-3 border border-blue-300 rounded-xl outline-none font-black text-blue-700 bg-white focus:ring-2 focus:ring-blue-500/20 shadow-sm"
+                          className="w-full p-3 border border-blue-300 rounded-xl outline-none font-black text-blue-700 bg-white focus:ring-2 focus:ring-blue-500/20 shadow-sm" 
                       />
                   </div>
               </div>
