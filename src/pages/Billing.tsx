@@ -164,9 +164,11 @@ const Billing = () => {
   const [payTotal, setPayTotal] = useState(0); 
   const [settleInterest, setSettleInterest] = useState(false);
   const [cycleAcc, setCycleAcc] = useState({ interest: 0, capital: 0 }); 
-  
+
   // 🚀 NOVO ESTADO: Controlo manual para avanço do mês
   const [forceAdvanceMonth, setForceAdvanceMonth] = useState(false);
+  // 🚀 NOVO ESTADO: Quitação com Desconto (Perdão de Juros)
+  const [isDiscountSettlement, setIsDiscountSettlement] = useState(false);
 
   const [agreementDate, setAgreementDate] = useState('');
   const [agreementValue, setAgreementValue] = useState('');
@@ -1091,6 +1093,7 @@ const Billing = () => {
     setPayCapital(autoCapital);
     setPayInterest(autoInterest);
     setSettleInterest(false);
+    setIsDiscountSettlement(false); // 🚀 Limpa a checkbox de Desconto ao abrir novo modal
     
     // 🚀 FIX 3: Base do CycleMissing blindada para considerar Acordos extras.
     const expectedInterest = breakdown.interest;
@@ -1163,7 +1166,17 @@ const Billing = () => {
         shouldAdvanceMonth = paidNow >= (cycleMissing - 0.10); // Tolerância de centavos
     }
 
-    if (balance <= 0.10) {
+    // 🚀 LÓGICA DE QUITAÇÃO COM DESCONTO
+    if (isDiscountSettlement) {
+        updatedLoan.status = 'Quitado';
+        updatedLoan.installments = 0;
+        if (isSimple) updatedLoan.installmentValue = 0;
+        // Perdoa o capital restante que ele não digitou no modal
+        updatedLoan.totalPaidCapital = updatedLoan.amount; 
+        
+        const missedProfit = (updatedLoan.projectedProfit || 0) - updatedLoan.totalPaidInterest;
+        noteText += ` [QUITAÇÃO COM DESCONTO] Perdão de Juros: R$ ${formatMoney(Math.max(0, missedProfit))}`;
+    } else if (balance <= 0.10) {
         updatedLoan.status = 'Quitado';
         updatedLoan.installments = 0;
         if (isSimple) updatedLoan.installmentValue = 0;
@@ -1398,18 +1411,19 @@ const handleOpenEditContract = (loan: Loan) => {
       const newInterestRate = parseFloat(editContractData.interestRate) || selectedLoan.interestRate;
       const numInst = isSimple ? 1 : (parseInt(editContractData.installments) || selectedLoan.installments);
       
-      // 🚀 MATEMÁTICA BLINDADA: O sistema recalcula o valor exato da parcela na hora de salvar
+      // 🚀 MATEMÁTICA BLINDADA: O sistema recalcula o valor exato da parcela na hora de salvar usando o SALDO DEVEDOR!
       let newInstallmentValue = 0;
       let periodRate = newInterestRate / 100;
       if (selectedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
       else if (selectedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
 
+      const currentBalance = Math.max(0, newAmount - (selectedLoan.totalPaidCapital || 0));
+
       if (isSimple) {
-          const currentBalance = Math.max(0, newAmount - (selectedLoan.totalPaidCapital || 0));
           newInstallmentValue = currentBalance * periodRate;
       } else {
-          if (periodRate === 0) newInstallmentValue = newAmount / numInst;
-          else newInstallmentValue = newAmount * ((periodRate * Math.pow(1 + periodRate, numInst)) / (Math.pow(1 + periodRate, numInst) - 1));
+          if (periodRate === 0) newInstallmentValue = currentBalance / numInst;
+          else newInstallmentValue = currentBalance * ((periodRate * Math.pow(1 + periodRate, numInst)) / (Math.pow(1 + periodRate, numInst) - 1));
       }
       
       newInstallmentValue = Math.round(newInstallmentValue * 100) / 100;
@@ -2581,6 +2595,20 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Juros + Multa</label>
                     <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={payInterest} onChange={(e) => setPayInterest(e.target.value)} className="w-full p-3 border border-green-200 rounded-xl outline-none font-black text-green-700 bg-green-50/50 focus:ring-2 focus:ring-green-500/20 transition-all" placeholder="0.00"/>
                 </div>
+            </div>
+
+            {/* 🚀 A CHAVE MÁGICA: QUITAÇÃO COM DESCONTO */}
+            <div className="flex items-center gap-2 p-3 bg-purple-50 border border-purple-200 rounded-xl">
+                <input 
+                    type="checkbox" 
+                    id="isDiscountSettlement" 
+                    checked={isDiscountSettlement} 
+                    onChange={(e) => setIsDiscountSettlement(e.target.checked)} 
+                    className="w-5 h-5 rounded text-purple-600 focus:ring-purple-500 cursor-pointer" 
+                />
+                <label htmlFor="isDiscountSettlement" className="text-sm font-bold text-purple-800 cursor-pointer leading-tight">
+                    Quitação com Desconto (Perdoar o resto dos juros e finalizar contrato)
+                </label>
             </div>
 
             <div className="bg-slate-100 border border-slate-200 p-4 rounded-xl flex justify-between items-center shadow-inner">
