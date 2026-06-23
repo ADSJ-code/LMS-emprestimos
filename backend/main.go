@@ -1308,40 +1308,66 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         payloadBytes, _ := json.Marshal(payload)
-        
-        // 🚀 TENTA AMBIENTE DE PRODUÇÃO PRIMEIRO
-        targetURL := "https://api.focusnfe.com.br/v2/nfse?ref=" + invoiceID
 
-        req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(payloadBytes))
-        if err != nil { return }
+		// 🚀 DIAGNÓSTICO: Verifica o que realmente veio do MongoDB e limpa espaços
+		apiKey := strings.TrimSpace(comp.FocusNfeToken)
+		if apiKey == "" {
+			log.Println("❌ [ERRO] O Token da Focus NFe está VAZIO no banco de dados!")
+			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Token VAZIO. Vá a Configurações e guarde o Token novamente."}})
+			return
+		}
 
-        req.Header.Set("Content-Type", "application/json")
-        req.SetBasicAuth(apiKey, "")
+		// Imprime os 4 primeiros caracteres para confirmarmos se está a ler o token certo
+		log.Printf("🔍 [FOCUS NFE] Iniciando disparo. Token lido do banco: %s... (Tamanho: %d)", apiKey[:4], len(apiKey))
 
-        clientHttp := &http.Client{Timeout: 15 * time.Second}
-        resp, err := clientHttp.Do(req)
+		// 1. TENTA AMBIENTE DE PRODUÇÃO PRIMEIRO
+		apiURL := "https://api.focusnfe.com.br/v2/nfse?ref=" + invoiceID
+		req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth(apiKey, "")
 
-        // 🚀 AUTO-ROUTING CORRIGIDO: Se der 401, reconstrói a URL de homologação limpa
-        if err == nil && resp.StatusCode == 401 {
-            resp.Body.Close()
-            targetURL = "https://homologacao.focusnfe.com.br/v2/nfse?ref=" + invoiceID
-            req, _ = http.NewRequest("POST", targetURL, bytes.NewBuffer(payloadBytes))
-            req.Header.Set("Content-Type", "application/json")
-            req.SetBasicAuth(apiKey, "")
-            resp, err = clientHttp.Do(req)
-            log.Println("🔄 [AUTO-ROUTING EMISSÃO] Token de Homologação validado. Redirecionado para testes de Mauá.")
-        }
+		clientHttp := &http.Client{Timeout: 15 * time.Second}
+		resp, err := clientHttp.Do(req)
+		if err != nil {
+			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Falha na rede ao conectar com a Focus"}})
+			return
+		}
 
-        if err != nil || resp.StatusCode >= 400 {
-            errorMsg := "Erro na integração com a Sefaz/Focus NFe."
-            if resp != nil {
-                bodyErr, _ := io.ReadAll(resp.Body)
-                errorMsg = string(bodyErr)
-                resp.Body.Close()
-            }
-            invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": errorMsg}})
-        }
-    }(inv.ID, client, inv.ServiceValue, s.Company)
+		bodyProducao, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		// 2. AUTO-ROUTING PARA HOMOLOGAÇÃO SE O TOKEN FOR REJEITADO (401)
+		if resp.StatusCode == 401 {
+			log.Println("⚠️ Produção retornou 401 (Access Denied). Tentando Homologação...")
+			apiURL = "https://homologacao.focusnfe.com.br/v2/nfse?ref=" + invoiceID
+			req, _ = http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
+			req.Header.Set("Content-Type", "application/json")
+			req.SetBasicAuth(apiKey, "")
+
+			resp, err = clientHttp.Do(req)
+			if err != nil { return }
+			
+			bodyHomolog, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+
+			if resp.StatusCode >= 400 {
+				log.Printf("❌ Homologação também falhou (Status %d): %s", resp.StatusCode, string(bodyHomolog))
+				errorMsg := fmt.Sprintf("Acesso Negado ou Erro (Status %d). Verifique o Token.", resp.StatusCode)
+				invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": errorMsg}})
+				return
+			}
+			log.Println("✅ [AUTO-ROUTING] Sucesso na Homologação!")
+		} else if resp.StatusCode >= 400 {
+			log.Printf("❌ Erro em Produção (Status %d): %s", resp.StatusCode, string(bodyProducao))
+			errorMsg := string(bodyProducao)
+			if len(errorMsg) > 100 { errorMsg = errorMsg[:100] + "..." } // Evita textos gigantes na tela
+			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": errorMsg}})
+			return
+		} else {
+			log.Println("✅ Sucesso em Produção!")
+		}
+
+	}(inv.ID, client, inv.ServiceValue, s.Company)
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(inv)
