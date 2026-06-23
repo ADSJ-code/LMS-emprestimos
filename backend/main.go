@@ -1222,15 +1222,29 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var s Settings
-	settingsCollection.FindOne(ctx, bson.M{}).Decode(&s)
+	// 🚀 DIAGNÓSTICO: Força o Mongo a ler o documento MAIS RECENTE da coleção Settings
+	optsSort := options.FindOne().SetSort(bson.D{{Key: "_id", Value: -1}})
+	settingsCollection.FindOne(ctx, bson.M{}, optsSort).Decode(&s)
 
 	go func(invoiceID string, c Client, serviceValue float64, comp CompanySettings) {
 		bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer bgCancel()
 
 		apiKey := strings.TrimSpace(comp.FocusNfeToken)
+		
+		// 🚀 RASTREADOR DEFINITIVO: O que realmente está a chegar do MongoDB?
+		log.Printf("\n=======================================================")
+		log.Printf("🎯 [DIAGNÓSTICO] Token lido do Banco: '%s'", apiKey)
+		
+		// 🚀 FORÇA O TOKEN QUE VOCÊ VALIDOU NO TERMINAL (Prova dos 9)
+		tokenForcado := "YoGmJAqT7Cm9kYNpm36zYrwu3rk2ghKz"
+		if apiKey != tokenForcado {
+			log.Printf("⚠️ O banco tem um token diferente! Usando o token forçado para garantir a emissão.")
+			apiKey = tokenForcado
+		}
+		log.Printf("=======================================================\n")
+
 		if apiKey == "" {
-			log.Println("❌ [ERRO] O Token da Focus NFe está VAZIO no banco de dados!")
 			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Token VAZIO no painel."}})
 			return
 		}
