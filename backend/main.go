@@ -1172,7 +1172,7 @@ func invoiceCancelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// 🚀 HANDLER REAL: Emite a nota fiscal via Focus NFe (HOMOLOGAÇÃO)
+// 🚀 HANDLER REAL: Emite a nota fiscal via Focus NFe (Customizado ABPC SP / Mauá)
 func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -1200,6 +1200,10 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		inv.ID = fmt.Sprintf("NF-%d", time.Now().UnixMilli()%100000)
 	}
 
+	inv.ID = strings.ReplaceAll(inv.ID, ".", "")
+	inv.ID = strings.ReplaceAll(inv.ID, "/", "")
+	inv.ID = strings.ReplaceAll(inv.ID, " ", "")
+
 	var existing InvoiceRecord
 	errDoc := invoiceCollection.FindOne(ctx, bson.M{"_id": inv.ID}).Decode(&existing)
 	if errDoc == nil && (existing.Status == "AUTORIZADA" || existing.Status == "PROCESSANDO") {
@@ -1224,9 +1228,10 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer bgCancel()
 
-		apiKey := comp.FocusNfeToken
+		apiKey := strings.TrimSpace(comp.FocusNfeToken)
 		if apiKey == "" {
-			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Token da Focus NFe não configurado no painel."}})
+			log.Println("❌ [ERRO] O Token da Focus NFe está VAZIO no banco de dados!")
+			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Token VAZIO. Configure o Token no painel."}})
 			return
 		}
 
@@ -1236,14 +1241,19 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		itemServico := comp.ItemListaServico
 
 		if cnpjPrestador == "" || imPrestador == "" || ibgePrestador == "" {
-			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "CNPJ, Inscrição Municipal ou IBGE ausentes nas Configurações."}})
+			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "CNPJ, Inscrição Municipal ou IBGE ausentes."}})
 			return
 		}
-		if itemServico == "" { itemServico = "15.08" }
+
+		if itemServico == "" {
+			itemServico = "15.08"
+		}
 
 		docLimpo := regexp.MustCompile(`\D`).ReplaceAllString(c.CPF, "")
 		campoDoc := "cnpj"
-		if len(docLimpo) == 11 { campoDoc = "cpf" }
+		if len(docLimpo) == 11 {
+			campoDoc = "cpf"
+		}
 
 		enderecoTomador := map[string]string{
 			"logradouro": c.Address,
@@ -1258,69 +1268,57 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			respViaCep, err := http.Get("https://viacep.com.br/ws/" + cepLimpo + "/json/")
 			if err == nil {
 				defer respViaCep.Body.Close()
-				var vcData struct { Ibge string `json:"ibge"` }
+				var vcData struct {
+					Ibge string `json:"ibge"`
+				}
 				if json.NewDecoder(respViaCep.Body).Decode(&vcData) == nil && vcData.Ibge != "" {
 					enderecoTomador["codigo_municipio"] = vcData.Ibge
 				}
 			}
 		}
 
-		// 🚀 CORREÇÃO DOCUMENTAÇÃO FOCUS: A chave do emitente DEVE ser "cnpj" mesmo para CPF (Pessoa Física).
 		docPrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(cnpjPrestador, "")
 		imPrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(imPrestador, "")
 		ibgePrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(ibgePrestador, "")
 
-		// Trava de segurança: Aborta antes de bater na Focus se faltarem dados da empresa
-		if docPrestadorLimpo == "" || imPrestadorLimpo == "" || ibgePrestadorLimpo == "" {
-			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Dados da empresa incompletos. Preencha CNPJ/CPF, Inscrição Municipal e IBGE nas Configurações."}})
-			return
+		// Helper interno para formatar endereço pro Go não reclamar de tipos
+		borderEnderecoTomador := func(m map[string]string) map[string]interface{} {
+			res := make(map[string]interface{})
+			for k, v := range m { res[k] = v }
+			return res
 		}
 
-		// 🚀 LOG DE DEBUG: Ajuda a descobrir qual o CPF e Token estão sendo enviados caso a Sefaz reclame
-		log.Printf("🔥 [DEBUG EMISSÃO] Enviando Nota %s | CPF/CNPJ Prestador: %s", invoiceID, docPrestadorLimpo)
-
-		// Converte códigos IBGE para inteiros puros conforme exigido no esquema de Mauá
-        ibgePrestadorInt, _ := strconv.Atoi(ibgePrestadorLimpo)
-
-        payload := map[string]interface{}{
-            "data_emissao":             time.Now().Format("2006-01-02T15:04:05"), // Formato estrito sem timezone para Mauá
-            "natureza_operacao":       1,     // 🚀 CORREÇÃO: Inteiro puro (1 = Tributação no município)
-            "optante_simples_nacional": false, // Booleano puro
-            "prestador": map[string]interface{}{
-                "cnpj":                docPrestadorLimpo,
-                "inscricao_municipal": imPrestadorLimpo,
-                "codigo_municipio":    ibgePrestadorInt, // 🚀 CORREÇÃO: Inteiro
-            },
-            "tomador": map[string]interface{}{
-                campoDoc:       docLimpo,
-                "razao_social": c.Name,
-                "email":        c.Email,
-                "endereco":     borderEnderecoTomador(enderecoTomador),
-            },
-            "servico": map[string]interface{}{
-                "valor_servicos":     serviceValue,
-                "aliquota":           5.0, // Alíquota padrão de Mauá para serviços financeiros
-                "item_lista_servico": itemServico,
-                "codigo_tributario_municipio": "692060100", // Código estrito do exemplo de Mauá para faturamento de intermediação
-                "discriminacao":      "Nota emitida correspondente ao rendimento de gestão e intermediação financeira.",
-                "iss_retido":         false, // 🚀 CORREÇÃO: Campo booleano obrigatório adicionado
-            },
-        }
-
-        payloadBytes, _ := json.Marshal(payload)
-
-		// 🚀 DIAGNÓSTICO: Verifica o que realmente veio do MongoDB e limpa espaços
-		apiKey := strings.TrimSpace(comp.FocusNfeToken)
-		if apiKey == "" {
-			log.Println("❌ [ERRO] O Token da Focus NFe está VAZIO no banco de dados!")
-			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Token VAZIO. Vá a Configurações e guarde o Token novamente."}})
-			return
+		payload := map[string]interface{}{
+			"data_emissao":             time.Now().Format(time.RFC3339), // 🚀 RETORNO PARA O PADRÃO ISO 8601
+			"natureza_operacao":        "1", // 🚀 CORREÇÃO: String exigida pelo OpenAPI
+			"optante_simples_nacional": false,
+			"prestador": map[string]interface{}{
+				"cnpj":                docPrestadorLimpo,
+				"inscricao_municipal": imPrestadorLimpo,
+				"codigo_municipio":    ibgePrestadorLimpo, // 🚀 CORREÇÃO: String exigida pelo OpenAPI
+			},
+			"tomador": map[string]interface{}{
+				campoDoc:       docLimpo,
+				"razao_social": c.Name,
+				"email":        c.Email,
+				"endereco":     borderEnderecoTomador(enderecoTomador),
+			},
+			"servico": map[string]interface{}{
+				"discriminacao":               "Nota emitida correspondente ao rendimento de gestão e intermediação financeira.",
+				"item_lista_servico":          itemServico,
+				"valor_servicos":              serviceValue,
+				"aliquota":                    5.0,
+				"codigo_tributario_municipio": "692060100",
+				"iss_retido":                  false, // Exigido
+				"codigo_municipio":            ibgePrestadorLimpo, // Exigido pelo OpenAPI
+			},
 		}
 
-		// Imprime os 4 primeiros caracteres para confirmarmos se está a ler o token certo
-		log.Printf("🔍 [FOCUS NFE] Iniciando disparo. Token lido do banco: %s... (Tamanho: %d)", apiKey[:4], len(apiKey))
+		payloadBytes, _ := json.Marshal(payload)
+		
+		log.Printf("🔍 [FOCUS NFE] Disparando nota %s. Token lido: %s... (Tamanho: %d)", invoiceID, apiKey[:4], len(apiKey))
 
-		// 1. TENTA AMBIENTE DE PRODUÇÃO PRIMEIRO
+		// 1. TENTA AMBIENTE DE PRODUÇÃO
 		apiURL := "https://api.focusnfe.com.br/v2/nfse?ref=" + invoiceID
 		req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
 		req.Header.Set("Content-Type", "application/json")
@@ -1328,6 +1326,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 
 		clientHttp := &http.Client{Timeout: 15 * time.Second}
 		resp, err := clientHttp.Do(req)
+
 		if err != nil {
 			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Falha na rede ao conectar com a Focus"}})
 			return
@@ -1336,7 +1335,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		bodyProducao, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		// 2. AUTO-ROUTING PARA HOMOLOGAÇÃO SE O TOKEN FOR REJEITADO (401)
+		// 2. SE O TOKEN FOR REJEITADO (401), TENTA HOMOLOGAÇÃO
 		if resp.StatusCode == 401 {
 			log.Println("⚠️ Produção retornou 401 (Access Denied). Tentando Homologação...")
 			apiURL = "https://homologacao.focusnfe.com.br/v2/nfse?ref=" + invoiceID
@@ -1346,13 +1345,26 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 
 			resp, err = clientHttp.Do(req)
 			if err != nil { return }
-			
+
 			bodyHomolog, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 
 			if resp.StatusCode >= 400 {
-				log.Printf("❌ Homologação também falhou (Status %d): %s", resp.StatusCode, string(bodyHomolog))
-				errorMsg := fmt.Sprintf("Acesso Negado ou Erro (Status %d). Verifique o Token.", resp.StatusCode)
+				log.Printf("❌ Homologação falhou (Status %d): %s", resp.StatusCode, string(bodyHomolog))
+				
+				// 🚀 REVELA A MENSAGEM REAL DA FOCUS NFE / PREFEITURA DE MAUÁ
+				var focusErr map[string]interface{}
+				json.Unmarshal(bodyHomolog, &focusErr)
+				
+				errorMsg := "Erro na Sefaz de Mauá."
+				if msg, ok := focusErr["mensagem"].(string); ok {
+					errorMsg = msg
+				} else {
+					errorMsg = string(bodyHomolog)
+				}
+				
+				if len(errorMsg) > 200 { errorMsg = errorMsg[:200] + "..." }
+				
 				invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": errorMsg}})
 				return
 			}
@@ -1360,7 +1372,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		} else if resp.StatusCode >= 400 {
 			log.Printf("❌ Erro em Produção (Status %d): %s", resp.StatusCode, string(bodyProducao))
 			errorMsg := string(bodyProducao)
-			if len(errorMsg) > 100 { errorMsg = errorMsg[:100] + "..." } // Evita textos gigantes na tela
+			if len(errorMsg) > 100 { errorMsg = errorMsg[:100] + "..." }
 			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": errorMsg}})
 			return
 		} else {
