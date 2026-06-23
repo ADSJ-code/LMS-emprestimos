@@ -270,10 +270,21 @@ const Settings = () => {
       try {
         const data = await settingsService.get();
         if (data) {
+          // 🚀 FIX FOCUS NFE: Garante que os campos fiscais não voltem undefined caso nunca tenham sido salvos
+          const safeCompany = {
+            ...defaultSettings.company,
+            ...data.company,
+            ibgeCode: data.company?.ibgeCode || defaultSettings.company.ibgeCode,
+            im: data.company?.im || defaultSettings.company.im,
+            focusNfeToken: data.company?.focusNfeToken || defaultSettings.company.focusNfeToken,
+            itemListaServico: data.company?.itemListaServico || defaultSettings.company.itemListaServico,
+          };
+          
           setSettings({
-            company: { ...defaultSettings.company, ...data.company },
+            company: safeCompany,
             system: { ...defaultSettings.system, ...data.system },
           });
+          
           if (data.company?.name) {
             localStorage.setItem("companyName", data.company.name);
           }

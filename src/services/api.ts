@@ -425,6 +425,11 @@ export const invoiceService = {
     const response = await api.post('/invoices/emit', invoiceData);
     await registerSystemLog('NOTA FISCAL', `Solicitada emissão de NF no valor de R$ ${invoiceData.serviceValue} para ${invoiceData.client}`);
     return response.data;
+  },
+  // 🚀 NOVA FUNÇÃO: Cancelamento Síncrono de Nota Fiscal na Sefaz
+  delete: async (id: string, justificativa: string): Promise<void> => {
+    await api.post(`/invoices/${id}/cancel`, { justificativa });
+    await registerSystemLog('CANCELAMENTO NF', `Solicitou o cancelamento oficial da nota fiscal ${id}. Motivo: ${justificativa}`);
   }
 };
 

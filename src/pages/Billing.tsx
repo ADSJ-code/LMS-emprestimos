@@ -5,7 +5,7 @@ import {
   Calculator, FileText, Check, ChevronRight, DollarSign, 
   Printer, Eye, TrendingUp, TrendingDown, History, Download, Calendar, AlertTriangle, Info, PartyPopper, UserCheck,
   Percent, Landmark, CreditCard, Repeat, BellRing, X, FileSignature, Filter, MessageCircle, Users, Send, Home, Layers,
-  Hash, Database, Edit
+  Hash, Database, Edit, ChevronDown, ChevronUp
 } from 'lucide-react';
 
 import ExcelJS from 'exceljs';
@@ -138,6 +138,7 @@ const Billing = () => {
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]); 
+  const [showPaidLoans, setShowPaidLoans] = useState(false); // 🚀 Controle da Sanfona de Quitados
 
   const [filterStart, setFilterStart] = useState('');
   const [filterEnd, setFilterEnd] = useState('');
@@ -759,7 +760,7 @@ const Billing = () => {
     setSummary({ overdue: totalOverdue, received: totalProfit, today: totalTodayValue });
   }, [loans, collectionDate]);
 
-  // --- SIMULAÇÃO FINANCEIRA ---
+  // --- SIMULAÇÃO FINANCEIRA BLINDADA ---
   useEffect(() => {
     const amount = parseFloat(formData.amount) || 0; 
     const rateMonthly = parseFloat(formData.interestRate) || 0; 
@@ -804,7 +805,7 @@ const Billing = () => {
         let totalInt = 0;
 
         if (exactInterest !== null && exactInterest > 0) {
-            // FIX: Se o usuário digitou o Juros Exato, ignora a taxa arredondada e crava a matemática absoluta!
+            // 🚀 FIX RODRIGO: Se digitou juros manual, usa o valor absoluto cravado
             if (formData.interestType === 'SIMPLE') {
                 pmt = exactInterest;
                 totalInt = exactInterest * numInstallments;
@@ -823,13 +824,18 @@ const Billing = () => {
             }
         }
 
-        // --- FIX: TRAVA DOS CENTAVOS NO REACT ---
+        // 🚀 MATEMÁTICA ABSOLUTA: Arredondamento cravado em 2 casas decimais
         pmt = Math.round(pmt * 100) / 100;
         totalInt = Math.round(totalInt * 100) / 100;
 
+        // 🚀 CORREÇÃO: O total a pagar agora usa o pmt exato da simulação
+        const totalPayableCalc = Math.round((pmt * numInstallments + (formData.interestType === 'SIMPLE' ? amount : 0)) * 100) / 100;
+
         setSimulation({ 
-            installment: pmt, totalInterest: totalInt, 
-            totalPayable: pmt * numInstallments + (formData.interestType === 'SIMPLE' ? amount : 0), isValid: true 
+            installment: pmt, 
+            totalInterest: totalInt, 
+            totalPayable: totalPayableCalc, 
+            isValid: true 
         });
         setIsSimulating(false);
       }, 400);
@@ -1685,19 +1691,25 @@ const handleFinalSave = async (e: React.FormEvent) => {
             const initInt = parseFloat(formData.initialPaidInterest) || 0;
 
             if (isSimpleMode) {
-                 // FIX: Para migração simples, cravar o valor digitado como a parcela fixa, ignorando dízimas da taxa
                  finalInstallmentValue = parseFloat(formData.manualInstallmentInterest) || 0;
                  projectedProfit = 0;
             } else {
                  const mCap = parseFloat(formData.manualInstallmentCapital) || 0;
                  const mInt = parseFloat(formData.manualInstallmentInterest) || 0;
-                 finalInstallmentValue = mCap + mInt;
-                 projectedProfit = (mInt * numInst) + initInt;
+                 // 🚀 BLINDAGEM MIGRACAO: Trava arredondamento na parcela fixa
+                 finalInstallmentValue = Math.round((mCap + mInt) * 100) / 100;
+                 projectedProfit = Math.round(((mInt * numInst) + initInt) * 100) / 100;
             }
         } else {
+            // 🚀 AQUI ESTAVA O BUG: Agora cravamos 100% o valor que o simulador calculou e arredondou
             finalInstallmentValue = simulation.installment;
-            const totalReceivable = simulation.installment * numInst;
-            projectedProfit = isSimpleMode ? totalReceivable : Math.max(0, totalReceivable - finalAmount);
+            const totalReceivable = Math.round((simulation.installment * numInst) * 100) / 100;
+            
+            projectedProfit = isSimpleMode 
+                ? totalReceivable 
+                : Math.max(0, totalReceivable - finalAmount);
+            
+            projectedProfit = Math.round(projectedProfit * 100) / 100;
         }
 
         const parseRate = (val: string) => { if (val === '') return 0; const num = parseFloat(val); return isNaN(num) ? 0 : num; };
@@ -1772,7 +1784,6 @@ const handleFinalSave = async (e: React.FormEvent) => {
   // 🚀 MOTOR DE SCROLL BUMERANGUE: Devolve a tela para onde o Rodrigo estava!
   useEffect(() => {
       if (isCollectionModalOpen && collectionScrollRef.current > 0) {
-          // 150ms é o tempo exato para o Modal abrir, o React renderizar a lista e nós aplicarmos o Scroll.
           const timer = setTimeout(() => {
               const scrollableDiv = document.querySelector('.collection-scroll-container');
               if (scrollableDiv) {
@@ -1781,10 +1792,122 @@ const handleFinalSave = async (e: React.FormEvent) => {
           }, 150);
           return () => clearTimeout(timer);
       } else if (!isCollectionModalOpen && returnToModal !== 'collection') {
-          // Se ele cancelou ou fechou a tela no 'X', limpa a memória para a próxima vez abrir no topo.
           collectionScrollRef.current = 0;
       }
   }, [isCollectionModalOpen, collectionLoans, returnToModal]);
+
+  // 🚀 SEPARADOR DE CONTRATOS PARA LIMPAR POLUIÇÃO VISUAL
+  const activeLoans = filteredLoans.filter(loan => getLoanRealStatus(loan) !== 'Quitado');
+  const paidLoans = filteredLoans.filter(loan => getLoanRealStatus(loan) === 'Quitado');
+
+  const renderLoanRow = (loan: any) => {
+      const displayStatus = getLoanRealStatus(loan);
+      const uniqueKey = loan._id || loan.id || Math.random().toString();
+      
+      let displayInterestPaid = loan.totalPaidInterest || 0;
+      if (filterStart && filterEnd && statusFilter === 'PagosNoPeriodo' && loan.history) {
+          displayInterestPaid = 0;
+          loan.history.forEach((h: any) => {
+              const hDate = h.date.split('T')[0];
+              const refDate = h.originalDueDate ? h.originalDueDate.split('T')[0] : hDate;
+              const paidInPeriod = hDate >= filterStart && hDate <= filterEnd;
+              const refInPeriod = refDate >= filterStart && refDate <= filterEnd;
+
+              if (paidInPeriod && refInPeriod && !h.type.toLowerCase().includes('abertura')) {
+                  displayInterestPaid += (h.interestPaid || 0);
+              }
+          });
+      }
+
+      return (
+        <tr key={uniqueKey} className={`transition-colors group ${selectedIds.includes(loan.id) ? "bg-blue-50/50" : "hover:bg-slate-50/80"}`}>
+          <td className="p-4 text-center">
+            <input type="checkbox" checked={selectedIds.includes(loan.id)} onChange={() => toggleSelectOne(loan.id)} className="w-4 h-4 rounded border-gray-300 text-slate-900 cursor-pointer" />
+          </td>
+          <td className="p-4">
+            <div className="font-bold text-slate-800">{loan.client}</div>
+            {getNickname(availableClients.find(c => c.name === loan.client)?.observations) && (
+                <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 mb-1 w-fit truncate max-w-[200px]" title={getNickname(availableClients.find(c => c.name === loan.client)?.observations)}>
+                  {getNickname(availableClients.find(c => c.name === loan.client)?.observations)}
+                </div>
+            )}
+            <div className="text-[10px] font-mono text-slate-400">{loan.id}</div>
+          </td>
+          <td className="p-4 text-center">
+            <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">{loan.installments}x</span>
+          </td>
+          <td className="p-4 text-center">
+            <span className={`font-bold text-sm ${displayStatus === "Atrasado" ? "text-red-600" : "text-slate-700"}`}>
+              {formatDisplayDate(getDisplayNextDue(loan))}
+            </span>
+          </td>
+          <td className="p-4 text-center text-sm font-bold text-blue-600">{getLastPaymentDate(loan)}</td>
+          <td className="p-4 text-right font-bold text-slate-700">
+            R$ {formatMoney(Math.max(0, loan.amount - (loan.totalPaidCapital || 0)))}
+          </td>
+          <td className="p-4 text-right font-bold text-green-600 bg-green-50/30 rounded">
+            R$ {formatMoney(displayInterestPaid)}
+          </td>
+          <td className="p-4 text-right font-bold text-slate-500">
+            R$ {formatMoney(loan.installmentValue)}
+          </td>
+          <td className="p-4 text-center">
+            <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase shadow-sm ${
+                displayStatus === "Em Dia" ? "bg-blue-50 text-blue-700 border border-blue-100"
+              : displayStatus === "Atrasado" ? "bg-red-50 text-red-700 border border-red-100"
+              : displayStatus === "Acordo" ? "bg-orange-50 text-orange-700 border border-orange-100"
+              : displayStatus === "Quitado" ? "bg-green-50 text-green-700 border border-green-100"
+              : "bg-gray-100 text-gray-500"
+            }`}>
+              {displayStatus}
+            </span>
+          </td>
+          <td className="p-4 text-right relative">
+            <button onClick={() => handleWhatsApp(loan as LoanExtended, (loan as any).snowball)} className="p-2 bg-green-100 text-green-700 rounded-lg mr-2" title="Whatsapp">
+              <MessageCircle size={18} />
+            </button>
+            <div className="relative inline-block text-left">
+              <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === loan.id ? null : loan.id); }} className={`p-2 rounded-lg transition-all ${openMenuId === loan.id ? "bg-slate-200 text-slate-900" : "text-slate-400 hover:text-slate-900 hover:bg-slate-100"}`}>
+                <MoreVertical size={18} />
+              </button>
+              {openMenuId === loan.id && (
+                <div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                  <div className="py-1">
+                    <button onClick={() => { setSelectedLoan(loan); setDetailTab("info"); setIsDetailsOpen(true); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                      <Eye size={16} className="text-blue-500" /> Ver Detalhes
+                    </button>
+                    {displayStatus !== "Quitado" && (
+                      <>
+                        <button onClick={() => { handleOpenPayment(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                          <DollarSign size={16} className="text-green-600" /> Registrar Baixa
+                        </button>
+                        <button onClick={() => { handleOpenAgreement(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-orange-700 hover:bg-orange-50 flex items-center gap-2">
+                          <FileSignature size={16} /> Registrar Acordo
+                        </button>
+                      </>
+                    )}
+                    <button onClick={() => handleOpenEditContract(loan)} className="w-full text-left px-4 py-3 text-sm text-blue-600 hover:bg-blue-50 flex items-center gap-2">
+                      <Edit size={16} /> Editar Contrato
+                    </button>
+                    <div className="border-t border-slate-100 my-1"></div>
+                    <button onClick={() => { const c = availableClients.find((cl) => cl.name === loan.client); generateContractPDF(loan, c, companySettings); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                      <Printer size={16} /> Contrato PDF
+                    </button>
+                    <button onClick={() => { const c = availableClients.find((cl) => cl.name === loan.client); generatePromissoryPDF(loan, c, companySettings); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                      <FileText size={16} /> Promissórias
+                    </button>
+                    <div className="border-t border-slate-100 my-1"></div>
+                    <button onClick={() => { handleDelete(loan.id); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2">
+                      <Trash2 size={16} /> Excluir
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </td>
+        </tr>
+      );
+  };
 
   return (
     <Layout>
@@ -2006,225 +2129,30 @@ const handleFinalSave = async (e: React.FormEvent) => {
                 </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-                {filteredLoans.length === 0 ? (<tr><td colSpan={10} className="p-8 text-center text-slate-400">Nenhum contrato encontrado.</td></tr>) : (filteredLoans.map(loan => {
-                    const displayStatus = getLoanRealStatus(loan);
-                    
-                    // 🚀 FIX: Calcula os juros respeitando o mês de referência para evitar inflar o card com atrasados
-                    let displayInterestPaid = loan.totalPaidInterest || 0;
-                    if (filterStart && filterEnd && statusFilter === 'PagosNoPeriodo' && loan.history) {
-                        displayInterestPaid = 0;
-                        loan.history.forEach(h => {
-                            const hDate = h.date.split('T')[0];
-                            const refDate = h.originalDueDate ? h.originalDueDate.split('T')[0] : hDate;
-                            
-                            const paidInPeriod = hDate >= filterStart && hDate <= filterEnd;
-                            const refInPeriod = refDate >= filterStart && refDate <= filterEnd;
+                {filteredLoans.length === 0 ? (
+                    <tr><td colSpan={10} className="p-8 text-center text-slate-400">Nenhum contrato encontrado.</td></tr>
+                ) : (
+                    <>
+                        {/* 1. CONTRATOS ATIVOS SEMPRE NO TOPO */}
+                        {activeLoans.map(loan => renderLoanRow(loan))}
 
-                            if (paidInPeriod && refInPeriod && !h.type.toLowerCase().includes('abertura')) {
-                                displayInterestPaid += (h.interestPaid || 0);
-                            }
-                        });
-                    }
-
-                    return (
-                      <tr
-                        key={loan.id}
-                        className={`transition-colors group ${selectedIds.includes(loan.id) ? "bg-blue-50/50" : "hover:bg-slate-50/80"}`}
-                      >
-                        <td className="p-4 text-center">
-                          <input
-                            type="checkbox"
-                            checked={selectedIds.includes(loan.id)}
-                            onChange={() => toggleSelectOne(loan.id)}
-                            className="w-4 h-4 rounded border-gray-300 text-slate-900 cursor-pointer"
-                          />
-                        </td>
-                        <td className="p-4">
-                          <div className="font-bold text-slate-800">
-                            {loan.client}
-                          </div>
-                          {getNickname(availableClients.find(c => c.name === loan.client)?.observations) && (
-                              <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 mb-1 w-fit truncate max-w-[200px]" title={getNickname(availableClients.find(c => c.name === loan.client)?.observations)}>
-                                {getNickname(availableClients.find(c => c.name === loan.client)?.observations)}
-                              </div>
-                          )}
-                          <div className="text-[10px] font-mono text-slate-400">
-                            {loan.id}
-                          </div>
-                        </td>
-                        <td className="p-4 text-center">
-                          <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">
-                            {loan.installments}x
-                          </span>
-                        </td>
-                        <td className="p-4 text-center">
-                          <span
-                            className={`font-bold text-sm ${displayStatus === "Atrasado" ? "text-red-600" : "text-slate-700"}`}
-                          >
-                            {/* 🚀 Chama a nova função para mostrar a fatia real e não a data base do mês */}
-                            {formatDisplayDate(getDisplayNextDue(loan))}
-                          </span>
-                        </td>
-
-                        <td className="p-4 text-center text-sm font-bold text-blue-600">
-                          {getLastPaymentDate(loan)}
-                        </td>
-
-                        <td className="p-4 text-right font-bold text-slate-700">
-                          R${" "}
-                          {formatMoney(
-                            Math.max(
-                              0,
-                              loan.amount - (loan.totalPaidCapital || 0),
-                            ),
-                          )}
-                        </td>
-
-                        <td className="p-4 text-right font-bold text-green-600 bg-green-50/30 rounded">
-                          R$ {formatMoney(displayInterestPaid)}
-                        </td>
-                        <td className="p-4 text-right font-bold text-slate-500">
-                          R$ {formatMoney(loan.installmentValue)}
-                        </td>
-
-                        <td className="p-4 text-center">
-                          <span
-                            className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase shadow-sm ${
-                              displayStatus === "Em Dia"
-                                ? "bg-blue-50 text-blue-700 border border-blue-100"
-                                : displayStatus === "Atrasado"
-                                  ? "bg-red-50 text-red-700 border border-red-100"
-                                  : displayStatus === "Acordo"
-                                    ? "bg-orange-50 text-orange-700 border border-orange-100"
-                                    : displayStatus === "Quitado"
-                                      ? "bg-green-50 text-green-700 border border-green-100"
-                                      : "bg-gray-100 text-gray-500"
-                            }`}
-                          >
-                            {displayStatus}
-                          </span>
-                        </td>
-                        <td className="p-4 text-right relative">
-                          <button
-                            onClick={() => {
-                              const loanExt = loan as LoanExtended;
-                              handleWhatsApp(loanExt, loanExt.snowball);
-                            }}
-                            className="p-2 bg-green-100 text-green-700 rounded-lg"
-                            title="Whatsapp"
-                          >
-                            <MessageCircle size={18} />
-                          </button>
-
-                          <div className="relative inline-block text-left">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenMenuId(
-                                  openMenuId === loan.id ? null : loan.id,
-                                );
-                              }}
-                              className={`p-2 rounded-lg transition-all ${openMenuId === loan.id ? "bg-slate-200 text-slate-900" : "text-slate-400 hover:text-slate-900 hover:bg-slate-100"}`}
+                        {/* 2. GAVETA DOS QUITADOS (SANFONA) */}
+                        {paidLoans.length > 0 && statusFilter !== 'Quitado' && (
+                            <tr 
+                                className="bg-slate-100/50 hover:bg-slate-100 cursor-pointer transition-colors" 
+                                onClick={() => setShowPaidLoans(!showPaidLoans)}
                             >
-                              <MoreVertical size={18} />
-                            </button>
-                            {openMenuId === loan.id && (
-                              <div
-                                onClick={(e) => e.stopPropagation()}
-                                className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right"
-                              >
-                                <div className="py-1">
-                                  <button
-                                    onClick={() => {
-                                      setSelectedLoan(loan);
-                                      setDetailTab("info");
-                                      setIsDetailsOpen(true);
-                                      setOpenMenuId(null);
-                                    }}
-                                    className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                                  >
-                                    <Eye size={16} className="text-blue-500" />{" "}
-                                    Ver Detalhes
-                                  </button>
+                                <td colSpan={10} className="p-4 text-center text-slate-500 font-bold text-xs uppercase tracking-widest border-y border-slate-200">
+                                    {showPaidLoans ? <ChevronUp size={16} className="inline mr-2 -mt-0.5"/> : <ChevronDown size={16} className="inline mr-2 -mt-0.5"/>}
+                                    {showPaidLoans ? 'Ocultar' : 'Mostrar'} {paidLoans.length} Contrato(s) Quitado(s) / Histórico
+                                </td>
+                            </tr>
+                        )}
 
-                                  {displayStatus !== "Quitado" && (
-                                    <>
-                                      <button
-                                        onClick={() => {
-                                          handleOpenPayment(loan);
-                                          setOpenMenuId(null);
-                                        }}
-                                        className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                                      >
-                                        <DollarSign
-                                          size={16}
-                                          className="text-green-600"
-                                        />{" "}
-                                        Registrar Baixa
-                                      </button>
-                                      <button
-                                        onClick={() => {
-                                          handleOpenAgreement(loan);
-                                          setOpenMenuId(null);
-                                        }}
-                                        className="w-full text-left px-4 py-3 text-sm text-orange-700 hover:bg-orange-50 flex items-center gap-2"
-                                      >
-                                        <FileSignature size={16} /> Registrar
-                                        Acordo
-                                      </button>
-                                    </>
-                                  )}
-
-                                  <button
-                                    onClick={() => handleOpenEditContract(loan)}
-                                    className="w-full text-left px-4 py-3 text-sm text-blue-600 hover:bg-blue-50 flex items-center gap-2"
-                                  >
-                                    <Edit size={16} /> Editar Contrato
-                                  </button>
-
-                                  <div className="border-t border-slate-100 my-1"></div>
-                                  <button
-                                    onClick={() => {
-                                      const c = availableClients.find(
-                                        (cl) => cl.name === loan.client,
-                                      );
-                                      generateContractPDF(loan, c, companySettings);
-                                      setOpenMenuId(null);
-                                    }}
-                                    className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                                  >
-                                    <Printer size={16} /> Contrato PDF
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      const c = availableClients.find(
-                                        (cl) => cl.name === loan.client,
-                                      );
-                                      generatePromissoryPDF(loan, c, companySettings);
-                                      setOpenMenuId(null);
-                                    }}
-                                    className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                                  >
-                                    <FileText size={16} /> Promissórias
-                                  </button>
-                                  <div className="border-t border-slate-100 my-1"></div>
-                                  <button
-                                    onClick={() => {
-                                      handleDelete(loan.id);
-                                      setOpenMenuId(null);
-                                    }}
-                                    className="w-full text-left px-4 py-3 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-                                  >
-                                    <Trash2 size={16} /> Excluir
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                }))}
+                        {/* 3. CONTRATOS QUITADOS (ABRE QUANDO CLICA NA GAVETA) */}
+                        {(showPaidLoans || statusFilter === 'Quitado') && paidLoans.map(loan => renderLoanRow(loan))}
+                    </>
+                )}
             </tbody>
             
             <tfoot className="bg-slate-50 border-t-2 border-slate-200">

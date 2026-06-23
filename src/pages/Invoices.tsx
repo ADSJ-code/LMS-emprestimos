@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { 
   Search, Receipt, FileText, CheckCircle, AlertCircle, 
-  Clock, Download, RefreshCw, Send, Landmark, Calendar
+  Clock, Download, RefreshCw, Send, Landmark, Calendar,
+  Edit, Trash2
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
@@ -82,73 +83,200 @@ const Invoices = () => {
       
       const clientInfo = clients.find(c => c.name === loan.client);
 
-      loan.history.forEach((record, index) => {
+      loan.history.forEach((record: any, index) => {
         const type = record.type?.toLowerCase() || '';
-        // 🚀 FIX: Ignora Abertura, Acordo e pagamentos zerados
+        
+        // Ignora aberturas, acordos e pagamentos zerados
         if (type.includes('abertura') || type.includes('empréstimo') || type.includes('acordo') || parseVal(record.amount) <= 0) return;
         
-        const jurosRecebido = parseVal(record.interestPaid);
-        const uniquePaymentId = `${loan.id}-${index}`;
-        
-        // 🚀 FIX CRÍTICO: Agora a trava verifica o uniquePaymentId exato. 
-        // Não esconde o contrato todo, só a parcela faturada.
-        const isAlreadyInvoiced = invoices.some(inv => inv.id === uniquePaymentId);
+        // 🚀 FIX: Se foi ignorada ou emitida por fora, não entra na fila de pendentes!
+        if (record.nfeStatus === 'IGNORADA' || record.nfeStatus === 'EMITIDA_MANUAL') return;
 
-        // Só exibe se houver lucro e se não foi faturado
-        if (jurosRecebido > 0 && !isAlreadyInvoiced) {
+        // 🚀 FIX: Usa o valor editado da NFE se existir, senão usa o juro recebido original
+        const jurosRecebido = record.nfeValue !== undefined ? parseVal(record.nfeValue) : parseVal(record.interestPaid);
+        
+        // 🚀 HIGIENIZAÇÃO DO ID: Transforma "001/2026" em "NF0012026"
+        const safeLoanId = loan.id.replace(/[^a-zA-Z0-9]/g, '');
+        const uniquePaymentId = `NF${safeLoanId}-${index}`;
+        
+        // 🚀 VERIFICAÇÃO BLINDADA: Puxa todas as notas (incluindo reemissões com sufixo -R)
+        const paymentInvoices = invoices.filter(inv => inv.id === uniquePaymentId || inv.id?.startsWith(`${uniquePaymentId}-R`));
+        
+        // Pega a nota mais recente ativa ou a última cancelada
+        let relatedInvoice = paymentInvoices.find(inv => String(inv.status) !== 'CANCELADA');
+        if (!relatedInvoice && paymentInvoices.length > 0) {
+            relatedInvoice = paymentInvoices[paymentInvoices.length - 1]; 
+        }
+
+        // Se a nota final ligada a este pagamento foi AUTORIZADA, removemos da lista pendente!
+        if (relatedInvoice && relatedInvoice.status === 'AUTORIZADA') return;
+
+        if (jurosRecebido > 0) {
           paymentsList.push({
             uniqueId: uniquePaymentId,
             contractId: loan.id,
+            recordIndex: index, // Guarda o índice para sabermos qual pagamento editar no banco
             client: loan.client,
             cpf: clientInfo?.cpf || 'Não cadastrado',
             paymentDate: record.date,
             totalPaid: record.amount,
             capitalPaid: record.capitalPaid || 0,
             interestPaid: jurosRecebido,
-            note: record.note
+            note: record.note,
+            invoiceStatus: relatedInvoice?.status || null // Passa o status para a tela
           });
         }
       });
     });
 
-    // Ordena do mais recente para o mais antigo e aplica a busca
     return paymentsList
       .filter(p => p.client.toLowerCase().includes(searchTerm.toLowerCase()) || p.contractId.includes(searchTerm))
       .sort((a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime());
   }, [loans, clients, searchTerm, invoices]);
 
-  // 🚀 Filtro do Histórico Real
+  // 🚀 JUNTA O HISTÓRICO REAL COM AS NOTAS EMITIDAS MANUALMENTE NO SISTEMA
+  const allHistoricalInvoices = useMemo(() => {
+      const list: any[] = [...invoices];
+      
+      loans.forEach(loan => {
+          loan.history?.forEach((record: any, index: number) => {
+              if (record.nfeStatus === 'EMITIDA_MANUAL') {
+                  const clientInfo = clients.find(c => c.name === loan.client);
+                  list.push({
+                      id: `MANUAL-${loan.id.replace(/[^a-zA-Z0-9]/g, '')}-${index}`,
+                      issueDate: record.date,
+                      client: loan.client,
+                      cpf: clientInfo?.cpf || 'Não cadastrado',
+                      serviceValue: record.nfeValue !== undefined ? parseVal(record.nfeValue) : parseVal(record.interestPaid),
+                      status: 'EMITIDA_MANUAL',
+                      pdfUrl: '',
+                      errorMsg: 'Baixa manual. Obrigação cumprida fora do sistema.'
+                  });
+              }
+          });
+      });
+      return list.sort((a, b) => new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime());
+  }, [invoices, loans, clients]);
+
+  // 🚀 Filtro do Histórico
   const filteredInvoices = useMemo(() => {
-    return invoices.filter(inv => 
+    return allHistoricalInvoices.filter(inv => 
       inv.client?.toLowerCase().includes(searchTerm.toLowerCase()) || 
       (inv.id && inv.id.toLowerCase().includes(searchTerm.toLowerCase()))
     );
-  }, [invoices, searchTerm]);
+  }, [allHistoricalInvoices, searchTerm]);
 
   const handleOpenEmitModal = (payment: any) => {
     setSelectedPayment(payment);
     setIsEmitModalOpen(true);
   };
 
+  // 🚀 NOVAS AÇÕES PODEROSAS DO RODRIGO
+  const handleEditNfeValue = async (payment: any) => {
+      const newValStr = window.prompt(`✏️ Editar valor da Base de Cálculo (Juros) para a nota de ${payment.client}:\n\nValor atual: R$ ${formatMoney(payment.interestPaid)}\n\nDigite o novo valor (apenas números e vírgula):`);
+      if (!newValStr) return;
+      
+      const newVal = parseVal(newValStr);
+      if (newVal <= 0) { alert("Valor inválido."); return; }
+
+      const loan = loans.find(l => l.id === payment.contractId);
+      if (!loan || !loan.history) return;
+
+      const updatedLoan = { ...loan };
+      // 🚀 TypeScript Fix: Usamos "!" para garantir que existe e "as any" para injetar o novo campo
+      updatedLoan.history![payment.recordIndex] = { 
+          ...updatedLoan.history![payment.recordIndex], 
+          nfeValue: newVal 
+      } as any;
+
+      try {
+          await loanService.update(loan.id, updatedLoan, 'EDIÇÃO DE VALOR NF', `Valor da base de cálculo da NF alterado para R$ ${newVal.toFixed(2)}`);
+          fetchData();
+      } catch (e) { alert("Erro ao atualizar valor."); }
+  };
+
+  const handleIgnorePayment = async (payment: any) => {
+      if (!window.confirm(`⚠️ Deseja realmente REMOVER este pagamento da fila de emissão?\n\nEle desaparecerá desta lista e não será enviado para a Sefaz.`)) return;
+
+      const loan = loans.find(l => l.id === payment.contractId);
+      if (!loan || !loan.history) return;
+
+      const updatedLoan = { ...loan };
+      updatedLoan.history![payment.recordIndex] = { 
+          ...updatedLoan.history![payment.recordIndex], 
+          nfeStatus: 'IGNORADA' 
+      } as any;
+
+      try {
+          await loanService.update(loan.id, updatedLoan, 'NF IGNORADA', `Pagamento ignorado na fila de emissão fiscal.`);
+          fetchData();
+      } catch (e) { alert("Erro ao ignorar pagamento."); }
+  };
+
+  const handleManualEmission = async (payment: any) => {
+      if (!window.confirm(`✅ Marcar como EMITIDA MANUALMENTE?\n\nIsto moverá o registro para a aba de Histórico, indicando que você já emitiu esta nota por fora ou de outra forma. Não haverá comunicação com a Prefeitura.`)) return;
+
+      const loan = loans.find(l => l.id === payment.contractId);
+      if (!loan || !loan.history) return;
+
+      const updatedLoan = { ...loan };
+      updatedLoan.history![payment.recordIndex] = { 
+          ...updatedLoan.history![payment.recordIndex], 
+          nfeStatus: 'EMITIDA_MANUAL' 
+      } as any;
+
+      try {
+          await loanService.update(loan.id, updatedLoan, 'NF MANUAL', `Pagamento marcado como nota emitida manualmente por fora.`);
+          fetchData();
+      } catch (e) { alert("Erro ao atualizar."); }
+  };
+
+  // 🚀 LÓGICA OFICIAL: Cancelar Nota Fiscal (Síncrono com Focus/Prefeitura)
+  const handleDeleteInvoice = async (invoiceId: string) => {
+    const justificativa = window.prompt("⚠️ CANCELAMENTO OFICIAL DE NFS-e\n\nDigite o motivo do cancelamento (Mínimo de 15 caracteres):");
+    
+    if (justificativa === null) return;
+    
+    if (justificativa.length < 15) {
+      alert("❌ A justificativa precisa ter pelo menos 15 caracteres conforme regra da Receita.");
+      return;
+    }
+
+    try {
+      // 🚀 Chama a nova função do api.ts que acabamos de criar!
+      await invoiceService.delete(invoiceId, justificativa);
+      
+      alert("✅ Solicitação de cancelamento processada! O status será atualizado na tabela.");
+      fetchData(); 
+    } catch (error: any) {
+      console.error("Erro ao cancelar:", error);
+      const backendMsg = error.response?.data?.mensagem || error.response?.data?.errorMsg || "Erro desconhecido. O gateway pode estar indisponível.";
+      alert(`❌ Erro ao cancelar nota no Gateway Fiscal:\n\n${backendMsg}`);
+    }
+  };
+
   const confirmEmission = async () => {
     setIsEmitting(true);
     try {
-      // 🚀 Chamada Real para o Backend em Go (agora enviando a Chave Única de Pagamento)
+      // 🚀 MOTOR DE REEMISSÃO: Se a nota anterior foi cancelada ou deu erro, gera um novo ID único com sufixo -R
+      const isReemission = String(selectedPayment.invoiceStatus) === 'CANCELADA' || String(selectedPayment.invoiceStatus) === 'ERRO';
+      const finalEmissionId = isReemission 
+          ? `${selectedPayment.uniqueId}-R${Date.now().toString().slice(-6)}` 
+          : selectedPayment.uniqueId;
+
       await invoiceService.emit({
-        id: selectedPayment.uniqueId, // O Go deve salvar esse ID para travar a emissão dupla
+        id: finalEmissionId,
         client: selectedPayment.client,
         cpf: selectedPayment.cpf,
         serviceValue: selectedPayment.interestPaid
       });
       
-      // Atualiza a lista para a nota aparecer como "PROCESSANDO" imediatamente
       const updatedInvoices = await invoiceService.getAll();
       setInvoices(updatedInvoices || []);
       
       setIsEmitModalOpen(false);
       setActiveTab('historico');
     } catch (error: any) {
-      // 🚀 FIX: Mostra o erro real devolvido pelo Go (Ex: Trava de Duplicidade)
       const backendMsg = error.response?.data;
       if (backendMsg && typeof backendMsg === 'string') {
           alert(`⚠️ Aviso do Sistema: ${backendMsg}`);
@@ -247,13 +375,21 @@ const Invoices = () => {
                       <td className="p-4 text-right font-black text-blue-700 bg-blue-50/10">
                         R$ {formatMoney(payment.interestPaid)}
                       </td>
-                      <td className="p-4 text-center">
-                        <button 
-                          onClick={() => handleOpenEmitModal(payment)}
-                          className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-blue-600 transition-colors shadow-sm flex items-center gap-2 mx-auto"
-                        >
-                          <Send size={14} /> Emitir NF
-                        </button>
+                      <td className="p-4">
+                        <div className="flex items-center justify-end gap-2">
+                            <button onClick={() => handleEditNfeValue(payment)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Editar Valor da NF">
+                                <Edit size={16}/>
+                            </button>
+                            <button onClick={() => handleIgnorePayment(payment)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Apagar da fila">
+                                <Trash2 size={16}/>
+                            </button>
+                            <button onClick={() => handleManualEmission(payment)} className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors" title="Já emitido">
+                                <CheckCircle size={16}/>
+                            </button>
+                            <button onClick={() => handleOpenEmitModal(payment)} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-blue-600 transition-colors shadow-sm flex items-center gap-1.5 ml-2">
+                                <Send size={14} /> Emitir
+                            </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -301,23 +437,44 @@ const Invoices = () => {
                       <td className="p-4 text-center">
                         <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase flex items-center justify-center gap-1 w-fit mx-auto ${
                           inv.status === 'AUTORIZADA' ? 'bg-green-100 text-green-700 border border-green-200' :
+                          inv.status === 'EMITIDA_MANUAL' ? 'bg-purple-100 text-purple-700 border border-purple-200' :
                           inv.status === 'ERRO' ? 'bg-red-100 text-red-700 border border-red-200' :
+                          String(inv.status) === 'CANCELADA' ? 'bg-slate-100 text-slate-500 border border-slate-300' :
                           'bg-yellow-100 text-yellow-700 border border-yellow-200'
                         }`}>
-                          {inv.status === 'AUTORIZADA' ? <CheckCircle size={12}/> : inv.status === 'ERRO' ? <AlertCircle size={12}/> : <Clock size={12}/>}
-                          {inv.status}
+                          {inv.status === 'AUTORIZADA' || inv.status === 'EMITIDA_MANUAL' ? <CheckCircle size={12}/> : inv.status === 'ERRO' ? <AlertCircle size={12}/> : String(inv.status) === 'CANCELADA' ? <Trash2 size={12}/> : <Clock size={12}/>}
+                          {inv.status === 'EMITIDA_MANUAL' ? 'Manual / Por fora' : inv.status}
                         </span>
                       </td>
-                      <td className="p-4 text-center">
-                        {inv.status === 'AUTORIZADA' && inv.pdfUrl ? (
-                          <a href={inv.pdfUrl} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 flex items-center gap-1 mx-auto text-xs font-bold bg-blue-50 px-3 py-1.5 rounded-lg transition-colors border border-transparent hover:border-blue-200 w-fit">
-                            <Download size={14}/> Baixar PDF
-                          </a>
-                        ) : inv.status === 'ERRO' ? (
-                          <span className="text-[10px] text-red-500 font-bold cursor-help max-w-[150px] inline-block leading-tight truncate" title={inv.errorMsg || 'Erro desconhecido'}>{inv.errorMsg || 'Ver Erro'}</span>
-                        ) : (
-                          <span className="text-[10px] text-slate-400 font-bold flex items-center justify-center gap-1"><RefreshCw size={10} className="animate-spin"/> Aguardando...</span>
-                        )}
+                      <td className="p-4">
+                        <div className="flex items-center justify-between min-w-[160px] gap-2">
+                          <div className="flex-1 flex justify-center">
+                            {inv.status === 'AUTORIZADA' && inv.pdfUrl ? (
+                              <a href={inv.pdfUrl} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 flex items-center gap-1 text-xs font-bold bg-blue-50 px-3 py-1.5 rounded-lg transition-colors border border-transparent hover:border-blue-200 w-fit">
+                                <Download size={14}/> Baixar PDF
+                              </a>
+                            ) : inv.status === 'EMITIDA_MANUAL' ? (
+                              <span className="text-[10px] text-purple-500 font-bold max-w-[150px] inline-block leading-tight truncate">Resolvido Manualmente</span>
+                            ) : inv.status === 'ERRO' ? (
+                              <span className="text-[10px] text-red-500 font-bold cursor-help max-w-[150px] inline-block leading-tight truncate" title={inv.errorMsg || 'Erro desconhecido'}>{inv.errorMsg || 'Ver Erro'}</span>
+                            ) : String(inv.status) === 'CANCELADA' ? (
+                              <span className="text-[10px] text-amber-700 font-black bg-amber-50 px-2.5 py-1 rounded-md border border-amber-200 uppercase tracking-wider">
+                                Sem efeito fiscal
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 font-bold flex items-center justify-center gap-1"><RefreshCw size={10} className="animate-spin"/> Aguardando...</span>
+                            )}
+                          </div>
+                          {inv.status !== 'EMITIDA_MANUAL' && String(inv.status) !== 'CANCELADA' && (
+                            <button 
+                              onClick={() => handleDeleteInvoice(inv.id!)}
+                              className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-md transition-colors shrink-0"
+                              title="Cancelar Nota Fiscal"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))
