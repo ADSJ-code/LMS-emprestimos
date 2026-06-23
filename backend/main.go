@@ -1279,35 +1279,40 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		// 🚀 LOG DE DEBUG: Ajuda a descobrir qual o CPF e Token estão sendo enviados caso a Sefaz reclame
 		log.Printf("🔥 [DEBUG EMISSÃO] Enviando Nota %s | CPF/CNPJ Prestador: %s", invoiceID, docPrestadorLimpo)
 
-		payload := map[string]interface{}{
-			"data_emissao":             time.Now().Format(time.RFC3339),
-			"natureza_operacao":        "1",     // EXIGIDO: 1 = Tributação no município
-			"optante_simples_nacional": false,   // EXIGIDO: Rodrigo é Pessoa Física / Autônomo
-			"prestador": map[string]string{
-				"cnpj":                docPrestadorLimpo,
-				"inscricao_municipal": imPrestadorLimpo,
-				"codigo_municipio":    ibgePrestadorLimpo,
-			},
-			"tomador": map[string]interface{}{
-				campoDoc:       docLimpo,
-				"razao_social": c.Name,
-				"email":        c.Email,
-				"endereco":     enderecoTomador,
-			},
-			"servico": map[string]interface{}{
-				"valor_servicos":     serviceValue,
-				"item_lista_servico": itemServico,
-				"discriminacao":      "Intermediação de negócios, serviços de consultoria e gestão financeira.",
-				"codigo_municipio":   ibgePrestadorLimpo, // Exigido pela documentação: IBGE de onde o serviço ocorreu
-			},
-		}
+		// Converte códigos IBGE para inteiros puros conforme exigido no esquema de Mauá
+        ibgePrestadorInt, _ := strconv.Atoi(ibgePrestadorLimpo)
 
-		payloadBytes, _ := json.Marshal(payload)
+        payload := map[string]interface{}{
+            "data_emissao":             time.Now().Format("2006-01-02T15:04:05"), // Formato estrito sem timezone para Mauá
+            "natureza_operacao":       1,     // 🚀 CORREÇÃO: Inteiro puro (1 = Tributação no município)
+            "optante_simples_nacional": false, // Booleano puro
+            "prestador": map[string]interface{}{
+                "cnpj":                docPrestadorLimpo,
+                "inscricao_municipal": imPrestadorLimpo,
+                "codigo_municipio":    ibgePrestadorInt, // 🚀 CORREÇÃO: Inteiro
+            },
+            "tomador": map[string]interface{}{
+                campoDoc:       docLimpo,
+                "razao_social": c.Name,
+                "email":        c.Email,
+                "endereco":     borderEnderecoTomador(enderecoTomador),
+            },
+            "servico": map[string]interface{}{
+                "valor_servicos":     serviceValue,
+                "aliquota":           5.0, // Alíquota padrão de Mauá para serviços financeiros
+                "item_lista_servico": itemServico,
+                "codigo_tributario_municipio": "692060100", // Código estrito do exemplo de Mauá para faturamento de intermediação
+                "discriminacao":      "Nota emitida correspondente ao rendimento de gestão e intermediação financeira.",
+                "iss_retido":         false, // 🚀 CORREÇÃO: Campo booleano obrigatório adicionado
+            },
+        }
+
+        payloadBytes, _ := json.Marshal(payload)
         
         // 🚀 TENTA AMBIENTE DE PRODUÇÃO PRIMEIRO
-        apiURL := "https://api.focusnfe.com.br/v2/nfse"
+        targetURL := "https://api.focusnfe.com.br/v2/nfse?ref=" + invoiceID
 
-        req, err := http.NewRequest("POST", apiURL+"?ref="+invoiceID, bytes.NewBuffer(payloadBytes))
+        req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(payloadBytes))
         if err != nil { return }
 
         req.Header.Set("Content-Type", "application/json")
@@ -1316,15 +1321,15 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
         clientHttp := &http.Client{Timeout: 15 * time.Second}
         resp, err := clientHttp.Do(req)
 
-        // 🚀 AUTO-ROUTING: Se o Token for rejeitado (401), significa que é token de teste. Redireciona para Homologação!
+        // 🚀 AUTO-ROUTING CORRIGIDO: Se der 401, reconstrói a URL de homologação limpa
         if err == nil && resp.StatusCode == 401 {
-            resp.Body.Close() // Fecha a tentativa falhada
-            apiURL = "https://homologacao.focusnfe.com.br/v2/nfse"
-            req, _ = http.NewRequest("POST", apiURL+"?ref="+invoiceID, bytes.NewBuffer(payloadBytes))
+            resp.Body.Close()
+            targetURL = "https://homologacao.focusnfe.com.br/v2/nfse?ref=" + invoiceID
+            req, _ = http.NewRequest("POST", targetURL, bytes.NewBuffer(payloadBytes))
             req.Header.Set("Content-Type", "application/json")
             req.SetBasicAuth(apiKey, "")
             resp, err = clientHttp.Do(req)
-            log.Println("🔄 [AUTO-ROUTING EMISSÃO] Token de Homologação detetado. Redirecionado para testes.")
+            log.Println("🔄 [AUTO-ROUTING EMISSÃO] Token de Homologação validado. Redirecionado para testes de Mauá.")
         }
 
         if err != nil || resp.StatusCode >= 400 {
@@ -1697,4 +1702,12 @@ func (s *whatsappService) DisconnectInstance(ctx context.Context, name string) e
 	client := &http.Client{Timeout: 10 * time.Second}
 	client.Do(req)
 	return nil
+}
+
+func borderEnderecoTomador(m map[string]string) map[string]interface{} {
+	res := make(map[string]interface{})
+	for k, v := range m {
+		res[k] = v
+	}
+	return res
 }
