@@ -1109,7 +1109,7 @@ type CancelRequest struct {
 	Justificativa string `json:"justificativa"`
 }
 
-// 🚀 HANDLER REAL: Cancela a nota fiscal diretamente na Focus NFe (HOMOLOGAÇÃO)
+// 🚀 HANDLER REAL: Cancela a nota fiscal diretamente na Focus NFe e na Prefeitura
 func invoiceCancelHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1130,35 +1130,34 @@ func invoiceCancelHandler(w http.ResponseWriter, r *http.Request) {
 
 	var s Settings
 	settingsCollection.FindOne(ctx, bson.M{}).Decode(&s)
-	tokenFocus := s.Company.FocusNfeToken
+	tokenFocus := strings.TrimSpace(s.Company.FocusNfeToken)
 
-	// 🚀 TENTA AMBIENTE DE PRODUÇÃO PRIMEIRO
-    apiURL := fmt.Sprintf("https://api.focusnfe.com.br/v2/nfse/%s", id)
-    payloadBytes, _ := json.Marshal(req)
+	apiURL := fmt.Sprintf("https://api.focusnfe.com.br/v2/nfse/%s", id)
+	payloadBytes, _ := json.Marshal(req)
 
-    client := &http.Client{}
-    reqFocus, _ := http.NewRequest(http.MethodDelete, apiURL, bytes.NewBuffer(payloadBytes))
-    reqFocus.SetBasicAuth(tokenFocus, "")
-    reqFocus.Header.Set("Content-Type", "application/json")
+	client := &http.Client{}
+	reqFocus, _ := http.NewRequest(http.MethodDelete, apiURL, bytes.NewBuffer(payloadBytes))
+	reqFocus.SetBasicAuth(tokenFocus, "")
+	reqFocus.Header.Set("Content-Type", "application/json")
 
-    resp, err := client.Do(reqFocus)
-    
-    // 🚀 AUTO-ROUTING CANCELAMENTO: Se rejeitar o token (401), vai para Homologação
-    if err == nil && resp.StatusCode == 401 {
-        resp.Body.Close()
-        apiURL = fmt.Sprintf("https://homologacao.focusnfe.com.br/v2/nfse/%s", id)
-        reqFocus, _ = http.NewRequest(http.MethodDelete, apiURL, bytes.NewBuffer(payloadBytes))
-        reqFocus.SetBasicAuth(tokenFocus, "")
-        reqFocus.Header.Set("Content-Type", "application/json")
-        resp, err = client.Do(reqFocus)
-        log.Println("🔄 [AUTO-ROUTING CANCELAMENTO] Token de Homologação detetado.")
-    }
+	resp, err := client.Do(reqFocus)
+	
+	// 🚀 AUTO-ROUTING: Tenta homologação se der 401
+	if err == nil && resp.StatusCode == 401 {
+		resp.Body.Close()
+		apiURL = fmt.Sprintf("https://homologacao.focusnfe.com.br/v2/nfse/%s", id)
+		reqFocus, _ = http.NewRequest(http.MethodDelete, apiURL, bytes.NewBuffer(payloadBytes))
+		reqFocus.SetBasicAuth(tokenFocus, "")
+		reqFocus.Header.Set("Content-Type", "application/json")
+		resp, err = client.Do(reqFocus)
+		log.Println("🔄 [AUTO-ROUTING CANCELAMENTO] Redirecionado para Homologação.")
+	}
 
-    if err != nil {
-        http.Error(w, `{"mensagem": "Falha ao se comunicar com o gateway fiscal"}`, http.StatusInternalServerError)
-        return
-    }
-    defer resp.Body.Close()
+	if err != nil {
+		http.Error(w, `{"mensagem": "Falha ao se comunicar com o gateway fiscal"}`, http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted {
 		invoiceCollection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"status": "CANCELADA"}})
@@ -1172,7 +1171,7 @@ func invoiceCancelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// 🚀 HANDLER REAL: Emite a nota fiscal via Focus NFe (Customizado ABPC SP / Mauá)
+// 🚀 HANDLER REAL: Emite a nota fiscal via Focus NFe (Customizado ABPC SP)
 func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -1200,6 +1199,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		inv.ID = fmt.Sprintf("NF-%d", time.Now().UnixMilli()%100000)
 	}
 
+	// HIGIENIZAÇÃO DA REFERÊNCIA
 	inv.ID = strings.ReplaceAll(inv.ID, ".", "")
 	inv.ID = strings.ReplaceAll(inv.ID, "/", "")
 	inv.ID = strings.ReplaceAll(inv.ID, " ", "")
@@ -1231,7 +1231,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		apiKey := strings.TrimSpace(comp.FocusNfeToken)
 		if apiKey == "" {
 			log.Println("❌ [ERRO] O Token da Focus NFe está VAZIO no banco de dados!")
-			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Token VAZIO. Configure o Token no painel."}})
+			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Token VAZIO no painel."}})
 			return
 		}
 
@@ -1245,9 +1245,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if itemServico == "" {
-			itemServico = "15.08"
-		}
+		if itemServico == "" { itemServico = "15.08" }
 
 		docLimpo := regexp.MustCompile(`\D`).ReplaceAllString(c.CPF, "")
 		campoDoc := "cnpj"
@@ -1255,7 +1253,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			campoDoc = "cpf"
 		}
 
-		enderecoTomador := map[string]string{
+		enderecoTomador := map[string]interface{}{
 			"logradouro": c.Address,
 			"numero":     c.Number,
 			"bairro":     c.Neighborhood,
@@ -1268,9 +1266,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			respViaCep, err := http.Get("https://viacep.com.br/ws/" + cepLimpo + "/json/")
 			if err == nil {
 				defer respViaCep.Body.Close()
-				var vcData struct {
-					Ibge string `json:"ibge"`
-				}
+				var vcData struct { Ibge string `json:"ibge"` }
 				if json.NewDecoder(respViaCep.Body).Decode(&vcData) == nil && vcData.Ibge != "" {
 					enderecoTomador["codigo_municipio"] = vcData.Ibge
 				}
@@ -1281,27 +1277,21 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		imPrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(imPrestador, "")
 		ibgePrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(ibgePrestador, "")
 
-		// Helper interno para formatar endereço pro Go não reclamar de tipos
-		borderEnderecoTomador := func(m map[string]string) map[string]interface{} {
-			res := make(map[string]interface{})
-			for k, v := range m { res[k] = v }
-			return res
-		}
-
+		// 🚀 TIPAGEM EXATA DO OPENAPI
 		payload := map[string]interface{}{
-			"data_emissao":             time.Now().Format(time.RFC3339), // 🚀 RETORNO PARA O PADRÃO ISO 8601
-			"natureza_operacao":        "1", // 🚀 CORREÇÃO: String exigida pelo OpenAPI
+			"data_emissao":             time.Now().Format(time.RFC3339),
+			"natureza_operacao":        "1",
 			"optante_simples_nacional": false,
 			"prestador": map[string]interface{}{
 				"cnpj":                docPrestadorLimpo,
 				"inscricao_municipal": imPrestadorLimpo,
-				"codigo_municipio":    ibgePrestadorLimpo, // 🚀 CORREÇÃO: String exigida pelo OpenAPI
+				"codigo_municipio":    ibgePrestadorLimpo,
 			},
 			"tomador": map[string]interface{}{
 				campoDoc:       docLimpo,
 				"razao_social": c.Name,
 				"email":        c.Email,
-				"endereco":     borderEnderecoTomador(enderecoTomador),
+				"endereco":     enderecoTomador,
 			},
 			"servico": map[string]interface{}{
 				"discriminacao":               "Nota emitida correspondente ao rendimento de gestão e intermediação financeira.",
@@ -1309,16 +1299,14 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 				"valor_servicos":              serviceValue,
 				"aliquota":                    5.0,
 				"codigo_tributario_municipio": "692060100",
-				"iss_retido":                  false, // Exigido
-				"codigo_municipio":            ibgePrestadorLimpo, // Exigido pelo OpenAPI
+				"iss_retido":                  false,
+				"codigo_municipio":            ibgePrestadorLimpo,
 			},
 		}
 
 		payloadBytes, _ := json.Marshal(payload)
-		
 		log.Printf("🔍 [FOCUS NFE] Disparando nota %s. Token lido: %s... (Tamanho: %d)", invoiceID, apiKey[:4], len(apiKey))
 
-		// 1. TENTA AMBIENTE DE PRODUÇÃO
 		apiURL := "https://api.focusnfe.com.br/v2/nfse?ref=" + invoiceID
 		req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
 		req.Header.Set("Content-Type", "application/json")
@@ -1328,16 +1316,15 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		resp, err := clientHttp.Do(req)
 
 		if err != nil {
-			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Falha na rede ao conectar com a Focus"}})
+			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Falha na rede."}})
 			return
 		}
-
+		
 		bodyProducao, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		// 2. SE O TOKEN FOR REJEITADO (401), TENTA HOMOLOGAÇÃO
+		// 🚀 AUTO-ROUTING COM CAPTURA DE ERRO REAL
 		if resp.StatusCode == 401 {
-			log.Println("⚠️ Produção retornou 401 (Access Denied). Tentando Homologação...")
 			apiURL = "https://homologacao.focusnfe.com.br/v2/nfse?ref=" + invoiceID
 			req, _ = http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
 			req.Header.Set("Content-Type", "application/json")
@@ -1350,35 +1337,36 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			resp.Body.Close()
 
 			if resp.StatusCode >= 400 {
-				log.Printf("❌ Homologação falhou (Status %d): %s", resp.StatusCode, string(bodyHomolog))
-				
-				// 🚀 REVELA A MENSAGEM REAL DA FOCUS NFE / PREFEITURA DE MAUÁ
 				var focusErr map[string]interface{}
 				json.Unmarshal(bodyHomolog, &focusErr)
-				
 				errorMsg := "Erro na Sefaz de Mauá."
 				if msg, ok := focusErr["mensagem"].(string); ok {
 					errorMsg = msg
 				} else {
 					errorMsg = string(bodyHomolog)
 				}
-				
 				if len(errorMsg) > 200 { errorMsg = errorMsg[:200] + "..." }
-				
 				invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": errorMsg}})
+				log.Printf("❌ Homologação falhou: %s", errorMsg)
 				return
 			}
 			log.Println("✅ [AUTO-ROUTING] Sucesso na Homologação!")
 		} else if resp.StatusCode >= 400 {
-			log.Printf("❌ Erro em Produção (Status %d): %s", resp.StatusCode, string(bodyProducao))
-			errorMsg := string(bodyProducao)
-			if len(errorMsg) > 100 { errorMsg = errorMsg[:100] + "..." }
+			var focusErr map[string]interface{}
+			json.Unmarshal(bodyProducao, &focusErr)
+			errorMsg := "Erro na Sefaz de Produção."
+			if msg, ok := focusErr["mensagem"].(string); ok {
+				errorMsg = msg
+			} else {
+				errorMsg = string(bodyProducao)
+			}
+			if len(errorMsg) > 200 { errorMsg = errorMsg[:200] + "..." }
 			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": errorMsg}})
+			log.Printf("❌ Produção falhou: %s", errorMsg)
 			return
 		} else {
 			log.Println("✅ Sucesso em Produção!")
 		}
-
 	}(inv.ID, client, inv.ServiceValue, s.Company)
 
 	w.WriteHeader(http.StatusCreated)
