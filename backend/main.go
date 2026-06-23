@@ -1222,7 +1222,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var s Settings
-	// 🚀 DIAGNÓSTICO: Força o Mongo a ler o documento MAIS RECENTE da coleção Settings
+	// 🚀 Lê sempre a configuração mais RECENTE para ignorar "fantasmas" no banco
 	optsSort := options.FindOne().SetSort(bson.D{{Key: "_id", Value: -1}})
 	settingsCollection.FindOne(ctx, bson.M{}, optsSort).Decode(&s)
 
@@ -1231,19 +1231,6 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		defer bgCancel()
 
 		apiKey := strings.TrimSpace(comp.FocusNfeToken)
-		
-		// 🚀 RASTREADOR DEFINITIVO: O que realmente está a chegar do MongoDB?
-		log.Printf("\n=======================================================")
-		log.Printf("🎯 [DIAGNÓSTICO] Token lido do Banco: '%s'", apiKey)
-		
-		// 🚀 FORÇA O TOKEN QUE VOCÊ VALIDOU NO TERMINAL (Prova dos 9)
-		tokenForcado := "YoGmJAqT7Cm9kYNpm36zYrwu3rk2ghKz"
-		if apiKey != tokenForcado {
-			log.Printf("⚠️ O banco tem um token diferente! Usando o token forçado para garantir a emissão.")
-			apiKey = tokenForcado
-		}
-		log.Printf("=======================================================\n")
-
 		if apiKey == "" {
 			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": "Token VAZIO no painel."}})
 			return
@@ -1267,15 +1254,31 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			campoDoc = "cpf"
 		}
 
+		// 🚀 BLINDAGEM GINFES (MAUÁ): Endereços vazios quebram o XSD!
+		cepLimpo := regexp.MustCompile(`\D`).ReplaceAllString(c.CEP, "")
+		if cepLimpo == "" { cepLimpo = "09310640" } // CEP genérico de Mauá
+		
+		logradouro := strings.TrimSpace(c.Address)
+		if logradouro == "" { logradouro = "Nao Informado" }
+		
+		numero := strings.TrimSpace(c.Number)
+		if numero == "" { numero = "S/N" }
+		
+		bairro := strings.TrimSpace(c.Neighborhood)
+		if bairro == "" { bairro = "Nao Informado" }
+		
+		uf := strings.TrimSpace(c.State)
+		if uf == "" { uf = "SP" }
+
 		enderecoTomador := map[string]interface{}{
-			"logradouro": c.Address,
-			"numero":     c.Number,
-			"bairro":     c.Neighborhood,
-			"cep":        regexp.MustCompile(`\D`).ReplaceAllString(c.CEP, ""),
-			"uf":         c.State,
+			"logradouro":       logradouro,
+			"numero":           numero,
+			"bairro":           bairro,
+			"cep":              cepLimpo,
+			"uf":               uf,
+			"codigo_municipio": "3529401", // IBGE Padrão Mauá
 		}
 
-		cepLimpo := regexp.MustCompile(`\D`).ReplaceAllString(c.CEP, "")
 		if len(cepLimpo) == 8 {
 			respViaCep, err := http.Get("https://viacep.com.br/ws/" + cepLimpo + "/json/")
 			if err == nil {
@@ -1287,34 +1290,41 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// 🚀 Monta o Tomador de forma dinâmica para esconder o email vazio
+		tomadorMap := map[string]interface{}{
+			campoDoc:       docLimpo,
+			"razao_social": c.Name,
+			"endereco":     enderecoTomador,
+		}
+		
+		emailTomador := strings.TrimSpace(c.Email)
+		if emailTomador != "" {
+			tomadorMap["email"] = emailTomador
+		}
+
 		docPrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(cnpjPrestador, "")
 		imPrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(imPrestador, "")
 		ibgePrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(ibgePrestador, "")
+		ibgePrestadorInt, _ := strconv.Atoi(ibgePrestadorLimpo)
 
-		// 🚀 TIPAGEM EXATA DO OPENAPI
+		// 🚀 PAYLOAD GINFES: Tipagem Estrita e sem campos da Reforma Tributária de SP
 		payload := map[string]interface{}{
-			"data_emissao":             time.Now().Format(time.RFC3339),
-			"natureza_operacao":        "1",
-			"optante_simples_nacional": false,
+			"data_emissao":             time.Now().Format("2006-01-02T15:04:05"), // Formato Exato sem Fuso
+			"natureza_operacao":        1, // Inteiro
+			"optante_simples_nacional": false, // Booleano
 			"prestador": map[string]interface{}{
 				"cnpj":                docPrestadorLimpo,
 				"inscricao_municipal": imPrestadorLimpo,
-				"codigo_municipio":    ibgePrestadorLimpo,
+				"codigo_municipio":    ibgePrestadorInt, // Inteiro
 			},
-			"tomador": map[string]interface{}{
-				campoDoc:       docLimpo,
-				"razao_social": c.Name,
-				"email":        c.Email,
-				"endereco":     enderecoTomador,
-			},
+			"tomador": tomadorMap, // Tomador blindado
 			"servico": map[string]interface{}{
-				"discriminacao":               "Nota emitida correspondente ao rendimento de gestão e intermediação financeira.",
+				"discriminacao":               "Rendimento de gestao e intermediacao financeira.",
 				"item_lista_servico":          itemServico,
 				"valor_servicos":              serviceValue,
-				"aliquota":                    5.0,
-				"codigo_tributario_municipio": "692060100",
-				"iss_retido":                  false,
-				"codigo_municipio":            ibgePrestadorLimpo,
+				"aliquota":                    5.0, // Ginfes exige que Focus converta isso para 0.0500
+				"codigo_tributario_municipio": "692060100", // Padrão Mauá
+				"iss_retido":                  false, // Booleano Obrigatório
 			},
 		}
 
@@ -1351,15 +1361,18 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			resp.Body.Close()
 
 			if resp.StatusCode >= 400 {
+				errorMsg := string(bodyHomolog)
+				
+				// Tenta extrair a mensagem "limpa" da Focus
 				var focusErr map[string]interface{}
-				json.Unmarshal(bodyHomolog, &focusErr)
-				errorMsg := "Erro na Sefaz de Mauá."
-				if msg, ok := focusErr["mensagem"].(string); ok {
-					errorMsg = msg
-				} else {
-					errorMsg = string(bodyHomolog)
+				if err := json.Unmarshal(bodyHomolog, &focusErr); err == nil {
+					if msg, ok := focusErr["mensagem"].(string); ok {
+						errorMsg = msg
+					}
 				}
+				
 				if len(errorMsg) > 200 { errorMsg = errorMsg[:200] + "..." }
+				
 				invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": errorMsg}})
 				log.Printf("❌ Homologação falhou: %s", errorMsg)
 				return

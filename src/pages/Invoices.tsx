@@ -25,6 +25,12 @@ const Invoices = () => {
       return clean.replace(/\}\]$/, '').trim();
   };
 
+  // 🚀 LIMPADOR DE ACENTOS (NOVO) - Ensina o sistema a ignorar acentos e letras maiúsculas
+  const normalizeString = (str: string) => {
+      if (!str) return '';
+      return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  };
+
   // Estado Modal de Emissão
   const [isEmitModalOpen, setIsEmitModalOpen] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState<any>(null);
@@ -81,7 +87,8 @@ const Invoices = () => {
     loans.forEach(loan => {
       if (!loan.history || blockedNames.has(loan.client)) return;
       
-      const clientInfo = clients.find(c => c.name === loan.client);
+      // 🚀 BUSCA BLINDADA CONTRA ACENTOS, MAIÚSCULAS E ESPAÇOS EXTRAS
+      const clientInfo = clients.find(c => normalizeString(c.name) === normalizeString(loan.client));
 
       loan.history.forEach((record: any, index) => {
         const type = record.type?.toLowerCase() || '';
@@ -493,8 +500,8 @@ const Invoices = () => {
               <div className="flex items-center gap-3 mb-4">
                 <div className="bg-blue-600 p-2 rounded-lg text-white"><Landmark size={20} /></div>
                 <div>
-                  <h3 className="font-bold text-blue-900 leading-tight">Prefeitura / SEFAZ</h3>
-                  <p className="text-[10px] text-blue-700 uppercase">Ambiente de Produção</p>
+                  <h3 className="font-bold text-blue-900 leading-tight">Prefeitura de Mauá (Ginfes)</h3>
+                  <p className="text-[10px] text-blue-700 uppercase">Ambiente de Emissão / SEFAZ</p>
                 </div>
               </div>
               
