@@ -1132,21 +1132,33 @@ func invoiceCancelHandler(w http.ResponseWriter, r *http.Request) {
 	settingsCollection.FindOne(ctx, bson.M{}).Decode(&s)
 	tokenFocus := s.Company.FocusNfeToken
 
-	// 🚀 AMBIENTE DE HOMOLOGAÇÃO
-	apiURL := fmt.Sprintf("https://homologacao.focusnfe.com.br/v2/nfse/%s", id)
-	payloadBytes, _ := json.Marshal(req)
+	// 🚀 TENTA AMBIENTE DE PRODUÇÃO PRIMEIRO
+    apiURL := fmt.Sprintf("https://api.focusnfe.com.br/v2/nfse/%s", id)
+    payloadBytes, _ := json.Marshal(req)
 
-	client := &http.Client{}
-	reqFocus, _ := http.NewRequest(http.MethodDelete, apiURL, bytes.NewBuffer(payloadBytes))
-	reqFocus.SetBasicAuth(tokenFocus, "")
-	reqFocus.Header.Set("Content-Type", "application/json")
+    client := &http.Client{}
+    reqFocus, _ := http.NewRequest(http.MethodDelete, apiURL, bytes.NewBuffer(payloadBytes))
+    reqFocus.SetBasicAuth(tokenFocus, "")
+    reqFocus.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(reqFocus)
-	if err != nil {
-		http.Error(w, `{"mensagem": "Falha ao se comunicar com o gateway fiscal"}`, http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
+    resp, err := client.Do(reqFocus)
+    
+    // 🚀 AUTO-ROUTING CANCELAMENTO: Se rejeitar o token (401), vai para Homologação
+    if err == nil && resp.StatusCode == 401 {
+        resp.Body.Close()
+        apiURL = fmt.Sprintf("https://homologacao.focusnfe.com.br/v2/nfse/%s", id)
+        reqFocus, _ = http.NewRequest(http.MethodDelete, apiURL, bytes.NewBuffer(payloadBytes))
+        reqFocus.SetBasicAuth(tokenFocus, "")
+        reqFocus.Header.Set("Content-Type", "application/json")
+        resp, err = client.Do(reqFocus)
+        log.Println("🔄 [AUTO-ROUTING CANCELAMENTO] Token de Homologação detetado.")
+    }
+
+    if err != nil {
+        http.Error(w, `{"mensagem": "Falha ao se comunicar com o gateway fiscal"}`, http.StatusInternalServerError)
+        return
+    }
+    defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted {
 		invoiceCollection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"status": "CANCELADA"}})
@@ -1291,29 +1303,40 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		payloadBytes, _ := json.Marshal(payload)
-		
-		// 🚀 AMBIENTE DE HOMOLOGAÇÃO DA FOCUS NFE
-		apiURL := "https://homologacao.focusnfe.com.br/v2/nfse"
+        
+        // 🚀 TENTA AMBIENTE DE PRODUÇÃO PRIMEIRO
+        apiURL := "https://api.focusnfe.com.br/v2/nfse"
 
-		req, err := http.NewRequest("POST", apiURL+"?ref="+invoiceID, bytes.NewBuffer(payloadBytes))
-		if err != nil { return }
+        req, err := http.NewRequest("POST", apiURL+"?ref="+invoiceID, bytes.NewBuffer(payloadBytes))
+        if err != nil { return }
 
-		req.Header.Set("Content-Type", "application/json")
-		req.SetBasicAuth(apiKey, "")
+        req.Header.Set("Content-Type", "application/json")
+        req.SetBasicAuth(apiKey, "")
 
-		clientHttp := &http.Client{Timeout: 15 * time.Second}
-		resp, err := clientHttp.Do(req)
+        clientHttp := &http.Client{Timeout: 15 * time.Second}
+        resp, err := clientHttp.Do(req)
 
-		if err != nil || resp.StatusCode >= 400 {
-			errorMsg := "Erro na integração com a Sefaz/Focus NFe."
-			if resp != nil {
-				bodyErr, _ := io.ReadAll(resp.Body)
-				errorMsg = string(bodyErr)
-				resp.Body.Close()
-			}
-			invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": errorMsg}})
-		}
-	}(inv.ID, client, inv.ServiceValue, s.Company)
+        // 🚀 AUTO-ROUTING: Se o Token for rejeitado (401), significa que é token de teste. Redireciona para Homologação!
+        if err == nil && resp.StatusCode == 401 {
+            resp.Body.Close() // Fecha a tentativa falhada
+            apiURL = "https://homologacao.focusnfe.com.br/v2/nfse"
+            req, _ = http.NewRequest("POST", apiURL+"?ref="+invoiceID, bytes.NewBuffer(payloadBytes))
+            req.Header.Set("Content-Type", "application/json")
+            req.SetBasicAuth(apiKey, "")
+            resp, err = clientHttp.Do(req)
+            log.Println("🔄 [AUTO-ROUTING EMISSÃO] Token de Homologação detetado. Redirecionado para testes.")
+        }
+
+        if err != nil || resp.StatusCode >= 400 {
+            errorMsg := "Erro na integração com a Sefaz/Focus NFe."
+            if resp != nil {
+                bodyErr, _ := io.ReadAll(resp.Body)
+                errorMsg = string(bodyErr)
+                resp.Body.Close()
+            }
+            invoiceCollection.UpdateOne(bgCtx, bson.M{"_id": invoiceID}, bson.M{"$set": bson.M{"status": "ERRO", "errorMsg": errorMsg}})
+        }
+    }(inv.ID, client, inv.ServiceValue, s.Company)
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(inv)
