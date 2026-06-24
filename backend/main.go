@@ -1321,15 +1321,15 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			"servico": map[string]interface{}{
 				// 🚀 A PALAVRA EXATA É "discriminacao" (sem cedilha e sem til)
 				"discriminacao":               "Nota emitida correspondente ao rendimento de gestao e intermediacao financeira.",
-				"item_lista_servico":          itemServico,
+				"item_lista_servico":          itemServico, // Vai ler automaticamente o "15.01" que você salvou na tela
 				"valor_servicos":              serviceValue,
-				"aliquota":                    5.0, // Exigido para o Ginfes calcular o imposto
-				"codigo_tributario_municipio": "17.02", // Padrão novo
+				"aliquota":                    5.0, // Exigido para o Ginfes calcular o imposto (5% igual ao PDF)
+				"codigo_tributario_municipio": "649999900", // 🚀 CÓDIGO OFICIAL DA NFS-e 708 DA CREDIT NOW
 				"iss_retido":                  false, // Obrigatório
 			},
 		}
 
-		log.Println("🚀 [DEPLOY NOVO ATIVO] Gerando payload com Discriminacao correta!")
+		log.Println("🚀 [DEPLOY V2] Teste antibug!")
 
 		payloadBytes, _ := json.Marshal(payload)
 		log.Printf("🔍 [FOCUS NFE] Disparando nota %s. Token lido: %s... (Tamanho: %d)", invoiceID, apiKey[:4], len(apiKey))
