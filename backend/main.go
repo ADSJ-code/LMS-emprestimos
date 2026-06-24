@@ -1307,26 +1307,29 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		ibgePrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(ibgePrestador, "")
 		ibgePrestadorInt, _ := strconv.Atoi(ibgePrestadorLimpo)
 
-		// 🚀 PAYLOAD GINFES: Tipagem Estrita e sem campos da Reforma Tributária de SP
+		// 🚀 PAYLOAD GINFES: Tipagem Estrita (Com Discriminacao correta)
 		payload := map[string]interface{}{
-			"data_emissao":             time.Now().Format("2006-01-02T15:04:05"), // Formato Exato sem Fuso
-			"natureza_operacao":        1, // Inteiro
-			"optante_simples_nacional": false, // Booleano
+			"data_emissao":             time.Now().Format("2006-01-02T15:04:05"), 
+			"natureza_operacao":        1, 
+			"optante_simples_nacional": false, 
 			"prestador": map[string]interface{}{
 				"cnpj":                docPrestadorLimpo,
 				"inscricao_municipal": imPrestadorLimpo,
-				"codigo_municipio":    ibgePrestadorInt, // Inteiro
+				"codigo_municipio":    ibgePrestadorInt,
 			},
-			"tomador": tomadorMap, // Tomador blindado
+			"tomador": tomadorMap, // O tomadorMap que criámos com o campoDoc ("cpf" ou "cnpj") e o endereço preenchido
 			"servico": map[string]interface{}{
-				"discriminacao":               "Rendimento de gestao e intermediacao financeira.",
+				// 🚀 A PALAVRA EXATA É "discriminacao" (sem cedilha e sem til)
+				"discriminacao":               "Nota emitida correspondente ao rendimento de gestao e intermediacao financeira.",
 				"item_lista_servico":          itemServico,
 				"valor_servicos":              serviceValue,
-				"aliquota":                    5.0, // Ginfes exige que Focus converta isso para 0.0500
-				"codigo_tributario_municipio": "692060100", // Padrão Mauá
-				"iss_retido":                  false, // Booleano Obrigatório
+				"aliquota":                    5.0, // Exigido para o Ginfes calcular o imposto
+				"codigo_tributario_municipio": "17.02", // Padrão novo
+				"iss_retido":                  false, // Obrigatório
 			},
 		}
+
+		log.Println("🚀 [DEPLOY NOVO ATIVO] Gerando payload com Discriminacao correta!")
 
 		payloadBytes, _ := json.Marshal(payload)
 		log.Printf("🔍 [FOCUS NFE] Disparando nota %s. Token lido: %s... (Tamanho: %d)", invoiceID, apiKey[:4], len(apiKey))
