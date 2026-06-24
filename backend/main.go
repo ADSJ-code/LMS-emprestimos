@@ -241,14 +241,16 @@ type Settings struct {
 }
 
 type PaymentRecord struct {
-	Date            string  `json:"date" bson:"date"`
-	Amount          float64 `json:"amount" bson:"amount"`
-	CapitalPaid     float64 `json:"capitalPaid" bson:"capitalPaid"`
-	InterestPaid    float64 `json:"interestPaid" bson:"interestPaid"`
-	Type            string  `json:"type" bson:"type"`
-	Note            string  `json:"note" bson:"note"`
-	RegisteredAt    string  `json:"registeredAt" bson:"registeredAt"`
-	OriginalDueDate string  `json:"originalDueDate,omitempty" bson:"originalDueDate,omitempty"`
+    Date            string  `json:"date" bson:"date"`
+    Amount          float64 `json:"amount" bson:"amount"`
+    CapitalPaid     float64 `json:"capitalPaid" bson:"capitalPaid"`
+    InterestPaid    float64 `json:"interestPaid" bson:"interestPaid"`
+    Type            string  `json:"type" bson:"type"`
+    Note            string  `json:"note" bson:"note"`
+    RegisteredAt    string  `json:"registeredAt" bson:"registeredAt"`
+    OriginalDueDate string  `json:"originalDueDate,omitempty" bson:"originalDueDate,omitempty"`
+    NfeStatus       string  `json:"nfeStatus,omitempty" bson:"nfeStatus,omitempty"` // 🚀 Grava se foi IGNORADA ou EMITIDA_MANUAL
+    NfeValue        float64 `json:"nfeValue,omitempty" bson:"nfeValue,omitempty"`   // 🚀 Grava o valor editado da Base de Cálculo
 }
 
 type MultiDate struct {
@@ -1111,26 +1113,37 @@ type CancelRequest struct {
 
 // 🚀 HANDLER REAL: Cancela a nota fiscal diretamente na Focus NFe e na Prefeitura
 func invoiceCancelHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
+    if r.Method != http.MethodPost {
+        w.WriteHeader(http.StatusMethodNotAllowed)
+        return
+    }
 
-	id := strings.TrimPrefix(r.URL.Path, "/api/invoices/")
-	id = strings.TrimSuffix(id, "/cancel")
+    id := strings.TrimPrefix(r.URL.Path, "/api/invoices/")
+    id = strings.TrimSuffix(id, "/cancel")
 
-	var req CancelRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Justificativa) < 15 {
-		http.Error(w, `{"mensagem": "Justificativa obrigatória (mínimo de 15 caracteres)"}`, http.StatusBadRequest)
-		return
-	}
+    var req CancelRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Justificativa) < 15 {
+        http.Error(w, `{"mensagem": "Justificativa obrigatória (mínimo de 15 caracteres)"}`, http.StatusBadRequest)
+        return
+    }
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+    ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+    defer cancel()
 
-	var s Settings
-	settingsCollection.FindOne(ctx, bson.M{}).Decode(&s)
-	tokenFocus := strings.TrimSpace(s.Company.FocusNfeToken)
+    // 🚀 BYPASS INTELIGENTE: Se a nota está com ERRO, apenas exclui do banco local e não bate na Focus NFe.
+    var inv InvoiceRecord
+    if err := invoiceCollection.FindOne(ctx, bson.M{"_id": id}).Decode(&inv); err == nil {
+        if inv.Status == "ERRO" {
+            invoiceCollection.DeleteOne(ctx, bson.M{"_id": id})
+            w.WriteHeader(http.StatusOK)
+            w.Write([]byte(`{"mensagem": "Nota com erro removida localmente com sucesso"}`))
+            return
+        }
+    }
+
+    var s Settings
+    settingsCollection.FindOne(ctx, bson.M{}).Decode(&s)
+    tokenFocus := strings.TrimSpace(s.Company.FocusNfeToken)
 
 	apiURL := fmt.Sprintf("https://api.focusnfe.com.br/v2/nfse/%s", id)
 	payloadBytes, _ := json.Marshal(req)
@@ -1246,7 +1259,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if itemServico == "" { itemServico = "15.08" }
+		if itemServico == "" { itemServico = "15.01" }
 
 		docLimpo := regexp.MustCompile(`\D`).ReplaceAllString(c.CPF, "")
 		campoDoc := "cnpj"
@@ -1307,9 +1320,13 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		ibgePrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(ibgePrestador, "")
 		ibgePrestadorInt, _ := strconv.Atoi(ibgePrestadorLimpo)
 
+		// 🚀 FORÇA O FUSO HORÁRIO DE BRASÍLIA (UTC-3) PARA A SEFAZ NÃO BARRAR DATA DO FUTURO
+		brt := time.FixedZone("BRT", -3*60*60)
+		dataEmissaoBRT := time.Now().In(brt).Format("2006-01-02T15:04:05")
+
 		// 🚀 PAYLOAD GINFES: Tipagem Estrita (Com Discriminacao correta)
 		payload := map[string]interface{}{
-			"data_emissao":             time.Now().Format("2006-01-02T15:04:05"), 
+			"data_emissao":             dataEmissaoBRT, // 🚀 USA A DATA JÁ COM O FUSO DO BRASIL
 			"natureza_operacao":        1, 
 			"optante_simples_nacional": false, 
 			"prestador": map[string]interface{}{
@@ -1317,15 +1334,14 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 				"inscricao_municipal": imPrestadorLimpo,
 				"codigo_municipio":    ibgePrestadorInt,
 			},
-			"tomador": tomadorMap, // O tomadorMap que criámos com o campoDoc ("cpf" ou "cnpj") e o endereço preenchido
+			"tomador": tomadorMap,
 			"servico": map[string]interface{}{
-				// 🚀 A PALAVRA EXATA É "discriminacao" (sem cedilha e sem til)
 				"discriminacao":               "Nota emitida correspondente ao rendimento de gestao e intermediacao financeira.",
-				"item_lista_servico":          itemServico, // Vai ler automaticamente o "15.01" que você salvou na tela
+				"item_lista_servico":          itemServico,
 				"valor_servicos":              serviceValue,
-				"aliquota":                    5.0, // Exigido para o Ginfes calcular o imposto (5% igual ao PDF)
-				"codigo_tributario_municipio": "649999900", // 🚀 CÓDIGO OFICIAL DA NFS-e 708 DA CREDIT NOW
-				"iss_retido":                  false, // Obrigatório
+				"aliquota":                    5.0, 
+				"codigo_tributario_municipio": "649999900", // 🚀 CÓDIGO OFICIAL DA NFS-e 708
+				"iss_retido":                  false,
 			},
 		}
 

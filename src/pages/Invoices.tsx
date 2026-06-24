@@ -36,6 +36,12 @@ const Invoices = () => {
   const [selectedPayment, setSelectedPayment] = useState<any>(null);
   const [isEmitting, setIsEmitting] = useState(false);
 
+  // Estado Modal de Edição de Valor
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [paymentToEdit, setPaymentToEdit] = useState<any>(null);
+  const [editValue, setEditValue] = useState<string>('');
+  const [isEditing, setIsEditing] = useState(false);
+
   const fetchData = async () => {
     setIsLoading(true);
     try {
@@ -179,27 +185,46 @@ const Invoices = () => {
   };
 
   // 🚀 NOVAS AÇÕES PODEROSAS DO RODRIGO
-  const handleEditNfeValue = async (payment: any) => {
-      const newValStr = window.prompt(`✏️ Editar valor da Base de Cálculo (Juros) para a nota de ${payment.client}:\n\nValor atual: R$ ${formatMoney(payment.interestPaid)}\n\nDigite o novo valor (apenas números e vírgula):`);
-      if (!newValStr) return;
-      
-      const newVal = parseVal(newValStr);
-      if (newVal <= 0) { alert("Valor inválido."); return; }
+  const handleEditNfeValue = (payment: any) => {
+      setPaymentToEdit(payment);
+      setEditValue(formatMoney(payment.interestPaid));
+      setIsEditModalOpen(true);
+  };
 
-      const loan = loans.find(l => l.id === payment.contractId);
-      if (!loan || !loan.history) return;
+  const confirmEditNfeValue = async () => {
+      if (!paymentToEdit || !editValue) return;
+      setIsEditing(true);
+
+      const newVal = parseVal(editValue);
+      if (newVal <= 0) { 
+          alert("Valor inválido."); 
+          setIsEditing(false);
+          return; 
+      }
+
+      const loan = loans.find(l => l.id === paymentToEdit.contractId);
+      if (!loan || !loan.history) {
+          setIsEditing(false);
+          return;
+      }
 
       const updatedLoan = { ...loan };
-      // 🚀 TypeScript Fix: Usamos "!" para garantir que existe e "as any" para injetar o novo campo
-      updatedLoan.history![payment.recordIndex] = { 
-          ...updatedLoan.history![payment.recordIndex], 
+      updatedLoan.history![paymentToEdit.recordIndex] = { 
+          ...updatedLoan.history![paymentToEdit.recordIndex], 
           nfeValue: newVal 
       } as any;
 
       try {
           await loanService.update(loan.id, updatedLoan, 'EDIÇÃO DE VALOR NF', `Valor da base de cálculo da NF alterado para R$ ${newVal.toFixed(2)}`);
-          fetchData();
-      } catch (e) { alert("Erro ao atualizar valor."); }
+          await fetchData();
+          setIsEditModalOpen(false);
+          // Opcional: Se quiser que já abra o modal de emissão logo após confirmar, descomente a linha abaixo:
+          // handleOpenEmitModal({...paymentToEdit, interestPaid: newVal});
+      } catch (e) { 
+          alert("Erro ao atualizar valor."); 
+      } finally {
+          setIsEditing(false);
+      }
   };
 
   const handleIgnorePayment = async (payment: any) => {
@@ -491,6 +516,48 @@ const Invoices = () => {
           </div>
         )}
       </div>
+
+      {/* MODAL DE EDIÇÃO DE VALOR */}
+      <Modal isOpen={isEditModalOpen} onClose={() => !isEditing && setIsEditModalOpen(false)} title="Editar Valor da Nota">
+        {paymentToEdit && (
+          <div className="space-y-4">
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+              <p className="text-sm text-slate-600 mb-1">Cliente: <span className="font-bold text-slate-800">{paymentToEdit.client}</span></p>
+              <p className="text-sm text-slate-600">Valor atual (Juros): <span className="font-bold text-slate-800">R$ {formatMoney(paymentToEdit.interestPaid)}</span></p>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-2">Novo valor (R$)</label>
+              <input 
+                type="text" 
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 outline-none font-bold text-slate-800"
+                placeholder="Ex: 150,00"
+                disabled={isEditing}
+              />
+            </div>
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+              <button 
+                onClick={() => setIsEditModalOpen(false)} 
+                disabled={isEditing}
+                className="px-6 py-2 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button 
+                onClick={confirmEditNfeValue} 
+                disabled={isEditing}
+                className="px-6 py-2 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all flex items-center gap-2 shadow-sm disabled:opacity-70"
+              >
+                {isEditing ? <RefreshCw size={18} className="animate-spin"/> : <Edit size={18}/>}
+                Confirmar Envio
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* MODAL DE CONFIRMAÇÃO DE EMISSÃO */}
       <Modal isOpen={isEmitModalOpen} onClose={() => !isEmitting && setIsEmitModalOpen(false)} title="Confirmar Emissão de NF">
