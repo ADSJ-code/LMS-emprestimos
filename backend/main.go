@@ -1324,26 +1324,35 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		brt := time.FixedZone("BRT", -3*60*60)
 		dataEmissaoBRT := time.Now().In(brt).Format("2006-01-02T15:04:05")
 
-		// 🚀 PAYLOAD GINFES: Tipagem Estrita (Com Discriminacao correta)
-		payload := map[string]interface{}{
-			"data_emissao":             dataEmissaoBRT, // 🚀 USA A DATA JÁ COM O FUSO DO BRASIL
-			"natureza_operacao":        1, 
-			"optante_simples_nacional": false, 
-			"prestador": map[string]interface{}{
-				"cnpj":                docPrestadorLimpo,
-				"inscricao_municipal": imPrestadorLimpo,
-				"codigo_municipio":    ibgePrestadorInt,
-			},
-			"tomador": tomadorMap,
-			"servico": map[string]interface{}{
-				"discriminacao":               "Nota emitida correspondente ao rendimento de gestao e intermediacao financeira.",
-				"item_lista_servico":          itemServico,
-				"valor_servicos":              serviceValue,
-				"aliquota":                    5.0, 
-				"codigo_tributario_municipio": "649999900", // 🚀 CÓDIGO OFICIAL DA NFS-e 708
-				"iss_retido":                  false,
-			},
-		}
+		// 🚀 PAYLOAD GINFES: Tipagem Estrita e Enriquecida com Cálculos Explícitos
+        // Como o ISS não é retido (iss_retido: false), o Valor Líquido é igual ao Valor dos Serviços.
+        valorIss := math.Round((serviceValue * 0.05) * 100) / 100
+        
+        // Melhora a discriminação para exibir claramente ao cliente a quebra de valores
+        descricaoRica := fmt.Sprintf("Nota emitida correspondente ao rendimento de gestao e intermediacao financeira.\nValor Base (Juros): R$ %.2f\nISS (5%%): R$ %.2f\nValor Liquido: R$ %.2f", serviceValue, valorIss, serviceValue)
+        descricaoRica = strings.ReplaceAll(descricaoRica, ".", ",") // Padrão brasileiro
+
+        payload := map[string]interface{}{
+            "data_emissao":             dataEmissaoBRT, // 🚀 USA A DATA JÁ COM O FUSO DO BRASIL
+            "natureza_operacao":        1, 
+            "optante_simples_nacional": false, 
+            "prestador": map[string]interface{}{
+                "cnpj":                docPrestadorLimpo,
+                "inscricao_municipal": imPrestadorLimpo,
+                "codigo_municipio":    ibgePrestadorInt,
+            },
+            "tomador": tomadorMap,
+            "servico": map[string]interface{}{
+                "discriminacao":               descricaoRica,
+                "item_lista_servico":          itemServico,
+                "valor_servicos":              serviceValue,
+                "valor_iss":                   valorIss,
+                "valor_liquido":               serviceValue,
+                "aliquota":                    5.0, 
+                "codigo_tributario_municipio": "649999900", // 🚀 CÓDIGO OFICIAL DA NFS-e 708
+                "iss_retido":                  false,
+            },
+        }
 
 		log.Println("🚀 [DEPLOY V2] Teste antibug!")
 
