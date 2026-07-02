@@ -1324,16 +1324,38 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		brt := time.FixedZone("BRT", -3*60*60)
 		dataEmissaoBRT := time.Now().In(brt).Format("2006-01-02T15:04:05")
 
-		// 🚀 PAYLOAD GINFES: Tipagem Estrita e Enriquecida com Cálculos Explícitos
-        // Como o ISS não é retido (iss_retido: false), o Valor Líquido é igual ao Valor dos Serviços.
+		// 🚀 CÁLCULOS TRIBUTÁRIOS COM TRAVA DE VALOR MÍNIMO (1 Centavo)
         valorIss := math.Round((serviceValue * 0.05) * 100) / 100
         
-        // Melhora a discriminação para exibir claramente ao cliente a quebra de valores
-        descricaoRica := fmt.Sprintf("Nota emitida correspondente ao rendimento de gestao e intermediacao financeira.\nValor Base (Juros): R$ %.2f\nISS (5%%): R$ %.2f\nValor Liquido: R$ %.2f", serviceValue, valorIss, serviceValue)
+        // Novos Impostos Federais (PIS 0.65% e COFINS 3%)
+        valorPis := math.Round((serviceValue * 0.0065) * 100) / 100
+        if valorPis <= 0 && serviceValue > 0 {
+            valorPis = 0.01
+        }
+        
+        valorCofins := math.Round((serviceValue * 0.03) * 100) / 100
+        if valorCofins <= 0 && serviceValue > 0 {
+            valorCofins = 0.01
+        }
+        
+        // Reforma Tributária (IBS 0.10% e CBS 0.90% - conforme vídeo do contador)
+        valorIbs := math.Round((serviceValue * 0.0010) * 100) / 100
+        if valorIbs <= 0 && serviceValue > 0 {
+            valorIbs = 0.01
+        }
+        
+        valorCbs := math.Round((serviceValue * 0.0090) * 100) / 100
+        if valorCbs <= 0 && serviceValue > 0 {
+            valorCbs = 0.01
+        }
+
+        // Ajuste da discriminação (O Rodrigo pediu para limpar o excesso de informações se possível,
+        // mas mantivemos o essencial para não dar erro fiscal)
+        descricaoRica := fmt.Sprintf("Nota emitida correspondente ao rendimento de gestao e intermediacao financeira.\nValor Base: R$ %.2f", serviceValue)
         descricaoRica = strings.ReplaceAll(descricaoRica, ".", ",") // Padrão brasileiro
 
         payload := map[string]interface{}{
-            "data_emissao":             dataEmissaoBRT, // 🚀 USA A DATA JÁ COM O FUSO DO BRASIL
+            "data_emissao":             dataEmissaoBRT,
             "natureza_operacao":        1, 
             "optante_simples_nacional": false, 
             "prestador": map[string]interface{}{
@@ -1344,12 +1366,17 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
             "tomador": tomadorMap,
             "servico": map[string]interface{}{
                 "discriminacao":               descricaoRica,
-                "item_lista_servico":          itemServico,
+                "item_lista_servico":          itemServico, // Ex: 15.01
+                "codigo_nbs":                  "1.0905.40.00", // 🚀 NOVO: Exigência Gissonline vista no vídeo
                 "valor_servicos":              serviceValue,
                 "valor_iss":                   valorIss,
-                "valor_liquido":               serviceValue,
+                "valor_pis":                   valorPis,    // 🚀 INJETADO PIS
+                "valor_cofins":                valorCofins, // 🚀 INJETADO COFINS
+                "valor_ibs":                   valorIbs,    // 🚀 INJETADO IBS
+                "valor_cbs":                   valorCbs,    // 🚀 INJETADO CBS
+                "valor_liquido":               serviceValue, // Mantém o líquido sem deduzir para não abater no boleto do cliente
                 "aliquota":                    5.0, 
-                "codigo_tributario_municipio": "649999900", // 🚀 CÓDIGO OFICIAL DA NFS-e 708
+                "codigo_tributario_municipio": "649999900", 
                 "iss_retido":                  false,
             },
         }

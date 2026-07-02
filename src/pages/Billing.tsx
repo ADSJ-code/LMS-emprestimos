@@ -459,8 +459,12 @@ const Billing = () => {
   // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
     if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
+    
     const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
     if (balance <= 0.10) return 'Quitado'; 
+    
+    // 🚀 FIX: Se não for Juros Simples e as parcelas chegaram a 0, está numericamente quitado!
+    if (loan.interestType !== 'SIMPLE' && Number(loan.installments) <= 0) return 'Quitado';
     
     const today = new Date();
     today.setHours(0,0,0,0);
@@ -1207,18 +1211,29 @@ const Billing = () => {
                  updatedLoan.nextDue = nextDueStr;
                  updatedLoan.agreementValue = 0;
              } else {
-                 const currentDue = new Date(updatedLoan.nextDue);
-                 if (updatedLoan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
-                 else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
-                 else currentDue.setMonth(currentDue.getMonth() + 1);
-                 updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
-             }
-             if (!isSimple) updatedLoan.installments = Math.max(0, (updatedLoan.installments || 0) - 1);
-             noteText += " [CICLO COMPLETADO]";
-        } else {
-             updatedLoan.nextDue = originalDueStr;
-             noteText += " [PAGAMENTO PARCIAL]";
-        }
+                     const currentDue = new Date(updatedLoan.nextDue);
+                     if (updatedLoan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
+                     else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
+                     else currentDue.setMonth(currentDue.getMonth() + 1);
+                     updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
+                 }
+                 
+                 if (!isSimple) {
+                     updatedLoan.installments = (updatedLoan.installments || 0) - 1;
+                     
+                     // 🚀 TRAVA DO INFINITO (R$ ∞): Se "rolou a dívida" e sobrou capital, a parcela NUNCA pode ser zero!
+                     if (balance > 0.10 && updatedLoan.installments <= 0) {
+                         updatedLoan.installments = 1; 
+                     } else if (balance <= 0.10 && updatedLoan.installments <= 0) {
+                         updatedLoan.status = 'Quitado';
+                         updatedLoan.installments = 0;
+                     }
+                 }
+                 noteText += " [CICLO COMPLETADO]";
+            } else {
+                 updatedLoan.nextDue = originalDueStr;
+                 noteText += " [PAGAMENTO PARCIAL]";
+            }
 
         if (isSimple && valCapital > 0) {
             let periodRate = updatedLoan.interestRate / 100;
@@ -1418,7 +1433,8 @@ const handleOpenEditContract = (loan: Loan) => {
       const isSimple = selectedLoan.interestType === 'SIMPLE';
       const newAmount = parseFloat(editContractData.amount) || selectedLoan.amount;
       const newInterestRate = parseFloat(editContractData.interestRate) || selectedLoan.interestRate;
-      const numInst = isSimple ? 1 : (parseInt(editContractData.installments) || selectedLoan.installments);
+      // 🚀 TRAVA DO INFINITO: Garante que o divisor será no mínimo 1
+      const numInst = isSimple ? 1 : Math.max(1, (parseInt(editContractData.installments) || selectedLoan.installments));
       
       // 🚀 MATEMÁTICA BLINDADA: O sistema recalcula o valor exato da parcela na hora de salvar usando o SALDO DEVEDOR!
       let newInstallmentValue = 0;
