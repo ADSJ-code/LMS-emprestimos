@@ -1320,66 +1320,78 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		ibgePrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(ibgePrestador, "")
 		ibgePrestadorInt, _ := strconv.Atoi(ibgePrestadorLimpo)
 
-		// 🚀 FORÇA O FUSO HORÁRIO DE BRASÍLIA (UTC-3) PARA A SEFAZ NÃO BARRAR DATA DO FUTURO
+		// 🚀 FORÇA O FUSO HORÁRIO DE BRASÍLIA E O FORMATO EXATO DA FOCUS (-0300)
 		brt := time.FixedZone("BRT", -3*60*60)
-		dataEmissaoBRT := time.Now().In(brt).Format("2006-01-02T15:04:05")
+		dataEmissaoBRT := time.Now().In(brt).Format("2006-01-02T15:04:05-0700")
 
 		// 🚀 CÁLCULOS TRIBUTÁRIOS COM TRAVA DE VALOR MÍNIMO (1 Centavo)
-        valorIss := math.Round((serviceValue * 0.05) * 100) / 100
-        
-        // Novos Impostos Federais (PIS 0.65% e COFINS 3%)
-        valorPis := math.Round((serviceValue * 0.0065) * 100) / 100
-        if valorPis <= 0 && serviceValue > 0 {
-            valorPis = 0.01
-        }
-        
-        valorCofins := math.Round((serviceValue * 0.03) * 100) / 100
-        if valorCofins <= 0 && serviceValue > 0 {
-            valorCofins = 0.01
-        }
-        
-        // Reforma Tributária (IBS 0.10% e CBS 0.90% - conforme vídeo do contador)
-        valorIbs := math.Round((serviceValue * 0.0010) * 100) / 100
-        if valorIbs <= 0 && serviceValue > 0 {
-            valorIbs = 0.01
-        }
-        
-        valorCbs := math.Round((serviceValue * 0.0090) * 100) / 100
-        if valorCbs <= 0 && serviceValue > 0 {
-            valorCbs = 0.01
-        }
+		valorIss := math.Round((serviceValue * 0.05) * 100) / 100
+		
+		// Novos Impostos Federais (PIS 0.65% e COFINS 3%)
+		valorPis := math.Round((serviceValue * 0.0065) * 100) / 100
+		if valorPis <= 0 && serviceValue > 0 {
+			valorPis = 0.01
+		}
+		
+		valorCofins := math.Round((serviceValue * 0.03) * 100) / 100
+		if valorCofins <= 0 && serviceValue > 0 {
+			valorCofins = 0.01
+		}
+		
+		// Reforma Tributária (IBS 0.10% e CBS 0.90% - conforme vídeo do contador)
+		valorIbs := math.Round((serviceValue * 0.0010) * 100) / 100
+		if valorIbs <= 0 && serviceValue > 0 {
+			valorIbs = 0.01
+		}
+		
+		valorCbs := math.Round((serviceValue * 0.0090) * 100) / 100
+		if valorCbs <= 0 && serviceValue > 0 {
+			valorCbs = 0.01
+		}
 
-        // Ajuste da discriminação (O Rodrigo pediu para limpar o excesso de informações se possível,
-        // mas mantivemos o essencial para não dar erro fiscal)
-        descricaoRica := fmt.Sprintf("Nota emitida correspondente ao rendimento de gestao e intermediacao financeira.\nValor Base: R$ %.2f", serviceValue)
-        descricaoRica = strings.ReplaceAll(descricaoRica, ".", ",") // Padrão brasileiro
+		// Ajuste da discriminação (O Rodrigo pediu para limpar o excesso de informações se possível,
+		// mas mantivemos o essencial para não dar erro fiscal)
+		descricaoRica := fmt.Sprintf("Nota emitida correspondente ao rendimento de gestao e intermediacao financeira.\nValor Base: R$ %.2f", serviceValue)
+		descricaoRica = strings.ReplaceAll(descricaoRica, ".", ",") // Padrão brasileiro
 
-        payload := map[string]interface{}{
-            "data_emissao":             dataEmissaoBRT,
-            "natureza_operacao":        1, 
-            "optante_simples_nacional": false, 
-            "prestador": map[string]interface{}{
-                "cnpj":                docPrestadorLimpo,
-                "inscricao_municipal": imPrestadorLimpo,
-                "codigo_municipio":    ibgePrestadorInt,
-            },
-            "tomador": tomadorMap,
-            "servico": map[string]interface{}{
-                "discriminacao":               descricaoRica,
-                "item_lista_servico":          itemServico, // Ex: 15.01
-                "codigo_nbs":                  "1.0905.40.00", // 🚀 NOVO: Exigência Gissonline vista no vídeo
-                "valor_servicos":              serviceValue,
-                "valor_iss":                   valorIss,
-                "valor_pis":                   valorPis,    // 🚀 INJETADO PIS
-                "valor_cofins":                valorCofins, // 🚀 INJETADO COFINS
-                "valor_ibs":                   valorIbs,    // 🚀 INJETADO IBS
-                "valor_cbs":                   valorCbs,    // 🚀 INJETADO CBS
-                "valor_liquido":               serviceValue, // Mantém o líquido sem deduzir para não abater no boleto do cliente
-                "aliquota":                    5.0, 
-                "codigo_tributario_municipio": "649999900", 
-                "iss_retido":                  false,
-            },
-        }
+		// 🚀 NOVO PAYLOAD: 100% ADERENTE AO NOVO GISSONLINE DE MAUÁ
+		payload := map[string]interface{}{
+			"data_emissao":             dataEmissaoBRT,
+			"natureza_operacao":        1, 
+			"optante_simples_nacional": false, 
+			"prestador": map[string]interface{}{
+				"cnpj":                docPrestadorLimpo,
+				"inscricao_municipal": imPrestadorLimpo,
+				"codigo_municipio":    ibgePrestadorInt,
+			},
+			"tomador": tomadorMap,
+			"servico": map[string]interface{}{
+				"discriminacao":               descricaoRica,
+				"item_lista_servico":          itemServico, // Ex: 15.01
+				"codigo_nbs":                  "1.0905.40.00", 
+				"valor_servicos":              serviceValue,
+				"valor_iss":                   valorIss,
+				"valor_pis":                   valorPis,    
+				"valor_cofins":                valorCofins, 
+				"valor_ibs":                   valorIbs,    
+				"valor_cbs":                   valorCbs,    
+				"valor_liquido":               serviceValue, 
+				"aliquota":                    5.0, 
+				"codigo_tributario_municipio": "649999900", 
+				"iss_retido":                  false,
+				
+				// 🚀 NOVAS TAGS OBRIGATÓRIAS (IBS/CBS E GISSONLINE)
+				"codigo_indicador_operacao":        "100301",
+				"ibs_cbs_situacao_tributaria":      "010",
+				"ibs_cbs_classificacao_tributaria": "010002",
+				"codigo_municipio_incidencia":      3529401, // IBGE Mauá
+			},
+			
+			// 🚀 TAGS FINAIS OBRIGATÓRIAS DO NOVO LAYOUT V2 DA FOCUS
+			"percentual_total_tributos_simples_nacional": 0.00,
+			"consumidor_final":                           0,
+			"indicador_destinatario":                     0,
+		}
 
 		log.Println("🚀 [DEPLOY V2] Teste antibug!")
 
