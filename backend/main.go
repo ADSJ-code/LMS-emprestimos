@@ -1292,6 +1292,15 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			"codigo_municipio": "3529401", // IBGE Padrão Mauá
 		}
 
+		// 🚀 INJEÇÃO DINÂMICA DE COMPLEMENTO SE EXISTIR NO CADASTRO
+		complemento := ""
+		if strings.TrimSpace(c.Block) != "" { complemento += "Bloco " + strings.TrimSpace(c.Block) + " " }
+		if strings.TrimSpace(c.Floor) != "" { complemento += "Andar " + strings.TrimSpace(c.Floor) }
+		complemento = strings.TrimSpace(complemento)
+		if complemento != "" {
+			enderecoTomador["complemento"] = complemento
+		}
+
 		if len(cepLimpo) == 8 {
 			respViaCep, err := http.Get("https://viacep.com.br/ws/" + cepLimpo + "/json/")
 			if err == nil {
@@ -1303,7 +1312,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// 🚀 Monta o Tomador de forma dinâmica para esconder o email vazio
+		// 🚀 Monta o Tomador de forma dinâmica para esconder campos vazios
 		tomadorMap := map[string]interface{}{
 			campoDoc:       docLimpo,
 			"razao_social": c.Name,
@@ -1313,6 +1322,12 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		emailTomador := strings.TrimSpace(c.Email)
 		if emailTomador != "" {
 			tomadorMap["email"] = emailTomador
+		}
+
+		// 🚀 INJEÇÃO DINÂMICA DE TELEFONE SE EXISTIR
+		telefoneTomador := regexp.MustCompile(`\D`).ReplaceAllString(c.Phone, "")
+		if telefoneTomador != "" {
+			tomadorMap["telefone"] = telefoneTomador
 		}
 
 		docPrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(cnpjPrestador, "")
@@ -1326,35 +1341,12 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 
 		// 🚀 CÁLCULOS TRIBUTÁRIOS COM TRAVA DE VALOR MÍNIMO (1 Centavo)
 		valorIss := math.Round((serviceValue * 0.05) * 100) / 100
-		
-		// Novos Impostos Federais (PIS 0.65% e COFINS 3%)
-		valorPis := math.Round((serviceValue * 0.0065) * 100) / 100
-		if valorPis <= 0 && serviceValue > 0 {
-			valorPis = 0.01
-		}
-		
-		valorCofins := math.Round((serviceValue * 0.03) * 100) / 100
-		if valorCofins <= 0 && serviceValue > 0 {
-			valorCofins = 0.01
-		}
-		
-		// Reforma Tributária (IBS 0.10% e CBS 0.90% - conforme vídeo do contador)
-		valorIbs := math.Round((serviceValue * 0.0010) * 100) / 100
-		if valorIbs <= 0 && serviceValue > 0 {
-			valorIbs = 0.01
-		}
-		
-		valorCbs := math.Round((serviceValue * 0.0090) * 100) / 100
-		if valorCbs <= 0 && serviceValue > 0 {
-			valorCbs = 0.01
-		}
 
-		// Ajuste da discriminação (O Rodrigo pediu para limpar o excesso de informações se possível,
-		// mas mantivemos o essencial para não dar erro fiscal)
+		// Ajuste da discriminação
 		descricaoRica := fmt.Sprintf("Nota emitida correspondente ao rendimento de gestao e intermediacao financeira.\nValor Base: R$ %.2f", serviceValue)
 		descricaoRica = strings.ReplaceAll(descricaoRica, ".", ",") // Padrão brasileiro
 
-		// 🚀 NOVO PAYLOAD: 100% ADERENTE AO NOVO GISSONLINE DE MAUÁ
+		// 🚀 NOVO PAYLOAD: IDÊNTICO AO GABARITO DA FOCUS NFE
 		payload := map[string]interface{}{
 			"data_emissao":             dataEmissaoBRT,
 			"natureza_operacao":        1, 
@@ -1370,17 +1362,13 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 				"item_lista_servico":          itemServico, // Ex: 15.01
 				"codigo_nbs":                  "1.0905.40.00", 
 				"valor_servicos":              serviceValue,
-				"valor_iss":                   valorIss,
-				"valor_pis":                   valorPis,    
-				"valor_cofins":                valorCofins, 
-				"valor_ibs":                   valorIbs,    
-				"valor_cbs":                   valorCbs,    
+				"valor_iss":                   valorIss, 
 				"valor_liquido":               serviceValue, 
 				"aliquota":                    5.0, 
 				"codigo_tributario_municipio": "649999900", 
 				"iss_retido":                  false,
 				
-				// 🚀 NOVAS TAGS OBRIGATÓRIAS (IBS/CBS E GISSONLINE)
+				// 🚀 APENAS AS TAGS SOLICITADAS PELA FOCUS PARA REFORMA TRIBUTÁRIA E GISSONLINE
 				"codigo_indicador_operacao":        "100301",
 				"ibs_cbs_situacao_tributaria":      "010",
 				"ibs_cbs_classificacao_tributaria": "010002",
