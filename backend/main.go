@@ -1045,9 +1045,10 @@ func logsHandler(w http.ResponseWriter, r *http.Request) {
 func dashboardSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	totalActive, _ := loanCollection.CountDocuments(ctx, bson.M{"status": bson.M{"$ne": "Pago"}})
-	// 🚀 EXCLUI DA CONTAGEM DA BASE OS CLIENTES BLOQUEADOS (LISTA NEGRA)
-	totalClients, _ := clientCollection.CountDocuments(ctx, bson.M{"status": bson.M{"$ne": "Bloqueado"}})
+	// 🚀 IGNORA O CLIENTE DE TESTE DOS CONTRATOS ATIVOS
+	totalActive, _ := loanCollection.CountDocuments(ctx, bson.M{"status": bson.M{"$ne": "Pago"}, "client": bson.M{"$ne": "teste andre duarte teste"}})
+	// 🚀 EXCLUI DA CONTAGEM OS BLOQUEADOS E O CLIENTE DE TESTE
+	totalClients, _ := clientCollection.CountDocuments(ctx, bson.M{"status": bson.M{"$ne": "Bloqueado"}, "name": bson.M{"$ne": "teste andre duarte teste"}})
 	json.NewEncoder(w).Encode(map[string]interface{}{"totalActive": totalActive, "clientsRegistered": totalClients})
 }
 
@@ -1339,14 +1340,14 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		brt := time.FixedZone("BRT", -3*60*60)
 		dataEmissaoBRT := time.Now().In(brt).Format("2006-01-02T15:04:05-0700")
 
-		// 🚀 CÁLCULOS TRIBUTÁRIOS COM TRAVA DE VALOR MÍNIMO (1 Centavo)
-		valorIss := math.Round((serviceValue * 0.05) * 100) / 100
+		// 🚀 Valores PIS e COFINS (Apuração Própria - 0,65% e 3%)
+		valorPis := math.Round((serviceValue * 0.0065) * 100) / 100
+		valorCofins := math.Round((serviceValue * 0.03) * 100) / 100
 
-		// Ajuste da discriminação
-		descricaoRica := fmt.Sprintf("Nota emitida correspondente ao rendimento de gestao e intermediacao financeira.\nValor Base: R$ %.2f", serviceValue)
-		descricaoRica = strings.ReplaceAll(descricaoRica, ".", ",") // Padrão brasileiro
+		// 🚀 Discriminação exata solicitada pelo Rodrigo
+		descricaoRica := "SERVIÇO PRESTADO\nValor Aproximado dos Tributos de 10.39%"
 
-		// 🚀 NOVO PAYLOAD: IDÊNTICO AO GABARITO DA FOCUS NFE
+		// 🚀 NOVO PAYLOAD: GABARITO OFICIAL DA FOCUS NFE (Fornecido pelo César)
 		payload := map[string]interface{}{
 			"data_emissao":             dataEmissaoBRT,
 			"natureza_operacao":        1, 
@@ -1358,24 +1359,28 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			},
 			"tomador": tomadorMap,
 			"servico": map[string]interface{}{
-				"discriminacao":               descricaoRica,
-				"item_lista_servico":          itemServico, // Ex: 15.01
-				"codigo_nbs":                  "1.0905.40.00", 
-				"valor_servicos":              serviceValue,
-				"valor_iss":                   valorIss, 
-				"valor_liquido":               serviceValue, 
-				"aliquota":                    5.0, 
-				"codigo_tributario_municipio": "649999900", 
-				"iss_retido":                  false,
-				
-				// 🚀 APENAS AS TAGS SOLICITADAS PELA FOCUS PARA REFORMA TRIBUTÁRIA E GISSONLINE
+				"discriminacao":                    descricaoRica,
+				"valor_servicos":                   serviceValue,
+				"aliquota":                         5.00,
+				"item_lista_servico":               itemServico,
+				"codigo_tributario_municipio":      "649999900",
+				"codigo_nbs":                       "1.0905.40.00",
 				"codigo_indicador_operacao":        "100301",
 				"ibs_cbs_situacao_tributaria":      "010",
 				"ibs_cbs_classificacao_tributaria": "010002",
-				"codigo_municipio_incidencia":      3529401, // IBGE Mauá
+				"codigo_municipio_incidencia":      3529401,
+				"iss_retido":                       false,
+				
+				// 🚀 PIS E COFINS (O segredo do conversor da Focus era o "01")
+				"valor_pis":                      valorPis,
+				"valor_cofins":                   valorCofins,
+				"aliquota_pis":                   0.65,
+				"aliquota_cofins":                3.00,
+				"base_calculo_pis_cofins":        serviceValue,
+				"situacao_tributaria_pis_cofins": "01", 
+				"tipo_retencao_pis_cofins":       2,
 			},
 			
-			// 🚀 TAGS FINAIS OBRIGATÓRIAS DO NOVO LAYOUT V2 DA FOCUS
 			"percentual_total_tributos_simples_nacional": 0.00,
 			"consumidor_final":                           0,
 			"indicador_destinatario":                     0,

@@ -143,9 +143,9 @@ const Clients = () => {
           loanService.getAll()
       ]);
 
-      // 🚀 FILTRO GLOBAL DA LISTA NEGRA: Isola os banidos de toda a página
-      const blockedNames = new Set((clientsData || []).filter(c => c.status === 'Bloqueado').map(c => c.name));
-      const cleanClients = (clientsData || []).filter(c => c.status !== 'Bloqueado');
+      // 🚀 FILTRO GLOBAL (LISTA NEGRA + TESTES): Isola os banidos e os de teste de toda a página
+      const blockedNames = new Set((clientsData || []).filter(c => c.status === 'Bloqueado' || c.name === 'teste andre duarte teste').map(c => c.name));
+      const cleanClients = (clientsData || []).filter(c => c.status !== 'Bloqueado' && c.name !== 'teste andre duarte teste');
       const cleanLoans = (loansData || []).filter(l => !blockedNames.has(l.client));
 
       setClients(cleanClients); // <--- A partir de agora a matemática base só tem os limpos

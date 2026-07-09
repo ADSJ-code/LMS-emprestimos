@@ -1156,10 +1156,6 @@ const Billing = () => {
     const originalDueStr = selectedLoan.nextDue; 
     const isSimple = selectedLoan.interestType === 'SIMPLE';
 
-    const expectedInterest = getSyncedBreakdown(selectedLoan).interest;
-    const totalRequiredInCycle = isSimple ? expectedInterest : selectedLoan.installmentValue;
-    const totalAccumulatedInCycle = valTotal + cycleAcc.interest + cycleAcc.capital;
-    
     let currentSliceDay = null;
     if ((window as any).lastSelectedDay) {
         currentSliceDay = (window as any).lastSelectedDay;
@@ -1167,16 +1163,14 @@ const Billing = () => {
         delete (window as any).lastSelectedDay;
     }
 
-    // 🚀 LÓGICA INTELIGENTE DE AVANÇO DE MÊS + CAIXA DE SELEÇÃO MANUAL
     let shouldAdvanceMonth = false;
     
     if (forceAdvanceMonth) {
         shouldAdvanceMonth = true;
         noteText += " [AVANÇO MANUAL]";
     } else {
-        // 🚀 FIX: Agora só avança se o valor pago AGORA bater com o que faltava na parcela
         const paidNow = isSimple ? valInterest : valTotal;
-        shouldAdvanceMonth = paidNow >= (cycleMissing - 0.10); // Tolerância de centavos
+        shouldAdvanceMonth = paidNow >= (cycleMissing - 0.10);
     }
 
     // 🚀 LÓGICA DE QUITAÇÃO COM DESCONTO
@@ -1184,12 +1178,23 @@ const Billing = () => {
         updatedLoan.status = 'Quitado';
         updatedLoan.installments = 0;
         if (isSimple) updatedLoan.installmentValue = 0;
-        // Perdoa o capital restante que ele não digitou no modal
+        
+        // Se a quitação foi total (abatendo todo o capital que faltava no sistema)
         updatedLoan.totalPaidCapital = updatedLoan.amount; 
         
-        const missedProfit = (updatedLoan.projectedProfit || 0) - updatedLoan.totalPaidInterest;
-        noteText += ` [QUITAÇÃO COM DESCONTO] Perdão de Juros: R$ ${formatMoney(Math.max(0, missedProfit))}`;
-    } else if (balance <= 0.10) {
+        // 🚀 O DESCONTO (PERDÃO) É CALCULADO AQUI:
+        // Pega o Lucro Total Projetado e subtrai o que já pagou + o que pagou hoje de juros. 
+        const profitAlreadyPaid = (selectedLoan.totalPaidInterest || 0);
+        const profitPaidToday = valInterest;
+        const totalExpectedProfit = updatedLoan.projectedProfit || 0;
+        
+        // O que ele deixou de pagar de juros é o desconto
+        const discountGiven = Math.max(0, totalExpectedProfit - (profitAlreadyPaid + profitPaidToday));
+        
+        noteText += ` [QUITAÇÃO COM DESCONTO] Perdão concedido: R$ ${formatMoney(discountGiven)}`;
+    } 
+    // 🚀 FIX DO VÍDEO: Se for Pagamento Mínimo (SIMPLE), NUNCA QUITA AUTOMATICAMENTE só porque avançou o ciclo. Só quita se o saldo devedor zerar.
+    else if (balance <= 0.10) {
         updatedLoan.status = 'Quitado';
         updatedLoan.installments = 0;
         if (isSimple) updatedLoan.installmentValue = 0;
@@ -1218,10 +1223,10 @@ const Billing = () => {
                      updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
                  }
                  
+                 // 🚀 CORREÇÃO DO AVANÇO DE PARCELA
                  if (!isSimple) {
                      updatedLoan.installments = (updatedLoan.installments || 0) - 1;
                      
-                     // 🚀 TRAVA DO INFINITO (R$ ∞): Se "rolou a dívida" e sobrou capital, a parcela NUNCA pode ser zero!
                      if (balance > 0.10 && updatedLoan.installments <= 0) {
                          updatedLoan.installments = 1; 
                      } else if (balance <= 0.10 && updatedLoan.installments <= 0) {
@@ -1235,6 +1240,7 @@ const Billing = () => {
                  noteText += " [PAGAMENTO PARCIAL]";
             }
 
+        // Recálculo da Parcela para Juros Simples com base no novo saldo devedor
         if (isSimple && valCapital > 0) {
             let periodRate = updatedLoan.interestRate / 100;
             if (updatedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
@@ -1272,7 +1278,6 @@ const Billing = () => {
         setLoans(prev => prev.map(l => l.id === updatedLoan.id ? updatedLoan : l));
         setIsPaymentModalOpen(false);
         
-        // 🚀 BUMERANGUE: Retorna pro Modal de Cobrança se ele veio de lá!
         if (returnToModal === 'collection') {
             setIsCollectionModalOpen(true);
             setReturnToModal(null);
@@ -2533,35 +2538,112 @@ const handleFinalSave = async (e: React.FormEvent) => {
                 <input type="datetime-local" value={payDate} onChange={(e) => setPayDate(e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none font-bold text-slate-700 focus:ring-2 focus:ring-blue-500/20"/>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-                <div>
-                    <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Amortização</label>
-                    <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={payCapital} onChange={(e) => setPayCapital(e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none font-black text-slate-700 focus:ring-2 focus:ring-blue-500/20 transition-all" placeholder="0.00"/>
-                </div>
-                <div>
-                    <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Juros + Multa</label>
-                    <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={payInterest} onChange={(e) => setPayInterest(e.target.value)} className="w-full p-3 border border-green-200 rounded-xl outline-none font-black text-green-700 bg-green-50/50 focus:ring-2 focus:ring-green-500/20 transition-all" placeholder="0.00"/>
-                </div>
-            </div>
+            {/* INTERFACE INTELIGENTE: Muda conforme a opção de Quitação */}
+            {isDiscountSettlement ? (
+                <div className="p-4 bg-purple-50 border border-purple-200 rounded-2xl space-y-4 animate-in fade-in zoom-in-95">
+                    <div className="flex justify-between items-start border-b border-purple-200 pb-3">
+                        <div>
+                            <h4 className="text-purple-900 font-black text-sm uppercase">Modo de Quitação Ativo</h4>
+                            <p className="text-purple-700 text-xs">O contrato será encerrado imediatamente após este pagamento.</p>
+                        </div>
+                        <button onClick={() => setIsDiscountSettlement(false)} className="text-xs bg-white text-purple-600 font-bold px-3 py-1 rounded-lg border border-purple-200 hover:bg-purple-100">Cancelar Quitação</button>
+                    </div>
 
-            {/* 🚀 A CHAVE MÁGICA: QUITAÇÃO COM DESCONTO */}
-            <div className="flex items-center gap-2 p-3 bg-purple-50 border border-purple-200 rounded-xl">
-                <input 
-                    type="checkbox" 
-                    id="isDiscountSettlement" 
-                    checked={isDiscountSettlement} 
-                    onChange={(e) => setIsDiscountSettlement(e.target.checked)} 
-                    className="w-5 h-5 rounded text-purple-600 focus:ring-purple-500 cursor-pointer" 
-                />
-                <label htmlFor="isDiscountSettlement" className="text-sm font-bold text-purple-800 cursor-pointer leading-tight">
-                    Quitação com Desconto (Perdoar o resto dos juros e finalizar contrato)
-                </label>
-            </div>
+                    {(() => {
+                        const totalCapitalDebt = Math.max(0, (parseFloat(selectedLoan.amount) || 0) - (selectedLoan.totalPaidCapital || 0));
+                        const totalExpectedProfit = selectedLoan.projectedProfit || 0;
+                        const profitAlreadyPaid = selectedLoan.totalPaidInterest || 0;
+                        const totalInterestDebt = Math.max(0, totalExpectedProfit - profitAlreadyPaid);
+                        
+                        const totalDebt = totalCapitalDebt + totalInterestDebt;
+                        const userPaying = (parseFloat(payCapital) || 0) + (parseFloat(payInterest) || 0);
+                        const suggestedDiscount = Math.max(0, totalDebt - userPaying);
 
-            <div className="bg-slate-100 border border-slate-200 p-4 rounded-xl flex justify-between items-center shadow-inner">
-                <span className="text-xs font-bold text-slate-500 uppercase">Total Selecionado:</span>
-                <span className="text-xl font-black text-slate-900">R$ {formatMoney(Number(payCapital) + Number(payInterest))}</span>
-            </div>
+                        return (
+                            <>
+                                <div className="grid grid-cols-2 gap-3 text-sm">
+                                    <div className="bg-white p-3 rounded-xl border border-purple-100">
+                                        <span className="block text-[10px] uppercase font-bold text-slate-400">Capital Restante</span>
+                                        <span className="font-black text-slate-700">R$ {formatMoney(totalCapitalDebt)}</span>
+                                    </div>
+                                    <div className="bg-white p-3 rounded-xl border border-purple-100">
+                                        <span className="block text-[10px] uppercase font-bold text-slate-400">Juros Restantes</span>
+                                        <span className="font-black text-slate-700">R$ {formatMoney(totalInterestDebt)}</span>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-[10px] font-black uppercase text-purple-800 mb-1">Amortização (Exigido)</label>
+                                        <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" 
+                                            value={payCapital} 
+                                            onChange={(e) => setPayCapital(e.target.value)} 
+                                            className="w-full p-3 border border-purple-300 rounded-xl outline-none font-black text-purple-900 bg-white focus:ring-2 focus:ring-purple-500/20" 
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-black uppercase text-green-700 mb-1">Juros Pagos Agora</label>
+                                        <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" 
+                                            value={payInterest} 
+                                            onChange={(e) => setPayInterest(e.target.value)} 
+                                            className="w-full p-3 border border-green-300 rounded-xl outline-none font-black text-green-800 bg-green-50 focus:ring-2 focus:ring-green-500/20" 
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="bg-white border border-purple-200 p-4 rounded-xl flex justify-between items-center shadow-sm">
+                                    <div>
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Desconto / Perdão Calculado:</span>
+                                        <span className="text-sm font-bold text-orange-500">R$ {formatMoney(suggestedDiscount)}</span>
+                                    </div>
+                                    <div className="text-right">
+                                        <span className="text-[10px] font-bold text-purple-600 uppercase block">Total a Receber Agora:</span>
+                                        <span className="text-2xl font-black text-purple-900">R$ {formatMoney(userPaying)}</span>
+                                    </div>
+                                </div>
+                            </>
+                        );
+                    })()}
+                </div>
+            ) : (
+                <>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Amortização</label>
+                            <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={payCapital} onChange={(e) => setPayCapital(e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none font-black text-slate-700 focus:ring-2 focus:ring-blue-500/20 transition-all" placeholder="0.00"/>
+                        </div>
+                        <div>
+                            <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Juros + Multa</label>
+                            <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" value={payInterest} onChange={(e) => setPayInterest(e.target.value)} className="w-full p-3 border border-green-200 rounded-xl outline-none font-black text-green-700 bg-green-50/50 focus:ring-2 focus:ring-green-500/20 transition-all" placeholder="0.00"/>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 p-3 bg-purple-50 border border-purple-200 rounded-xl hover:bg-purple-100 transition-colors">
+                        <input 
+                            type="checkbox" 
+                            id="isDiscountSettlement" 
+                            checked={isDiscountSettlement} 
+                            onChange={(e) => {
+                                setIsDiscountSettlement(e.target.checked);
+                                if (e.target.checked) {
+                                    // Se marcou quitação, preenche o capital com o saldo devedor atual
+                                    const currentDebt = calculateCapitalBalance(selectedLoan);
+                                    setPayCapital(currentDebt.toFixed(2));
+                                }
+                            }} 
+                            className="w-5 h-5 rounded text-purple-600 focus:ring-purple-500 cursor-pointer" 
+                        />
+                        <label htmlFor="isDiscountSettlement" className="text-sm font-bold text-purple-800 cursor-pointer leading-tight flex-1">
+                            Quitação com Desconto (Encerrar Contrato)
+                        </label>
+                    </div>
+
+                    <div className="bg-slate-100 border border-slate-200 p-4 rounded-xl flex justify-between items-center shadow-inner">
+                        <span className="text-xs font-bold text-slate-500 uppercase">Total Selecionado:</span>
+                        <span className="text-xl font-black text-slate-900">R$ {formatMoney(Number(payCapital) + Number(payInterest))}</span>
+                    </div>
+                </>
+            )}
 
             {/* 🚀 BANNER INTELIGENTE: Calcula ao vivo o que o cliente está digitando na tela */}
             {cycleMissing > 0 && !forceAdvanceMonth && (

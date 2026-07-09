@@ -317,9 +317,9 @@ const Dashboard = () => {
     try {
       const [loans, clients] = await Promise.all([ loanService.getAll(), clientService.getAll() ]);
       
-      // 🚀 FILTRO GLOBAL DA LISTA NEGRA: Remove clientes bloqueados de TODAS as contas e listas
-      const blockedNames = new Set((clients || []).filter(c => c.status === 'Bloqueado').map(c => c.name));
-      const cleanClients = (clients || []).filter(c => c.status !== 'Bloqueado');
+      // 🚀 FILTRO GLOBAL (LISTA NEGRA + TESTES): Remove clientes bloqueados e o de teste de TODAS as contas e listas
+      const blockedNames = new Set((clients || []).filter(c => c.status === 'Bloqueado' || c.name === 'teste andre duarte teste').map(c => c.name));
+      const cleanClients = (clients || []).filter(c => c.status !== 'Bloqueado' && c.name !== 'teste andre duarte teste');
       const cleanLoans = (loans || []).filter(l => !blockedNames.has(l.client));
 
       const safeLoans = cleanLoans.map(l => ({
