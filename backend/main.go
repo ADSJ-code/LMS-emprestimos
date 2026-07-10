@@ -1381,9 +1381,14 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 				"tipo_retencao_pis_cofins":       2,
 			},
 			
-			"percentual_total_tributos_simples_nacional": 0.00,
-			"consumidor_final":                           0,
-			"indicador_destinatario":                     0,
+			// 🚀 IBPT OFICIAL: Adicionado conforme orientação do suporte da Focus
+			"percentual_total_tributos_federais":   5.39,
+			"percentual_total_tributos_municipais": 5.00,
+			"percentual_total_tributos_estaduais":  0.00,
+			// A tag do Simples Nacional foi removida para não gerar o erro 'pTotTribSN' no XML
+			
+			"consumidor_final":       0,
+			"indicador_destinatario": 0,
 		}
 
 		log.Println("🚀 [DEPLOY V2] Teste antibug!")
