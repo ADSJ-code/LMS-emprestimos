@@ -1337,15 +1337,15 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		ibgePrestadorInt, _ := strconv.Atoi(ibgePrestadorLimpo)
 
 		// 🚀 FORÇA O FUSO HORÁRIO DE BRASÍLIA E O FORMATO EXATO DA FOCUS (-0300)
-		brt := time.FixedZone("BRT", -3*60*60)
-		dataEmissaoBRT := time.Now().In(brt).Format("2006-01-02T15:04:05-0700")
+        brt := time.FixedZone("BRT", -3*60*60)
+        dataEmissaoBRT := time.Now().In(brt).Format("2006-01-02T15:04:05-0700")
 
-		// 🚀 Valores PIS e COFINS (Apuração Própria - 0,65% e 3%)
-		valorPis := math.Round((serviceValue * 0.0065) * 100) / 100
-		valorCofins := math.Round((serviceValue * 0.03) * 100) / 100
+        // 🚀 Valores PIS e COFINS (Apuração Própria - 0,65% e 3%) - TRUNCADOS (Exigência GissOnline)
+        valorPis := math.Trunc((serviceValue * 0.0065) * 100) / 100
+        valorCofins := math.Trunc((serviceValue * 0.03) * 100) / 100
 
-		// 🚀 Discriminação exata solicitada pelo Rodrigo
-		descricaoRica := "SERVIÇO PRESTADO\nValor Aproximado dos Tributos de 10.39%"
+        // 🚀 Discriminação exata solicitada pelo Rodrigo
+        descricaoRica := "SERVIÇO PRESTADO\nValor Aproximado dos Tributos de 10.39%"
 
 		// 🚀 NOVO PAYLOAD: GABARITO OFICIAL DA FOCUS NFE (Fornecido pelo César)
 		payload := map[string]interface{}{
