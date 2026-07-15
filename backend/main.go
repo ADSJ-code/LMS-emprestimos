@@ -485,33 +485,39 @@ func main() {
 	mux.HandleFunc("/api/admin/restore", adminMiddleware(restoreDatabaseHandler))
 
 	// SPA Server (Frontend)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		possiveisCaminhos := []string{"dist", "backend/dist", "../backend/dist"}
-		var caminhoDist string
-		for _, p := range possiveisCaminhos {
-			if info, err := os.Stat(p); err == nil && info.IsDir() {
-				caminhoDist = p
-				break
-			}
-		}
+    mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        possiveisCaminhos := []string{"dist", "backend/dist", "../backend/dist"}
+        var caminhoDist string
+        for _, p := range possiveisCaminhos {
+            if info, err := os.Stat(p); err == nil && info.IsDir() {
+                caminhoDist = p
+                break
+            }
+        }
 
-		if caminhoDist == "" {
-			if strings.HasPrefix(r.URL.Path, "/api") {
-				http.NotFound(w, r)
-				return
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprintf(w, "<h3>Backend Ativo</h3><p>Pasta 'dist' não encontrada. Rode 'npm run build' no React.</p>")
-			return
-		}
+        if caminhoDist == "" {
+            if strings.HasPrefix(r.URL.Path, "/api") {
+                http.NotFound(w, r)
+                return
+            }
+            w.Header().Set("Content-Type", "text/html; charset=utf-8")
+            fmt.Fprintf(w, "<h3>Backend Ativo</h3><p>Pasta 'dist' não encontrada. Rode 'npm run build' no React.</p>")
+            return
+        }
 
-		path := filepath.Join(caminhoDist, r.URL.Path)
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			http.ServeFile(w, r, filepath.Join(caminhoDist, "index.html"))
-			return
-		}
-		http.FileServer(http.Dir(caminhoDist)).ServeHTTP(w, r)
-	})
+        // 🚀 ANTICACHE: Força o navegador a descarregar sempre a versão mais recente da aplicação
+        w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+        w.Header().Set("Pragma", "no-cache")
+        w.Header().Set("Expires", "0")
+
+        path := filepath.Join(caminhoDist, r.URL.Path)
+        if _, err := os.Stat(path); os.IsNotExist(err) {
+            http.ServeFile(w, r, filepath.Join(caminhoDist, "index.html"))
+            return
+        }
+        
+        http.FileServer(http.Dir(caminhoDist)).ServeHTTP(w, r)
+    })
 
 	handler := cors.New(cors.Options{
 		AllowedOrigins: []string{"*"},
@@ -1340,9 +1346,11 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
         brt := time.FixedZone("BRT", -3*60*60)
         dataEmissaoBRT := time.Now().In(brt).Format("2006-01-02T15:04:05-0700")
 
-        // 🚀 Valores PIS e COFINS (Apuração Própria - 0,65% e 3%) - TRUNCADOS (Exigência GissOnline)
-        valorPis := math.Trunc((serviceValue * 0.0065) * 100) / 100
-        valorCofins := math.Trunc((serviceValue * 0.03) * 100) / 100
+        // 🚀 Valores PIS e COFINS (Apuração Própria - 0,65% e 3%)
+        // GissOnline foi feita em .NET, logo usam "Banker's Rounding" (Arredondar para o par mais próximo).
+        // A função math.RoundToEven do Golang faz exatamente isso!
+        valorPis := math.RoundToEven((serviceValue * 0.0065) * 100) / 100
+        valorCofins := math.RoundToEven((serviceValue * 0.03) * 100) / 100
 
         // 🚀 Discriminação exata solicitada pelo Rodrigo
         descricaoRica := "SERVIÇO PRESTADO\nValor Aproximado dos Tributos de 10.39%"

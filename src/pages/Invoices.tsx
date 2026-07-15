@@ -325,6 +325,27 @@ const Invoices = () => {
     }
   };
 
+  // 🚀 FUNÇÃO PARA FORÇAR O NOME DO ARQUIVO PDF
+  const handleDownloadPDF = async (url: string, inv: any) => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("CORS block");
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      // Define o nome do ficheiro conforme pedido
+      link.download = `${inv.id} ${inv.client} R$ ${formatMoney(inv.serviceValue)}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      // Fallback de segurança: se a Focus NFe bloquear o fetch via CORS, abre o link original noutra aba
+      window.open(url, '_blank');
+    }
+  };
+
   return (
     <Layout>
       <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
@@ -495,9 +516,9 @@ const Invoices = () => {
                         <div className="flex items-center justify-between min-w-[160px] gap-2">
                           <div className="flex-1 flex justify-center">
                             {inv.status === 'AUTORIZADA' && inv.pdfUrl ? (
-                              <a href={inv.pdfUrl} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 flex items-center gap-1 text-xs font-bold bg-blue-50 px-3 py-1.5 rounded-lg transition-colors border border-transparent hover:border-blue-200 w-fit">
+                              <button onClick={() => handleDownloadPDF(inv.pdfUrl!, inv)} className="text-blue-600 hover:text-blue-800 flex items-center gap-1 text-xs font-bold bg-blue-50 px-3 py-1.5 rounded-lg transition-colors border border-transparent hover:border-blue-200 w-fit">
                                 <Download size={14}/> Baixar PDF
-                              </a>
+                              </button>
                             ) : inv.status === 'EMITIDA_MANUAL' ? (
                               <span className="text-[10px] text-purple-500 font-bold max-w-[150px] inline-block leading-tight truncate">Resolvido Manualmente</span>
                             ) : inv.status === 'ERRO' ? (
