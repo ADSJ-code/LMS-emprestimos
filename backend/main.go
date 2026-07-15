@@ -359,14 +359,15 @@ type BackupData struct {
 
 // 🚀 NOVA ESTRUTURA: Modelo da Nota Fiscal
 type InvoiceRecord struct {
-	ID           string    `json:"id" bson:"_id,omitempty"`
-	Client       string    `json:"client" bson:"client"`
-	CPF          string    `json:"cpf" bson:"cpf"`
-	ServiceValue float64   `json:"serviceValue" bson:"serviceValue"`
-	IssueDate    time.Time `json:"issueDate" bson:"issueDate"`
-	Status       string    `json:"status" bson:"status"`
-	PdfUrl       string    `json:"pdfUrl,omitempty" bson:"pdfUrl,omitempty"`
-	ErrorMsg     string    `json:"errorMsg,omitempty" bson:"errorMsg,omitempty"`
+	ID            string    `json:"id" bson:"_id,omitempty"`
+	Client        string    `json:"client" bson:"client"`
+	CPF           string    `json:"cpf" bson:"cpf"`
+	ServiceValue  float64   `json:"serviceValue" bson:"serviceValue"`
+	IssueDate     time.Time `json:"issueDate" bson:"issueDate"`
+	Status        string    `json:"status" bson:"status"`
+	PdfUrl        string    `json:"pdfUrl,omitempty" bson:"pdfUrl,omitempty"`
+	ErrorMsg      string    `json:"errorMsg,omitempty" bson:"errorMsg,omitempty"`
+	InvoiceNumber string    `json:"invoiceNumber,omitempty" bson:"invoiceNumber,omitempty"` // 🚀 NÚMERO REAL DA PREFEITURA
 }
 
 // 🚀 NOVA ESTRUTURA: Modelo de Fluxo de Caixa (Caixa Interno)
@@ -1512,6 +1513,10 @@ func webhookInvoiceHandler(w http.ResponseWriter, r *http.Request) {
 		updateFields["status"] = "AUTORIZADA"
 		if url, ok := webhookData["url"].(string); ok {
 			updateFields["pdfUrl"] = url
+		}
+		// 🚀 CAPTURA O NÚMERO REAL DA NOTA FISCAL DEVOLVIDO PELA FOCUS/SEFAZ
+		if numero, ok := webhookData["numero"]; ok && numero != nil {
+			updateFields["invoiceNumber"] = fmt.Sprintf("%v", numero)
 		}
 	case "erro_autorizacao", "cancelado":
 		updateFields["status"] = "ERRO"

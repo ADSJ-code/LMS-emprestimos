@@ -334,8 +334,11 @@ const Invoices = () => {
       const blobUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = blobUrl;
-      // Define o nome do ficheiro conforme pedido
-      link.download = `${inv.id} ${inv.client} R$ ${formatMoney(inv.serviceValue)}.pdf`;
+      
+      // 🚀 Define o nome do ficheiro usando o NÚMERO REAL da Sefaz
+      const numeroNota = inv.invoiceNumber || inv.id;
+      link.download = `${numeroNota} ${inv.client} R$ ${formatMoney(inv.serviceValue)}.pdf`;
+      
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -485,7 +488,13 @@ const Invoices = () => {
                 ) : (
                   filteredInvoices.map((inv) => (
                     <tr key={inv.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-4 font-mono font-bold text-slate-700">{inv.id}</td>
+                      <td className="p-4 font-mono font-bold text-slate-700">
+                          {inv.invoiceNumber ? (
+                              <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-md text-xs">NFS-e {inv.invoiceNumber}</span>
+                          ) : (
+                              inv.id
+                          )}
+                      </td>
                       <td className="p-4 text-sm font-medium text-slate-600">
                         {inv.issueDate ? new Date(inv.issueDate).toLocaleDateString('pt-BR') : '-'} 
                         {inv.issueDate && <span className="text-slate-400 text-xs ml-1">{new Date(inv.issueDate).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</span>}
