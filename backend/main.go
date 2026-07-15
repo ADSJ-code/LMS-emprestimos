@@ -1347,16 +1347,10 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
         dataEmissaoBRT := time.Now().In(brt).Format("2006-01-02T15:04:05-0700")
 
         // 🚀 Valores PIS e COFINS (Apuração Própria - 0,65% e 3%)
-        // MATEMÁTICA DE INTEIROS ABSOLUTA: Evita qualquer falha de arredondamento de float (E160 Sefaz Mauá)
-        baseCents := int64(math.Round(serviceValue * 100))
-        
-        // Multiplica e divide usando inteiros (o Go trunca automaticamente qualquer decimal residual)
-        // 0.65% = 65 / 10000  ||  3.00% = 300 / 10000
-        pisCents := (baseCents * 65) / 10000
-        cofinsCents := (baseCents * 300) / 10000
-
-        valorPis := float64(pisCents) / 100.0
-        valorCofins := float64(cofinsCents) / 100.0
+		// ARREDONDAMENTO COMERCIAL PADRÃO (Round Half Up)
+		// Ex: 350 * 0.0065 = 2.275 -> math.Round() sobe para 2.28 exatos.
+		valorPis := math.Round(serviceValue * 0.0065 * 100) / 100.0
+		valorCofins := math.Round(serviceValue * 0.03 * 100) / 100.0
 
         // 🚀 Discriminação exata solicitada pelo Rodrigo
         descricaoRica := "SERVIÇO PRESTADO\nValor Aproximado dos Tributos de 10.39%"
