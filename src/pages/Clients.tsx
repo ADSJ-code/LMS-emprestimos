@@ -4,7 +4,7 @@ import {
   Search, Plus, MoreVertical, Edit2, Trash2, Eye, 
   MapPin, Phone, Mail, User, ShieldCheck, AlertCircle, RefreshCw, FileText, Upload, Loader2,
   DollarSign, CheckCircle, XCircle, Clock, TrendingUp, TrendingDown, Users, Calendar, Activity, List, Check, ShieldAlert,
-  Home, Layers, CreditCard, Download, Filter, ChevronDown
+  Home, Layers, CreditCard, Download, Filter, ChevronDown, Database
 } from 'lucide-react';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
@@ -1363,6 +1363,75 @@ const Clients = () => {
               <button onClick={() => { setGlobalMetricModal(null); setExpandedMonth(null); }} className="w-full py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/20">Fechar Janela</button>
           </div>
       </Modal>
+
+      {/* 🚀 MODAL DO CONCILIADOR DE PLANILHA (AUDITOR OMNISCIENTE) */}
+      <Modal isOpen={isAuditorModalOpen} onClose={() => setIsAuditorModalOpen(false)} title="Resultado da Conciliação">
+          {isAuditing ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                  <Loader2 className="animate-spin text-blue-600 mb-4" size={48} />
+                  <p className="text-slate-700 font-black text-lg">Cruzando dados Omniscientes...</p>
+                  <p className="text-xs text-slate-400 mt-2 text-center px-4">Lendo Nomes, Apelidos e CPFs.<br/>Isso pode levar alguns segundos dependendo do tamanho da planilha.</p>
+              </div>
+          ) : auditorResults ? (
+              <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                  
+                  {/* SÓ NO SISTEMA */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-sm">
+                      <h4 className="text-sm font-black text-slate-800 mb-2 flex items-center gap-2">
+                          <Database size={16} className="text-blue-500"/> 
+                          Faltam na Planilha ({auditorResults.onlyInSystem.length})
+                      </h4>
+                      <p className="text-[10px] text-slate-500 mb-3 leading-relaxed">Clientes que estão <b>ativos no sistema</b>, mas que o leitor não encontrou na sua planilha do Excel.</p>
+                      
+                      {auditorResults.onlyInSystem.length === 0 ? (
+                          <p className="text-xs text-green-700 font-bold bg-green-100 p-3 rounded-lg border border-green-200 flex items-center gap-2"><CheckCircle size={16}/> Perfeito! Todos do sistema estão na planilha.</p>
+                      ) : (
+                          <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                              {auditorResults.onlyInSystem.map((c: any) => (
+                                  <div key={c.id} className="bg-white p-3 border border-slate-200 rounded-lg flex justify-between items-center shadow-sm hover:border-blue-300 transition-colors">
+                                      <div>
+                                          <p className="text-xs font-bold text-slate-800">{c.name}</p>
+                                          {getNickname(c.observations) && <p className="text-[10px] text-blue-600 font-bold mt-0.5 uppercase tracking-wider bg-blue-50 px-2 py-0.5 rounded inline-block">Apelido: {getNickname(c.observations)}</p>}
+                                      </div>
+                                      <span className="text-[10px] font-mono text-slate-400 bg-slate-50 px-2 py-1 rounded border border-slate-100">{c.cpf || 'S/ CPF'}</span>
+                                  </div>
+                              ))}
+                          </div>
+                      )}
+                  </div>
+
+                  {/* SÓ NA PLANILHA */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-sm">
+                      <h4 className="text-sm font-black text-slate-800 mb-2 flex items-center gap-2">
+                          <FileText size={16} className="text-orange-500"/> 
+                          Faltam no Sistema ({auditorResults.onlyInExcel.length})
+                      </h4>
+                      <p className="text-[10px] text-slate-500 mb-3 leading-relaxed">Nomes encontrados na sua planilha que <b>não existem no sistema</b> ou o nome/apelido está escrito de forma muito diferente.</p>
+                      
+                      {auditorResults.onlyInExcel.length === 0 ? (
+                          <p className="text-xs text-green-700 font-bold bg-green-100 p-3 rounded-lg border border-green-200 flex items-center gap-2"><CheckCircle size={16}/> Perfeito! Todos da planilha estão no sistema.</p>
+                      ) : (
+                          <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                              {auditorResults.onlyInExcel.map((ec: any, i: number) => (
+                                  <div key={i} className="bg-white p-3 border border-orange-100 rounded-lg flex justify-between items-center shadow-sm hover:border-orange-300 transition-colors">
+                                      <p className="text-xs font-bold text-orange-800">{ec.name || 'Sem Nome na Linha'}</p>
+                                      {ec.cpf && <span className="text-[10px] font-mono text-slate-400 bg-slate-50 px-2 py-1 rounded border border-slate-100">{ec.cpf}</span>}
+                                  </div>
+                              ))}
+                          </div>
+                      )}
+                  </div>
+
+              </div>
+          ) : null}
+          
+          <div className="mt-4 pt-4 border-t border-slate-100 flex justify-end">
+              <button onClick={() => setIsAuditorModalOpen(false)} className="w-full md:w-auto px-8 py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 shadow-lg transition-all">
+                  Fechar Relatório
+              </button>
+          </div>
+      </Modal>
+
     </Layout>
   );
 };
