@@ -2550,7 +2550,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     </div>
 
                     {(() => {
-                        const totalCapitalDebt = Math.max(0, (parseFloat(selectedLoan.amount) || 0) - (selectedLoan.totalPaidCapital || 0));
+                        const totalCapitalDebt = Math.max(0, (Number(selectedLoan.amount) || 0) - (Number(selectedLoan.totalPaidCapital) || 0));
                         const totalExpectedProfit = selectedLoan.projectedProfit || 0;
                         const profitAlreadyPaid = selectedLoan.totalPaidInterest || 0;
                         const totalInterestDebt = Math.max(0, totalExpectedProfit - profitAlreadyPaid);
