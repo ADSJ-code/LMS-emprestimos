@@ -659,7 +659,7 @@ const Clients = () => {
     if (confirm('Excluir cliente?')) { try { await clientService.delete(id.toString()); fetchData(); } catch (err) { alert('Erro.'); } }
   };
 
-  // 🚀 NOVA FUNÇÃO: Motor de Auditoria / Conciliação de Planilha
+  // 🚀 NOVA FUNÇÃO: Motor de Auditoria / Conciliação de Planilha (LEITOR OMNISCIENTE)
   const handleAuditorUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -673,30 +673,40 @@ const Clients = () => {
           await workbook.xlsx.load(await file.arrayBuffer());
           const worksheet = workbook.worksheets[0];
 
-          let cpfCol = -1;
-          let nameCol = -1;
           const excelClients: any[] = [];
 
-          // Vasculha a planilha para encontrar as colunas de Nome e CPF
+          // 🚀 LEITOR OMNISCIENTE: Ignora cabeçalhos e posições de colunas!
+          // Lê todas as linhas e captura qualquer coisa que pareça um Nome/Apelido ou CPF
           worksheet.eachRow((row, rowNumber) => {
-              if (rowNumber === 1) {
-                  row.eachCell((cell, colNumber) => {
-                      const val = String(cell.value || '').toUpperCase();
-                      if (val.includes('CPF') || val.includes('CNPJ') || val.includes('DOCUMENTO')) cpfCol = colNumber;
-                      if (val.includes('NOME') || val.includes('CLIENTE')) nameCol = colNumber;
-                  });
-              } else {
-                  if (cpfCol !== -1 && nameCol !== -1) {
-                      const cpfRaw = String(row.getCell(cpfCol).value || '');
-                      const cpf = cpfRaw.replace(/\D/g, '');
-                      const name = String(row.getCell(nameCol).value || '').trim();
-                      if (cpf || name) excelClients.push({ cpf, name, row: rowNumber });
+              let rowName = '';
+              let rowCpf = '';
+
+              row.eachCell((cell) => {
+                  const val = String(cell.value || '').trim();
+                  if (!val) return;
+
+                  const numbersOnly = val.replace(/\D/g, '');
+                  // Se a célula for um CPF ou CNPJ puro
+                  if (numbersOnly.length === 11 || numbersOnly.length === 14) {
+                      rowCpf = numbersOnly;
                   }
+                  // Se for um texto com mais de 3 letras e não for só número, assume que é Nome/Apelido
+                  else if (val.length > 3 && isNaN(Number(val))) {
+                      // Ignora se for apenas a palavra do cabeçalho
+                      if (!val.toUpperCase().includes('NOME') && !val.toUpperCase().includes('CLIENTE') && !val.toUpperCase().includes('CPF')) {
+                          // Se houver várias colunas com texto, junta tudo para não perder o apelido
+                          rowName = rowName ? `${rowName} ${val}` : val;
+                      }
+                  }
+              });
+
+              if (rowName || rowCpf) {
+                  excelClients.push({ cpf: rowCpf, name: rowName, row: rowNumber });
               }
           });
 
-          if (cpfCol === -1 || nameCol === -1) {
-              alert("A planilha precisa de ter uma coluna chamada 'CPF' e outra 'NOME' na primeira linha (cabeçalho).");
+          if (excelClients.length === 0) {
+              alert("A planilha parece estar vazia ou os dados não puderam ser lidos.");
               setIsAuditorModalOpen(false);
               setIsAuditing(false);
               return;
@@ -706,32 +716,45 @@ const Clients = () => {
           const onlyInExcel: any[] = [];
           const divergences: any[] = [];
 
-          // 1. Procurar quem está no Sistema mas falta na Planilha (ou diverge)
+          // 1. Procurar quem está no Sistema mas falta na Planilha
           clients.forEach(dbClient => {
               if (dbClient.name === 'teste andre duarte teste') return; // Ignora os testes
               const dbCpf = (dbClient.cpf || '').replace(/\D/g, '');
               const dbNameNorm = normalizeString(dbClient.name);
+              const dbNickNorm = normalizeString(getNickname(dbClient.observations)); // 🚀 PEGA O APELIDO DO SISTEMA
 
-              const matchInExcel = excelClients.find(ec => (dbCpf && ec.cpf === dbCpf) || (normalizeString(ec.name) === dbNameNorm));
+              const matchInExcel = excelClients.find(ec => {
+                  const ecNameNorm = normalizeString(ec.name);
+                  
+                  const isCpfMatch = dbCpf && ec.cpf === dbCpf;
+                  const isNameMatch = ecNameNorm === dbNameNorm;
+                  // 🚀 MAGIA DO APELIDO: Verifica se o nome do Excel contém o apelido exato do sistema (Ex: Excel "ADRIANA ( PATRICIA BAIXADA )" dá match com "PATRICIA BAIXADA")
+                  const isNickMatch = dbNickNorm && (ecNameNorm === dbNickNorm || ecNameNorm.includes(dbNickNorm) || dbNickNorm.includes(ecNameNorm));
+
+                  return isCpfMatch || isNameMatch || isNickMatch;
+              });
 
               if (!matchInExcel) {
                   onlyInSystem.push(dbClient);
-              } else {
-                  // Achou, mas os dados divergem (Ex: CPF igual mas nomes totalmente diferentes, ou vice-versa)
-                  if (dbCpf && matchInExcel.cpf === dbCpf && normalizeString(matchInExcel.name) !== dbNameNorm) {
-                      divergences.push({ dbClient, excelName: matchInExcel.name, excelCpf: matchInExcel.cpf });
-                  } else if (!dbCpf && normalizeString(matchInExcel.name) === dbNameNorm && matchInExcel.cpf) {
-                      divergences.push({ dbClient, excelName: matchInExcel.name, excelCpf: matchInExcel.cpf });
-                  }
               }
           });
 
           // 2. Procurar quem está na Planilha mas falta no Sistema
           excelClients.forEach(ec => {
+              const ecNameNorm = normalizeString(ec.name);
+              
               const matchInDb = clients.find(dbC => {
                   const dbCpf = (dbC.cpf || '').replace(/\D/g, '');
-                  return (ec.cpf && dbCpf === ec.cpf) || (normalizeString(dbC.name) === normalizeString(ec.name));
+                  const dbNameNorm = normalizeString(dbC.name);
+                  const dbNickNorm = normalizeString(getNickname(dbC.observations));
+
+                  const isCpfMatch = ec.cpf && dbCpf === ec.cpf;
+                  const isNameMatch = ecNameNorm === dbNameNorm;
+                  const isNickMatch = dbNickNorm && (ecNameNorm === dbNickNorm || ecNameNorm.includes(dbNickNorm) || dbNickNorm.includes(ecNameNorm));
+
+                  return isCpfMatch || isNameMatch || isNickMatch;
               });
+
               if (!matchInDb) {
                   onlyInExcel.push(ec);
               }
