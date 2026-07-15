@@ -35,6 +35,11 @@ const Clients = () => {
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   
+  // 🚀 NOVOS ESTADOS: Auditoria de Planilha (Conciliador)
+  const [isAuditorModalOpen, setIsAuditorModalOpen] = useState(false);
+  const [isAuditing, setIsAuditing] = useState(false);
+  const [auditorResults, setAuditorResults] = useState<{onlyInSystem: any[], onlyInExcel: any[], divergences: any[]} | null>(null);
+
   // 🚨 ESTADOS ADICIONADOS PARA EXPORTAÇÃO E FILTROS INTELIGENTES
   const [selectedIds, setSelectedIds] = useState<(string|number)[]>([]);
   const [filterStatus, setFilterStatus] = useState<'Todos' | 'Ativos' | 'Quitados' | 'Inadimplentes' | 'Acordo'>('Todos');
@@ -654,11 +659,104 @@ const Clients = () => {
     if (confirm('Excluir cliente?')) { try { await clientService.delete(id.toString()); fetchData(); } catch (err) { alert('Erro.'); } }
   };
 
+  // 🚀 NOVA FUNÇÃO: Motor de Auditoria / Conciliação de Planilha
+  const handleAuditorUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      setIsAuditing(true);
+      setIsAuditorModalOpen(true);
+      setAuditorResults(null);
+
+      try {
+          const workbook = new ExcelJS.Workbook();
+          await workbook.xlsx.load(await file.arrayBuffer());
+          const worksheet = workbook.worksheets[0];
+
+          let cpfCol = -1;
+          let nameCol = -1;
+          const excelClients: any[] = [];
+
+          // Vasculha a planilha para encontrar as colunas de Nome e CPF
+          worksheet.eachRow((row, rowNumber) => {
+              if (rowNumber === 1) {
+                  row.eachCell((cell, colNumber) => {
+                      const val = String(cell.value || '').toUpperCase();
+                      if (val.includes('CPF') || val.includes('CNPJ') || val.includes('DOCUMENTO')) cpfCol = colNumber;
+                      if (val.includes('NOME') || val.includes('CLIENTE')) nameCol = colNumber;
+                  });
+              } else {
+                  if (cpfCol !== -1 && nameCol !== -1) {
+                      const cpfRaw = String(row.getCell(cpfCol).value || '');
+                      const cpf = cpfRaw.replace(/\D/g, '');
+                      const name = String(row.getCell(nameCol).value || '').trim();
+                      if (cpf || name) excelClients.push({ cpf, name, row: rowNumber });
+                  }
+              }
+          });
+
+          if (cpfCol === -1 || nameCol === -1) {
+              alert("A planilha precisa de ter uma coluna chamada 'CPF' e outra 'NOME' na primeira linha (cabeçalho).");
+              setIsAuditorModalOpen(false);
+              setIsAuditing(false);
+              return;
+          }
+
+          const onlyInSystem: any[] = [];
+          const onlyInExcel: any[] = [];
+          const divergences: any[] = [];
+
+          // 1. Procurar quem está no Sistema mas falta na Planilha (ou diverge)
+          clients.forEach(dbClient => {
+              if (dbClient.name === 'teste andre duarte teste') return; // Ignora os testes
+              const dbCpf = (dbClient.cpf || '').replace(/\D/g, '');
+              const dbNameNorm = normalizeString(dbClient.name);
+
+              const matchInExcel = excelClients.find(ec => (dbCpf && ec.cpf === dbCpf) || (normalizeString(ec.name) === dbNameNorm));
+
+              if (!matchInExcel) {
+                  onlyInSystem.push(dbClient);
+              } else {
+                  // Achou, mas os dados divergem (Ex: CPF igual mas nomes totalmente diferentes, ou vice-versa)
+                  if (dbCpf && matchInExcel.cpf === dbCpf && normalizeString(matchInExcel.name) !== dbNameNorm) {
+                      divergences.push({ dbClient, excelName: matchInExcel.name, excelCpf: matchInExcel.cpf });
+                  } else if (!dbCpf && normalizeString(matchInExcel.name) === dbNameNorm && matchInExcel.cpf) {
+                      divergences.push({ dbClient, excelName: matchInExcel.name, excelCpf: matchInExcel.cpf });
+                  }
+              }
+          });
+
+          // 2. Procurar quem está na Planilha mas falta no Sistema
+          excelClients.forEach(ec => {
+              const matchInDb = clients.find(dbC => {
+                  const dbCpf = (dbC.cpf || '').replace(/\D/g, '');
+                  return (ec.cpf && dbCpf === ec.cpf) || (normalizeString(dbC.name) === normalizeString(ec.name));
+              });
+              if (!matchInDb) {
+                  onlyInExcel.push(ec);
+              }
+          });
+
+          setAuditorResults({ onlyInSystem, onlyInExcel, divergences });
+      } catch (error) {
+          alert("Erro ao ler a planilha. Certifique-se de que é um ficheiro .xlsx válido e não está corrompido.");
+          setIsAuditorModalOpen(false);
+      } finally {
+          setIsAuditing(false);
+          e.target.value = ''; // Limpa o input para poder subir a mesma planilha de novo se quiser
+      }
+  };
+
   return (
     <Layout>
       <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
         <div><h2 className="text-2xl font-bold text-slate-800">Clientes</h2><p className="text-slate-500">Gestão e análise da base.</p></div>
         <div className="flex flex-wrap gap-2 w-full md:w-auto">
+          {/* 🚀 BOTAO DE AUDITORIA */}
+          <label className="flex items-center gap-2 bg-white border border-gray-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm hover:bg-gray-50 transition-colors shadow-sm font-bold cursor-pointer">
+              <Upload size={18} /> Conciliar Planilha
+              <input type="file" accept=".xlsx" className="hidden" onChange={handleAuditorUpload} />
+          </label>
           <button onClick={fetchData} className="bg-white border p-2.5 rounded-xl shadow-sm hover:bg-slate-50 transition-colors"><RefreshCw className={isLoading ? "animate-spin text-slate-500" : "text-slate-500"} size={18} /></button>
           <button onClick={() => handleOpenModal()} className="bg-slate-900 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-800 transition-all shadow-lg"><Plus size={20} /> Novo Cliente</button>
         </div>

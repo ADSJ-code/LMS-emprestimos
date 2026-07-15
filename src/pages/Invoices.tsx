@@ -16,7 +16,12 @@ const Invoices = () => {
   
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState<'pendentes' | 'historico'>('pendentes');
+  const [activeTab, setActiveTab] = useState<'pendentes' | 'historico' | 'avulsa'>('pendentes');
+
+  // 🚀 ESTADOS DA EMISSÃO AVULSA
+  const [avulsaSearch, setAvulsaSearch] = useState('');
+  const [avulsaSelectedClient, setAvulsaSelectedClient] = useState<Client | null>(null);
+  const [avulsaValue, setAvulsaValue] = useState('');
 
   // 🚀 EXTRAÇÃO DE APELIDO: Limpa o JSON e mostra apenas a observação
   const getNickname = (obs?: string) => {
@@ -336,31 +341,39 @@ const Invoices = () => {
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden mb-8">
         <div className="p-4 border-b border-slate-200 bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-4">
-          <div className="flex bg-slate-200/50 p-1 rounded-lg w-full md:w-auto">
+          <div className="flex bg-slate-200/50 p-1 rounded-lg w-full md:w-auto overflow-x-auto custom-scrollbar">
             <button 
                 onClick={() => setActiveTab('pendentes')} 
-                className={`flex-1 md:flex-none px-6 py-2 text-sm font-bold rounded-md transition-all ${activeTab === 'pendentes' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                className={`flex-1 md:flex-none px-6 py-2 text-sm font-bold rounded-md transition-all whitespace-nowrap ${activeTab === 'pendentes' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
             >
                 Pagamentos s/ Nota
             </button>
             <button 
                 onClick={() => setActiveTab('historico')} 
-                className={`flex-1 md:flex-none px-6 py-2 text-sm font-bold rounded-md transition-all ${activeTab === 'historico' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                className={`flex-1 md:flex-none px-6 py-2 text-sm font-bold rounded-md transition-all whitespace-nowrap ${activeTab === 'historico' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
             >
                 Histórico de Emissões
             </button>
+            <button 
+                onClick={() => setActiveTab('avulsa')} 
+                className={`flex-1 md:flex-none px-6 py-2 text-sm font-bold rounded-md transition-all whitespace-nowrap ${activeTab === 'avulsa' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+                Emissão Avulsa / Parcial
+            </button>
           </div>
 
-          <div className="relative w-full md:w-96">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-            <input 
-              type="text" 
-              placeholder="Buscar cliente ou contrato..." 
-              value={searchTerm} 
-              onChange={(e) => setSearchTerm(e.target.value)} 
-              className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500/20 transition-all font-bold text-slate-700" 
-            />
-          </div>
+          {activeTab !== 'avulsa' && (
+            <div className="relative w-full md:w-96">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <input 
+                type="text" 
+                placeholder="Buscar cliente ou contrato..." 
+                value={searchTerm} 
+                onChange={(e) => setSearchTerm(e.target.value)} 
+                className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500/20 transition-all font-bold text-slate-700" 
+              />
+            </div>
+          )}
         </div>
 
         {/* ABA: PAGAMENTOS PENDENTES DE NOTA */}
@@ -513,6 +526,121 @@ const Invoices = () => {
                 )}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* 🚀 ABA: EMISSÃO AVULSA / PARCIAL */}
+        {activeTab === 'avulsa' && (
+          <div className="p-8 min-h-[400px] bg-slate-50/30">
+              <div className="max-w-2xl mx-auto space-y-6">
+                  <div className="bg-blue-50 border border-blue-200 p-5 rounded-2xl flex gap-4 items-start">
+                      <div className="bg-blue-100 p-2 rounded-xl text-blue-600 shrink-0"><AlertCircle size={24}/></div>
+                      <div>
+                          <h4 className="font-black text-blue-900 text-sm mb-1">Emissão Livre de Nota Fiscal</h4>
+                          <p className="text-xs text-blue-700 leading-relaxed">
+                              Esta área permite emitir uma nota fiscal avulsa para um cliente selecionado com um valor 100% livre (Ex: pagamentos parciais, renegociações fora da plataforma). <br/>A nota ficará guardada no <b>Histórico de Emissões</b> normalmente.
+                          </p>
+                      </div>
+                  </div>
+
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-6">
+                      
+                      {/* BUSCA DE CLIENTE */}
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2">1. Localize o Cliente</label>
+                          <div className="relative">
+                              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                              <input 
+                                  type="text" 
+                                  placeholder="Digite o nome ou CPF..." 
+                                  value={avulsaSearch}
+                                  onChange={e => {
+                                      setAvulsaSearch(e.target.value);
+                                      setAvulsaSelectedClient(null); // Reseta a seleção se ele voltar a digitar
+                                  }}
+                                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-300 outline-none focus:ring-2 focus:ring-blue-500/20 font-bold text-slate-800 transition-all"
+                              />
+                          </div>
+                          
+                          {/* Datalist Visual de Resultados */}
+                          {avulsaSearch && !avulsaSelectedClient && (
+                              <div className="mt-2 border border-slate-200 rounded-xl overflow-hidden shadow-lg max-h-48 overflow-y-auto bg-white absolute w-full max-w-2xl z-10">
+                                  {clients.filter(c => normalizeString(c.name).includes(normalizeString(avulsaSearch)) || c.cpf.includes(avulsaSearch)).length === 0 ? (
+                                      <div className="p-4 text-center text-sm text-slate-400 italic">Cliente não encontrado.</div>
+                                  ) : (
+                                      clients.filter(c => normalizeString(c.name).includes(normalizeString(avulsaSearch)) || c.cpf.includes(avulsaSearch)).map(c => (
+                                          <div 
+                                              key={c.id} 
+                                              onClick={() => {
+                                                  setAvulsaSelectedClient(c);
+                                                  setAvulsaSearch(c.name);
+                                              }}
+                                              className="p-3 border-b border-slate-50 hover:bg-blue-50 cursor-pointer flex justify-between items-center transition-colors"
+                                          >
+                                              <span className="font-bold text-slate-700 text-sm">{c.name}</span>
+                                              <span className="text-xs text-slate-400 font-mono">{c.cpf}</span>
+                                          </div>
+                                      ))
+                                  )}
+                              </div>
+                          )}
+                      </div>
+
+                      {/* DADOS DO CLIENTE SELECIONADO E VALOR LIVRE */}
+                      {avulsaSelectedClient && (
+                          <div className="animate-in fade-in slide-in-from-bottom-4 duration-300 space-y-6">
+                              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex justify-between items-center">
+                                  <div>
+                                      <span className="block text-[10px] uppercase font-bold text-slate-400 mb-0.5">Cliente Selecionado</span>
+                                      <span className="font-black text-slate-800">{avulsaSelectedClient.name}</span>
+                                  </div>
+                                  <div className="text-right">
+                                      <span className="block text-[10px] uppercase font-bold text-slate-400 mb-0.5">CPF / CNPJ</span>
+                                      <span className="font-bold text-slate-600 font-mono text-sm">{avulsaSelectedClient.cpf}</span>
+                                  </div>
+                              </div>
+
+                              <div>
+                                  <label className="block text-xs font-bold text-blue-600 uppercase mb-2">2. Valor a Emitir na Nota (R$)</label>
+                                  <input 
+                                      type="number" 
+                                      step="0.01"
+                                      onWheel={(e) => e.currentTarget.blur()}
+                                      value={avulsaValue}
+                                      onChange={(e) => setAvulsaValue(e.target.value)}
+                                      placeholder="Ex: 85.50"
+                                      className="w-full px-4 py-4 rounded-xl border-2 border-blue-200 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 font-black text-2xl text-blue-900 transition-all bg-white"
+                                  />
+                              </div>
+
+                              <button 
+                                  onClick={() => {
+                                      if (Number(avulsaValue) <= 0) {
+                                          alert("O valor da nota deve ser maior que zero.");
+                                          return;
+                                      }
+                                      
+                                      // Monta um "Fake Payment" para passar no modal existente (com TS Safe)
+                                      const fakePayment = {
+                                          uniqueId: `NF-AVULSA-${Date.now()}`,
+                                          client: avulsaSelectedClient?.name || '',
+                                          cpf: avulsaSelectedClient?.cpf || '',
+                                          interestPaid: Number(avulsaValue),
+                                          capitalPaid: 0,
+                                          invoiceStatus: null
+                                      };
+                                      
+                                      handleOpenEmitModal(fakePayment);
+                                  }}
+                                  disabled={!avulsaValue || Number(avulsaValue) <= 0}
+                                  className="w-full py-4 bg-slate-900 text-white font-bold rounded-xl hover:bg-blue-600 transition-colors shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                  <FileText size={18}/> Processar Emissão Avulsa
+                              </button>
+                          </div>
+                      )}
+                  </div>
+              </div>
           </div>
         )}
       </div>
