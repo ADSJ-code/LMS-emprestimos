@@ -288,7 +288,8 @@ type Loan struct {
 	AffiliateName       string          `json:"affiliateName,omitempty" bson:"affiliateName,omitempty"`
 	AffiliateFee        float64         `json:"affiliateFee,omitempty" bson:"affiliateFee,omitempty"`
 	AffiliateNotes      string          `json:"affiliateNotes,omitempty" bson:"affiliateNotes,omitempty"`
-	MultiDates          []MultiDate     `json:"multiDates" bson:"multiDates"` // FIX: Removido omitempty
+	MultiDates          []MultiDate     `json:"multiDates" bson:"multiDates"`
+	PromissoryDueDate   string          `json:"promissoryDueDate,omitempty" bson:"promissoryDueDate,omitempty"`
 }
 
 type ClientDoc struct {

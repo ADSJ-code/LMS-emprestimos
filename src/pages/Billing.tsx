@@ -745,25 +745,47 @@ const Billing = () => {
     const today = new Date();
     const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
     
+    // 🚀 BLINDAGEM DO SINO (HOJE): Remove clientes que já pagaram a fatia de hoje
     const dueToday = loans.filter(l => {
-       const dStr = getDisplayNextDue(l);
-       return dStr === todayStr && l.status?.toLowerCase() !== 'pago' && l.status?.toLowerCase() !== 'quitado';
+       if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return false;
+
+       const currentMonth = today.getMonth();
+       const currentYear = today.getFullYear();
+       const targetDay = today.getDate();
+
+       const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
+       if (validSlices.length > 0 && l.status !== 'Acordo') {
+           const targetSlice = validSlices.find((s: any) => Number(s.day) === targetDay);
+           if (targetSlice) {
+               const slicePaidAmount = (l.history || []).reduce((acc: number, h: any) => {
+                   const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                   if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${targetSlice.day}`)) {
+                       return acc + h.amount;
+                   }
+                   return acc;
+               }, 0);
+               if (slicePaidAmount < (parseVal(targetSlice.amount) - 0.05)) return true;
+           }
+           return false;
+       }
+
+       return getDisplayNextDue(l) === todayStr;
     });
     setTodaysLoans(dueToday);
 
     const targetStr = collectionDate;
-    const targetDay = Number(targetStr.split('-')[2]);
+    const targetDayCollection = Number(targetStr.split('-')[2]);
 
+    // 🚀 BLINDAGEM DA TELA DE COBRANÇA (QUALQUER DIA): Remove clientes que já pagaram a fatia daquele dia
     const list = loans.filter(l => {
         if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return false;
 
         const currentMonth = Number(targetStr.split('-')[1]) - 1;
         const currentYear = Number(targetStr.split('-')[0]);
 
-        // 🚀 FIX: Se o contrato tem fatias (multiDates), verifica se há fatia no DIA pesquisado E se ela AINDA NÃO FOI PAGA
         const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
         if (validSlices.length > 0 && l.status !== 'Acordo') {
-            const targetSlice = validSlices.find((s: any) => Number(s.day) === targetDay);
+            const targetSlice = validSlices.find((s: any) => Number(s.day) === targetDayCollection);
             if (targetSlice) {
                 const slicePaidAmount = (l.history || []).reduce((acc: number, h: any) => {
                     const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
@@ -780,7 +802,6 @@ const Billing = () => {
             return false;
         }
 
-        // Fallback: Verifica a data principal se não houver fatias neste dia
         return getDisplayNextDue(l) === targetStr;
     });
     setCollectionLoans(list);

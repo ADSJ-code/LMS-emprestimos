@@ -300,7 +300,8 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client, set
 
     const borrowerFullAddress = `${clientData?.address || ''}, ${clientData?.number || ''}${ (clientData as any)?.block ? ' - BLOCO ' + (clientData as any)?.block : '' }, ${clientData?.city || ''}, CEP: ${clientData?.cep || ''}`.toUpperCase();
 
-    let baseDate = new Date(loan.nextDue || loan.startDate);
+    // 🚀 LÓGICA INTELIGENTE: Puxa o Vencimento Personalizado se houver. Caso contrário, usa a data normal.
+    let baseDate = new Date((loan as any).promissoryDueDate || loan.nextDue || loan.startDate);
     baseDate.setMinutes(baseDate.getMinutes() + baseDate.getTimezoneOffset());
 
     for (let i = 1; i <= totalInst; i++) {
