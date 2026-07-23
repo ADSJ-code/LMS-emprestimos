@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  Search, Receipt, FileText, CheckCircle, AlertCircle, 
+  Search, Receipt, FileText, CheckCircle, AlertCircle,
   Clock, Download, RefreshCw, Send, Landmark, Calendar,
   Edit, Trash2
 } from 'lucide-react';
@@ -17,6 +17,9 @@ const Invoices = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'pendentes' | 'historico' | 'avulsa'>('pendentes');
+
+  // 🚀 ESTADOS DO FILTRO DE MÊS
+  const [filterMonth, setFilterMonth] = useState<string>('todos');
 
   // 🚀 ESTADOS DA EMISSÃO AVULSA
   const [avulsaSearch, setAvulsaSearch] = useState('');
@@ -46,6 +49,9 @@ const Invoices = () => {
   const [paymentToEdit, setPaymentToEdit] = useState<any>(null);
   const [editValue, setEditValue] = useState<string>('');
   const [isEditing, setIsEditing] = useState(false);
+  
+  // 🚀 ESTADO DA SANFONA DE DETALHES DOS PACOTES
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -88,9 +94,9 @@ const Invoices = () => {
       return 0;
   };
 
-  // 🚀 Lógica Inteligente: Extrai pagamentos de juros NÃO EMITIDOS
+  // 🚀 Lógica Inteligente: Extrai e AGRUPA pagamentos do mesmo cliente no mesmo dia!
   const availablePayments = useMemo(() => {
-    const paymentsList: any[] = [];
+    const groups: Record<string, any> = {};
     
     // Lista negra para não faturar clientes bloqueados
     const blockedNames = new Set(clients.filter(c => c.status === 'Bloqueado').map(c => c.name));
@@ -98,56 +104,57 @@ const Invoices = () => {
     loans.forEach(loan => {
       if (!loan.history || blockedNames.has(loan.client)) return;
       
-      // 🚀 BUSCA BLINDADA CONTRA ACENTOS, MAIÚSCULAS E ESPAÇOS EXTRAS
       const clientInfo = clients.find(c => normalizeString(c.name) === normalizeString(loan.client));
+      const safeClientName = normalizeString(loan.client).replace(/[^a-z0-9]/g, '');
 
       loan.history.forEach((record: any, index) => {
         const type = record.type?.toLowerCase() || '';
         
         // Ignora aberturas, acordos e pagamentos zerados
         if (type.includes('abertura') || type.includes('empréstimo') || type.includes('acordo') || parseVal(record.amount) <= 0) return;
-        
-        // 🚀 FIX: Se foi ignorada ou emitida por fora, não entra na fila de pendentes!
         if (record.nfeStatus === 'IGNORADA' || record.nfeStatus === 'EMITIDA_MANUAL') return;
 
-        // 🚀 FIX: Usa o valor editado da NFE se existir, senão usa o juro recebido original
         const jurosRecebido = record.nfeValue !== undefined ? parseVal(record.nfeValue) : parseVal(record.interestPaid);
+        if (jurosRecebido <= 0) return;
+
+        // 🚀 CRIA A CHAVE DO GRUPO (Cliente + Data)
+        const dateStr = record.date.split('T')[0];
+        // ID Baseado no Cliente e no Dia. Ex: NFG-DAIANE-20260716
+        const groupId = `NFG-${safeClientName}-${dateStr.replace(/-/g, '')}`;
         
-        // 🚀 HIGIENIZAÇÃO DO ID: Transforma "001/2026" em "NF0012026"
-        const safeLoanId = loan.id.replace(/[^a-zA-Z0-9]/g, '');
-        const uniquePaymentId = `NF${safeLoanId}-${index}`;
-        
-        // 🚀 VERIFICAÇÃO BLINDADA: Puxa todas as notas (incluindo reemissões com sufixo -R)
-        const paymentInvoices = invoices.filter(inv => inv.id === uniquePaymentId || inv.id?.startsWith(`${uniquePaymentId}-R`));
-        
-        // Pega a nota mais recente ativa ou a última cancelada
-        let relatedInvoice = paymentInvoices.find(inv => String(inv.status) !== 'CANCELADA');
-        if (!relatedInvoice && paymentInvoices.length > 0) {
-            relatedInvoice = paymentInvoices[paymentInvoices.length - 1]; 
+        const groupInvoices = invoices.filter(inv => inv.id === groupId || inv.id?.startsWith(`${groupId}-R`));
+        let relatedInvoice = groupInvoices.find(inv => String(inv.status) !== 'CANCELADA');
+        if (!relatedInvoice && groupInvoices.length > 0) {
+            relatedInvoice = groupInvoices[groupInvoices.length - 1]; 
         }
 
-        // Se a nota final ligada a este pagamento foi AUTORIZADA, removemos da lista pendente!
         if (relatedInvoice && relatedInvoice.status === 'AUTORIZADA') return;
 
-        if (jurosRecebido > 0) {
-          paymentsList.push({
-            uniqueId: uniquePaymentId,
-            contractId: loan.id,
-            recordIndex: index, // Guarda o índice para sabermos qual pagamento editar no banco
-            client: loan.client,
-            cpf: clientInfo?.cpf || 'Não cadastrado',
-            paymentDate: record.date,
-            totalPaid: record.amount,
-            capitalPaid: record.capitalPaid || 0,
-            interestPaid: jurosRecebido,
-            note: record.note,
-            invoiceStatus: relatedInvoice?.status || null // Passa o status para a tela
-          });
+        if (!groups[groupId]) {
+           groups[groupId] = {
+             uniqueId: groupId,
+             client: loan.client,
+             cpf: clientInfo?.cpf || 'Não cadastrado',
+             paymentDate: dateStr,
+             totalPaid: 0,
+             capitalPaid: 0,
+             interestPaid: 0,
+             invoiceStatus: relatedInvoice?.status || null,
+             underlyingRecords: [], // Guarda todos os registos originais para atualizar o BD
+             contracts: new Set()   // Guarda os IDs dos contratos
+           };
         }
+
+        groups[groupId].totalPaid += parseVal(record.amount);
+        groups[groupId].capitalPaid += parseVal(record.capitalPaid || 0);
+        groups[groupId].interestPaid += jurosRecebido;
+        groups[groupId].contracts.add(loan.id);
+        groups[groupId].underlyingRecords.push({ loanId: loan.id, recordIndex: index, originalRecord: record });
       });
     });
 
-    return paymentsList
+    return Object.values(groups)
+      .map(g => ({ ...g, contractId: Array.from(g.contracts).join(', ') })) // Junta os contratos p/ a Tabela
       .filter(p => p.client.toLowerCase().includes(searchTerm.toLowerCase()) || p.contractId.includes(searchTerm))
       .sort((a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime());
   }, [loans, clients, searchTerm, invoices]);
@@ -176,13 +183,38 @@ const Invoices = () => {
       return list.sort((a, b) => new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime());
   }, [invoices, loans, clients]);
 
+  const availableMonths = useMemo(() => {
+      const months = new Set<string>();
+      allHistoricalInvoices.forEach(inv => {
+          if (inv.issueDate) {
+              const d = new Date(inv.issueDate);
+              const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+              months.add(val);
+          }
+      });
+      return Array.from(months).sort().reverse();
+  }, [allHistoricalInvoices]);
+
   // 🚀 Filtro do Histórico
   const filteredInvoices = useMemo(() => {
-    return allHistoricalInvoices.filter(inv => 
-      inv.client?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      (inv.id && inv.id.toLowerCase().includes(searchTerm.toLowerCase()))
-    );
-  }, [allHistoricalInvoices, searchTerm]);
+    return allHistoricalInvoices.filter(inv => {
+      const matchSearch = inv.client?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          (inv.id && inv.id.toLowerCase().includes(searchTerm.toLowerCase()));
+      
+      let matchMonth = true;
+      if (filterMonth !== 'todos') {
+          if (inv.issueDate) {
+              const d = new Date(inv.issueDate);
+              const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+              matchMonth = val === filterMonth;
+          } else {
+              matchMonth = false;
+          }
+      }
+
+      return matchSearch && matchMonth;
+    });
+  }, [allHistoricalInvoices, searchTerm, filterMonth]);
 
   const handleOpenEmitModal = (payment: any) => {
     setSelectedPayment(payment);
@@ -207,24 +239,29 @@ const Invoices = () => {
           return; 
       }
 
-      const loan = loans.find(l => l.id === paymentToEdit.contractId);
-      if (!loan || !loan.history) {
-          setIsEditing(false);
-          return;
-      }
+      // Descobre a proporção do ajuste para dividir pelos contratos aglomerados
+      const ratio = paymentToEdit.interestPaid > 0 ? (newVal / paymentToEdit.interestPaid) : 1;
+      const updatesByLoan: Record<string, Loan> = {};
 
-      const updatedLoan = { ...loan };
-      updatedLoan.history![paymentToEdit.recordIndex] = { 
-          ...updatedLoan.history![paymentToEdit.recordIndex], 
-          nfeValue: newVal 
-      } as any;
+      paymentToEdit.underlyingRecords.forEach((ur: any) => {
+          if (!updatesByLoan[ur.loanId]) {
+              const loanObj = loans.find(l => l.id === ur.loanId);
+              if (loanObj) updatesByLoan[ur.loanId] = JSON.parse(JSON.stringify(loanObj)); // Cópia segura
+          }
+          const loanToUpdate = updatesByLoan[ur.loanId];
+          if (loanToUpdate && loanToUpdate.history) {
+              const currentBase = ur.originalRecord.nfeValue !== undefined ? parseVal(ur.originalRecord.nfeValue) : parseVal(ur.originalRecord.interestPaid);
+              // 🚀 FIX TS: Usando as any para evitar erro de tipagem
+              (loanToUpdate.history[ur.recordIndex] as any).nfeValue = currentBase * ratio;
+          }
+      });
 
       try {
-          await loanService.update(loan.id, updatedLoan, 'EDIÇÃO DE VALOR NF', `Valor da base de cálculo da NF alterado para R$ ${newVal.toFixed(2)}`);
+          await Promise.all(Object.values(updatesByLoan).map(l => 
+              loanService.update(l.id, l as any, 'EDIÇÃO DE VALOR NF (PACOTE)', `Base de cálculo rateada. Total do pacote ajustado para R$ ${newVal.toFixed(2)}`)
+          ));
           await fetchData();
           setIsEditModalOpen(false);
-          // Opcional: Se quiser que já abra o modal de emissão logo após confirmar, descomente a linha abaixo:
-          // handleOpenEmitModal({...paymentToEdit, interestPaid: newVal});
       } catch (e) { 
           alert("Erro ao atualizar valor."); 
       } finally {
@@ -233,37 +270,45 @@ const Invoices = () => {
   };
 
   const handleIgnorePayment = async (payment: any) => {
-      if (!window.confirm(`⚠️ Deseja realmente REMOVER este pagamento da fila de emissão?\n\nEle desaparecerá desta lista e não será enviado para a Sefaz.`)) return;
+      if (!window.confirm(`⚠️ Deseja realmente REMOVER este pacote de pagamentos da fila de emissão?\n\nEle desaparecerá desta lista e não será enviado para a Sefaz.`)) return;
 
-      const loan = loans.find(l => l.id === payment.contractId);
-      if (!loan || !loan.history) return;
-
-      const updatedLoan = { ...loan };
-      updatedLoan.history![payment.recordIndex] = { 
-          ...updatedLoan.history![payment.recordIndex], 
-          nfeStatus: 'IGNORADA' 
-      } as any;
+      const updatesByLoan: Record<string, Loan> = {};
+      payment.underlyingRecords.forEach((ur: any) => {
+          if (!updatesByLoan[ur.loanId]) {
+              const loanObj = loans.find(l => l.id === ur.loanId);
+              if (loanObj) updatesByLoan[ur.loanId] = JSON.parse(JSON.stringify(loanObj));
+          }
+          const hist = updatesByLoan[ur.loanId]?.history;
+          if (hist) {
+              // 🚀 FIX TS: Protegendo contra undefined
+              (hist[ur.recordIndex] as any).nfeStatus = 'IGNORADA';
+          }
+      });
 
       try {
-          await loanService.update(loan.id, updatedLoan, 'NF IGNORADA', `Pagamento ignorado na fila de emissão fiscal.`);
+          await Promise.all(Object.values(updatesByLoan).map(l => loanService.update(l.id, l as any, 'NF IGNORADA', `Pacote de pagamentos ignorado na fila de emissão fiscal.`)));
           fetchData();
-      } catch (e) { alert("Erro ao ignorar pagamento."); }
+      } catch (e) { alert("Erro ao ignorar pagamentos."); }
   };
 
   const handleManualEmission = async (payment: any) => {
-      if (!window.confirm(`✅ Marcar como EMITIDA MANUALMENTE?\n\nIsto moverá o registro para a aba de Histórico, indicando que você já emitiu esta nota por fora ou de outra forma. Não haverá comunicação com a Prefeitura.`)) return;
+      if (!window.confirm(`✅ Marcar pacote como EMITIDO MANUALMENTE?\n\nIsto moverá os registros para a aba de Histórico, indicando que você já emitiu esta nota por fora ou de outra forma. Não haverá comunicação com a Prefeitura.`)) return;
 
-      const loan = loans.find(l => l.id === payment.contractId);
-      if (!loan || !loan.history) return;
-
-      const updatedLoan = { ...loan };
-      updatedLoan.history![payment.recordIndex] = { 
-          ...updatedLoan.history![payment.recordIndex], 
-          nfeStatus: 'EMITIDA_MANUAL' 
-      } as any;
+      const updatesByLoan: Record<string, Loan> = {};
+      payment.underlyingRecords.forEach((ur: any) => {
+          if (!updatesByLoan[ur.loanId]) {
+              const loanObj = loans.find(l => l.id === ur.loanId);
+              if (loanObj) updatesByLoan[ur.loanId] = JSON.parse(JSON.stringify(loanObj));
+          }
+          const hist = updatesByLoan[ur.loanId]?.history;
+          if (hist) {
+              // 🚀 FIX TS: Protegendo contra undefined
+              (hist[ur.recordIndex] as any).nfeStatus = 'EMITIDA_MANUAL';
+          }
+      });
 
       try {
-          await loanService.update(loan.id, updatedLoan, 'NF MANUAL', `Pagamento marcado como nota emitida manualmente por fora.`);
+          await Promise.all(Object.values(updatesByLoan).map(l => loanService.update(l.id, l as any, 'NF MANUAL', `Pacote marcado como nota emitida manualmente por fora.`)));
           fetchData();
       } catch (e) { alert("Erro ao atualizar."); }
   };
@@ -305,8 +350,14 @@ const Invoices = () => {
         id: finalEmissionId,
         client: selectedPayment.client,
         cpf: selectedPayment.cpf,
-        serviceValue: selectedPayment.interestPaid
-      });
+        serviceValue: selectedPayment.interestPaid,
+        // 🚀 FIX ERRO PREFEITURA: Zera explicitamente as retenções para evitar "PIS Inconsistente" ou "Valores Divergentes"
+        pis: 0,
+        cofins: 0,
+        csll: 0,
+        inss: 0,
+        ir: 0
+      } as any);
       
       const updatedInvoices = await invoiceService.getAll();
       setInvoices(updatedInvoices || []);
@@ -387,15 +438,30 @@ const Invoices = () => {
           </div>
 
           {activeTab !== 'avulsa' && (
-            <div className="relative w-full md:w-96">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-              <input 
-                type="text" 
-                placeholder="Buscar cliente ou contrato..." 
-                value={searchTerm} 
-                onChange={(e) => setSearchTerm(e.target.value)} 
-                className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500/20 transition-all font-bold text-slate-700" 
-              />
+            <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto">
+              {activeTab === 'historico' && (
+                <select 
+                  value={filterMonth} 
+                  onChange={(e) => setFilterMonth(e.target.value)} 
+                  className="w-full md:w-48 appearance-none bg-white px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500/20 shadow-sm cursor-pointer"
+                >
+                  <option value="todos">Todos os Meses</option>
+                  {availableMonths.map(m => {
+                      const [ano, mes] = m.split('-');
+                      return <option key={m} value={m}>{`${mes}/${ano}`}</option>;
+                  })}
+                </select>
+              )}
+              <div className="relative w-full md:w-96">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input 
+                  type="text" 
+                  placeholder="Buscar cliente ou contrato..." 
+                  value={searchTerm} 
+                  onChange={(e) => setSearchTerm(e.target.value)} 
+                  className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500/20 transition-all font-bold text-slate-700" 
+                />
+              </div>
             </div>
           )}
         </div>
@@ -418,49 +484,87 @@ const Invoices = () => {
                   <tr><td colSpan={5} className="p-8 text-center text-slate-400 italic">Nenhum pagamento com juros encontrado para emitir nota.</td></tr>
                 ) : (
                   availablePayments.map((payment) => (
-                    <tr key={payment.uniqueId} className="hover:bg-slate-50 transition-colors group">
-                      <td className="p-4">
-                        <div className="font-bold text-slate-700 flex items-center gap-2">
-                          <Calendar size={14} className="text-slate-400"/>
-                          {new Date(payment.paymentDate).toLocaleDateString('pt-BR')}
-                        </div>
-                        <div className="text-[10px] text-slate-400 font-mono mt-0.5 ml-5">
-                          {new Date(payment.paymentDate).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <div className="font-bold text-slate-800">{payment.client}</div>
-                        {getNickname(clients.find(c => c.name === payment.client)?.observations) && (
-                            <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 mb-1 w-fit truncate max-w-[200px]" title={getNickname(clients.find(c => c.name === payment.client)?.observations)}>
-                                {getNickname(clients.find(c => c.name === payment.client)?.observations)}
+                    <React.Fragment key={payment.uniqueId}>
+                        <tr className="hover:bg-slate-50 transition-colors group">
+                          <td className="p-4 align-top pt-5">
+                            <div className="font-bold text-slate-700 flex items-center gap-2">
+                              <Calendar size={14} className="text-slate-400"/>
+                              {new Date(payment.paymentDate).toLocaleDateString('pt-BR')}
                             </div>
+                          </td>
+                          <td className="p-4 align-top pt-5">
+                            <div className="font-bold text-slate-800">{payment.client}</div>
+                            {getNickname(clients.find(c => c.name === payment.client)?.observations) && (
+                                <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 mb-1 w-fit truncate max-w-[200px]" title={getNickname(clients.find(c => c.name === payment.client)?.observations)}>
+                                    {getNickname(clients.find(c => c.name === payment.client)?.observations)}
+                                </div>
+                            )}
+                            <div className="flex items-center gap-2 mt-1">
+                                <div className="text-[10px] text-slate-500 font-mono">
+                                    {payment.underlyingRecords.length > 1 ? `${payment.underlyingRecords.length} Contratos Agrupados` : `Contrato: ${payment.contractId}`}
+                                </div>
+                                {payment.underlyingRecords.length > 1 && (
+                                    <button 
+                                        onClick={() => setExpandedGroup(expandedGroup === payment.uniqueId ? null : payment.uniqueId)}
+                                        className="text-[9px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded hover:bg-slate-200 transition-colors border border-slate-200"
+                                    >
+                                        {expandedGroup === payment.uniqueId ? 'Ocultar Detalhes' : 'Ver Detalhes'}
+                                    </button>
+                                )}
+                            </div>
+                          </td>
+                          <td className="p-4 text-right font-bold text-slate-600 align-top pt-5">
+                            R$ {formatMoney(payment.totalPaid)}
+                            <div className="text-[9px] text-slate-400 font-normal mt-0.5">(Capital: R$ {formatMoney(payment.capitalPaid)})</div>
+                          </td>
+                          <td className="p-4 text-right font-black text-blue-700 bg-blue-50/10 align-top pt-5">
+                            R$ {formatMoney(payment.interestPaid)}
+                          </td>
+                          <td className="p-4 align-top pt-4">
+                            <div className="flex items-center justify-end gap-2">
+                                <button onClick={() => handleEditNfeValue(payment)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Editar Valor da NF">
+                                    <Edit size={16}/>
+                                </button>
+                                <button onClick={() => handleIgnorePayment(payment)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Apagar da fila">
+                                    <Trash2 size={16}/>
+                                </button>
+                                <button onClick={() => handleManualEmission(payment)} className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors" title="Já emitido">
+                                    <CheckCircle size={16}/>
+                                </button>
+                                <button onClick={() => handleOpenEmitModal(payment)} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-blue-600 transition-colors shadow-sm flex items-center gap-1.5 ml-2">
+                                    <Send size={14} /> Emitir
+                                </button>
+                            </div>
+                          </td>
+                        </tr>
+                        {/* 🚀 LINHA EXPANSÍVEL DA SANFONA COM OS DETALHES */}
+                        {expandedGroup === payment.uniqueId && payment.underlyingRecords.length > 1 && (
+                            <tr className="bg-slate-50 border-b border-slate-200">
+                                <td colSpan={5} className="p-0">
+                                    <div className="px-10 py-4 animate-in slide-in-from-top-2 flex justify-center">
+                                        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm w-full md:w-2/3 mx-auto">
+                                            <h5 className="text-[10px] font-black text-center uppercase text-slate-400 mb-3 border-b border-slate-100 pb-2">Composição do Valor da NF</h5>
+                                            <div className="space-y-2">
+                                                {payment.underlyingRecords.map((ur: any, idx: number) => {
+                                                    const juros = ur.originalRecord.nfeValue !== undefined ? parseVal(ur.originalRecord.nfeValue) : parseVal(ur.originalRecord.interestPaid);
+                                                    const cap = parseVal(ur.originalRecord.capitalPaid || 0);
+                                                    return (
+                                                        <div key={idx} className="flex justify-between items-center text-xs border-b border-slate-50 pb-2 last:border-0 last:pb-0">
+                                                            <span className="font-mono text-slate-500 font-bold">CTR: <span className="text-slate-800">{ur.loanId}</span></span>
+                                                            <div className="flex gap-6 items-center">
+                                                                <span className="text-slate-400 text-[10px] uppercase">Cap: R$ {formatMoney(cap)}</span>
+                                                                <span className="font-black text-blue-600 min-w-[90px] text-right">Jur: R$ {formatMoney(juros)}</span>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
                         )}
-                        <div className="text-[10px] text-slate-500 font-mono">Contrato: {payment.contractId}</div>
-                      </td>
-                      <td className="p-4 text-right font-bold text-slate-600">
-                        R$ {formatMoney(payment.totalPaid)}
-                        <div className="text-[9px] text-slate-400 font-normal mt-0.5">(Capital: R$ {formatMoney(payment.capitalPaid)})</div>
-                      </td>
-                      <td className="p-4 text-right font-black text-blue-700 bg-blue-50/10">
-                        R$ {formatMoney(payment.interestPaid)}
-                      </td>
-                      <td className="p-4">
-                        <div className="flex items-center justify-end gap-2">
-                            <button onClick={() => handleEditNfeValue(payment)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Editar Valor da NF">
-                                <Edit size={16}/>
-                            </button>
-                            <button onClick={() => handleIgnorePayment(payment)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Apagar da fila">
-                                <Trash2 size={16}/>
-                            </button>
-                            <button onClick={() => handleManualEmission(payment)} className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors" title="Já emitido">
-                                <CheckCircle size={16}/>
-                            </button>
-                            <button onClick={() => handleOpenEmitModal(payment)} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-blue-600 transition-colors shadow-sm flex items-center gap-1.5 ml-2">
-                                <Send size={14} /> Emitir
-                            </button>
-                        </div>
-                      </td>
-                    </tr>
+                    </React.Fragment>
                   ))
                 )}
               </tbody>

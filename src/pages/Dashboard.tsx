@@ -235,6 +235,23 @@ const Dashboard = () => {
           return 'Em Dia';
       }
 
+      // 🚀 BLINDAGEM DE FALSOS ATRASADOS: Antes de cravar atraso pela data passada, checa se ele já pagou tudo no ciclo atual
+      const currentMonth = dueLocalDate.getMonth();
+      const currentYear = dueLocalDate.getFullYear();
+      
+      const totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+          const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+          if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
+              return acc + parseVal(h.amount);
+          }
+          return acc;
+      }, 0);
+
+      const breakdown = getSyncedBreakdown(loan);
+      const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
+
+      if (totalPaidInCycle >= (requiredTotal - 0.10)) return 'Em Dia';
+
       if (dueLocalDate < today) return 'Atrasado';
       return 'Em Dia';
   };
@@ -418,7 +435,10 @@ const Dashboard = () => {
             if (period !== 'todos') {
                 capAcc.all += capToAdd; capAcc[tier] += capToAdd;
                 profAcc.all += profToAdd; profAcc[tier] += profToAdd;
-                overAcc.all += overToAdd; overAcc[tier] += overToAdd;
+                // 🚀 FIX: Acordos não podem somar no fluxo de Atrasados
+                if (realStatus !== 'Acordo') {
+                    overAcc.all += overToAdd; overAcc[tier] += overToAdd;
+                }
                 
                 slices.forEach(s => {
                     filteredContext.push({ 
@@ -551,8 +571,11 @@ const Dashboard = () => {
       const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
       
       const dueToday = allLoans.filter(l => {
-         const dStr = getDisplayNextDue(l); // 🚀 FIX: Agora o pop-up lê fatias e datas renegociadas
-         return dStr === todayStr && l.status?.toLowerCase() !== 'pago' && l.status?.toLowerCase() !== 'quitado';
+         // 🚀 FIX: A lista allLoans já vem limpa de clientes bloqueados pelo fetchAndCalculate.
+         // Só precisamos garantir que não aparecem quitados nem acordos antigos!
+         const dStr = getDisplayNextDue(l);
+         const isActivelyDue = l.status?.toLowerCase() !== 'pago' && l.status?.toLowerCase() !== 'quitado';
+         return dStr === todayStr && isActivelyDue;
       });
       setTodaysLoans(dueToday);
   }, [allLoans]);

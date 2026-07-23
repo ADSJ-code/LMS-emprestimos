@@ -124,7 +124,7 @@ const Billing = () => {
 
   const [collectionDate, setCollectionDate] = useState(new Date().toISOString().split('T')[0]);
   const [collectionSearchTerm, setCollectionSearchTerm] = useState(''); // 🚀 Busca do Modal
-  const [returnToModal, setReturnToModal] = useState<'collection' | null>(null); // 🚀 Efeito Bumerangue
+  const [returnToModal, setReturnToModal] = useState<'collection' | 'details' | null>(null); // 🚀 Efeito Bumerangue
   const [cycleMissing, setCycleMissing] = useState(0); // 🚀 O que falta para fechar a parcela
   const collectionScrollRef = useRef<number>(0); // 🚀 MEMÓRIA DE SCROLL DO RODRIGO
 
@@ -186,7 +186,7 @@ const Billing = () => {
       initialPaidCapital: '', initialPaidInterest: '',
       manualInstallmentCapital: '', manualInstallmentInterest: '',
       client: '', amount: '', interestRate: '', installments: '', startDate: '',
-      firstPaymentDate: '', frequency: 'MENSAL', fineRate: '', moraInterestRate: '', 
+      firstPaymentDate: '', promissoryDueDate: '', frequency: 'MENSAL', fineRate: '', moraInterestRate: '', 
       clientBank: '', paymentMethod: '', interestType: 'PRICE', 
       hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
       guarantorHouseType: 'CASA', guarantorNumber: '', guarantorBlock: '', guarantorFloor: '',
@@ -510,6 +510,23 @@ const Billing = () => {
         return 'Em Dia';
     }
 
+    // 🚀 BLINDAGEM DE FALSOS ATRASADOS: Antes de cravar atraso pela data passada, checa se ele já pagou tudo no ciclo atual
+    const currentMonth = dueLocalDate.getMonth();
+    const currentYear = dueLocalDate.getFullYear();
+    
+    const totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+        const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+        if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
+            return acc + parseVal(h.amount);
+        }
+        return acc;
+    }, 0);
+
+    const breakdown = getSyncedBreakdown(loan);
+    const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
+
+    if (totalPaidInCycle >= (requiredTotal - 0.10)) return 'Em Dia';
+
     if (dueLocalDate < today) return 'Atrasado';
     return 'Em Dia';
   };
@@ -735,7 +752,37 @@ const Billing = () => {
     setTodaysLoans(dueToday);
 
     const targetStr = collectionDate;
-    const list = loans.filter(l => getDisplayNextDue(l) === targetStr && l.status?.toLowerCase() !== 'pago' && l.status?.toLowerCase() !== 'quitado');
+    const targetDay = Number(targetStr.split('-')[2]);
+
+    const list = loans.filter(l => {
+        if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return false;
+
+        const currentMonth = Number(targetStr.split('-')[1]) - 1;
+        const currentYear = Number(targetStr.split('-')[0]);
+
+        // 🚀 FIX: Se o contrato tem fatias (multiDates), verifica se há fatia no DIA pesquisado E se ela AINDA NÃO FOI PAGA
+        const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
+        if (validSlices.length > 0 && l.status !== 'Acordo') {
+            const targetSlice = validSlices.find((s: any) => Number(s.day) === targetDay);
+            if (targetSlice) {
+                const slicePaidAmount = (l.history || []).reduce((acc: number, h: any) => {
+                    const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                    if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${targetSlice.day}`)) {
+                        return acc + h.amount;
+                    }
+                    return acc;
+                }, 0);
+                
+                if (slicePaidAmount < (parseVal(targetSlice.amount) - 0.05)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Fallback: Verifica a data principal se não houver fatias neste dia
+        return getDisplayNextDue(l) === targetStr;
+    });
     setCollectionLoans(list);
 
     const totalOverdue = loans.reduce((acc, l) => {
@@ -1129,8 +1176,8 @@ const Billing = () => {
   const confirmPayment = async () => {
     if(!selectedLoan) return;
 
-    const valCapital = parseFloat(payCapital) || 0;
-    const valInterest = parseFloat(payInterest) || 0;
+    let valCapital = parseFloat(payCapital) || 0;
+    let valInterest = parseFloat(payInterest) || 0;
     const valTotal = valCapital + valInterest;
     if (valTotal < 0) { alert("Valor não pode ser negativo."); return; }
 
@@ -1147,12 +1194,34 @@ const Billing = () => {
         } else return; 
     }
 
+    // 🚀 LÓGICA DE MULTA DO RODRIGO: O PAGAMENTO PARCIAL ABATE MULTAS PRIMEIRO
+    const breakdown = getSyncedBreakdown(selectedLoan);
+    const status = getLoanRealStatus(selectedLoan);
+    let totalPenalty = 0;
+    
+    // Descobre qual o valor da multa atual
+    if (status === 'Atrasado') {
+        const fullOverdue = calculateOverdueValue(breakdown.total, selectedLoan.nextDue, 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount);
+        totalPenalty = fullOverdue - breakdown.total;
+    }
+
     let updatedLoan = { ...selectedLoan };
+    
+    // Se o cliente pagou juros e havia multa, a multa "come" parte do juro pago para os registros
+    let appliedPenalty = 0;
+    if (totalPenalty > 0 && valInterest > 0) {
+        appliedPenalty = Math.min(valInterest, totalPenalty);
+        // Não subtraímos do valInterest porque contabilisticamente a multa entra como "Lucro (Juro Pago)", 
+        // mas registramos isso numa anotação para auditoria.
+    }
+
     updatedLoan.totalPaidCapital = (updatedLoan.totalPaidCapital || 0) + valCapital;
     updatedLoan.totalPaidInterest = (updatedLoan.totalPaidInterest || 0) + valInterest;
 
     const balance = updatedLoan.amount - updatedLoan.totalPaidCapital;
     let noteText = `Baixa Manual. Ref: ${new Date(payDate).toLocaleString('pt-BR')}`;
+    if (appliedPenalty > 0) noteText += ` [Inc. R$ ${formatMoney(appliedPenalty)} de Multa/Mora]`;
+    
     const originalDueStr = selectedLoan.nextDue; 
     const isSimple = selectedLoan.interestType === 'SIMPLE';
 
@@ -1179,21 +1248,16 @@ const Billing = () => {
         updatedLoan.installments = 0;
         if (isSimple) updatedLoan.installmentValue = 0;
         
-        // Se a quitação foi total (abatendo todo o capital que faltava no sistema)
         updatedLoan.totalPaidCapital = updatedLoan.amount; 
         
-        // 🚀 O DESCONTO (PERDÃO) É CALCULADO AQUI:
-        // Pega o Lucro Total Projetado e subtrai o que já pagou + o que pagou hoje de juros. 
         const profitAlreadyPaid = (selectedLoan.totalPaidInterest || 0);
         const profitPaidToday = valInterest;
         const totalExpectedProfit = updatedLoan.projectedProfit || 0;
         
-        // O que ele deixou de pagar de juros é o desconto
         const discountGiven = Math.max(0, totalExpectedProfit - (profitAlreadyPaid + profitPaidToday));
         
         noteText += ` [QUITAÇÃO COM DESCONTO] Perdão concedido: R$ ${formatMoney(discountGiven)}`;
     } 
-    // 🚀 FIX DO VÍDEO: Se for Pagamento Mínimo (SIMPLE), NUNCA QUITA AUTOMATICAMENTE só porque avançou o ciclo. Só quita se o saldo devedor zerar.
     else if (balance <= 0.10) {
         updatedLoan.status = 'Quitado';
         updatedLoan.installments = 0;
@@ -1216,11 +1280,17 @@ const Billing = () => {
                  updatedLoan.nextDue = nextDueStr;
                  updatedLoan.agreementValue = 0;
              } else {
-                     const currentDue = new Date(updatedLoan.nextDue);
+                     // 🚀 FIX FUSO HORÁRIO: Força a leitura exata do Ano, Mês e Dia para não retroceder dias por causa do UTC
+                     const [y, m, d] = updatedLoan.nextDue.split('T')[0].split('-').map(Number);
+                     const currentDue = new Date(y, m - 1, d);
+                     
                      if (updatedLoan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
                      else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
                      else currentDue.setMonth(currentDue.getMonth() + 1);
-                     updatedLoan.nextDue = currentDue.toISOString().split('T')[0];
+                     
+                     const nextM = String(currentDue.getMonth() + 1).padStart(2, '0');
+                     const nextD = String(currentDue.getDate()).padStart(2, '0');
+                     updatedLoan.nextDue = `${currentDue.getFullYear()}-${nextM}-${nextD}`;
                  }
                  
                  // 🚀 CORREÇÃO DO AVANÇO DE PARCELA
@@ -1281,10 +1351,15 @@ const Billing = () => {
         if (returnToModal === 'collection') {
             setIsCollectionModalOpen(true);
             setReturnToModal(null);
-        } else {
+        } else if (returnToModal === 'details') {
+            // 🚀 Só abre a tela de detalhes se ele estava dentro da tela de detalhes antes
             setSelectedLoan(updatedLoan);
             setDetailTab('history');
             setIsDetailsOpen(true);
+            setReturnToModal(null);
+        } else {
+            // 🚀 FIX REDIRECIONAMENTO: Fecha o modal de pagamento e o mantém na tabela principal (Atrasados) para ele continuar o trabalho!
+            setReturnToModal(null);
         }
     } catch (err) { alert("Erro ao registrar."); }
   };
@@ -1623,7 +1698,7 @@ const handleOpenEditContract = (loan: Loan) => {
         manualID: '', isMigration: false, 
         initialPaidCapital: '', initialPaidInterest: '',
         manualInstallmentCapital: '', manualInstallmentInterest: '',
-        client: '', amount: '', interestRate: '', installments: '', startDate: '', firstPaymentDate: '', frequency: 'MENSAL', 
+        client: '', amount: '', interestRate: '', installments: '', startDate: '', firstPaymentDate: '', promissoryDueDate: '', frequency: 'MENSAL', 
         fineRate: '', moraInterestRate: '', clientBank: '', paymentMethod: '', 
         interestType: 'PRICE', 
         hasGuarantor: false, guarantorName: '', guarantorCPF: '', guarantorAddress: '',
@@ -1784,7 +1859,8 @@ const handleFinalSave = async (e: React.FormEvent) => {
             guarantorCPF: formData.hasGuarantor ? formData.guarantorCPF : '', 
             guarantorAddress: fullGuarantorAddress,
             affiliateName: formData.hasAffiliate ? formData.affiliateName : '', affiliateFee: formData.hasAffiliate ? parseFloat(formData.affiliateFee) : 0, affiliateNotes: formData.hasAffiliate ? formData.affiliateNotes : '',
-            multiDates: finalMultiDates 
+            multiDates: finalMultiDates,
+            promissoryDueDate: formData.promissoryDueDate
         };
 
         await loanService.create(newLoan as any);
@@ -1840,6 +1916,17 @@ const handleFinalSave = async (e: React.FormEvent) => {
           });
       }
 
+      // 🚀 CÁLCULO INTELIGENTE DO SUBTÍTULO (Multa ou Acordo)
+      let subtitleLabel = '';
+      if (displayStatus === 'Atrasado') {
+          const breakdown = getSyncedBreakdown(loan);
+          const fullOverdue = calculateOverdueValue(breakdown.total, loan.nextDue, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount);
+          const penaltyOnly = fullOverdue - breakdown.total;
+          if (penaltyOnly > 0) subtitleLabel = `+ R$ ${formatMoney(penaltyOnly)} (Multa)`;
+      } else if (displayStatus === 'Acordo' && loan.agreementValue > 0) {
+          subtitleLabel = `+ R$ ${formatMoney(loan.agreementValue)} (Acordo)`;
+      }
+
       return (
         <tr key={uniqueKey} className={`transition-colors group ${selectedIds.includes(loan.id) ? "bg-blue-50/50" : "hover:bg-slate-50/80"}`}>
           <td className="p-4 text-center">
@@ -1873,57 +1960,67 @@ const handleFinalSave = async (e: React.FormEvent) => {
             R$ {formatMoney(loan.installmentValue)}
           </td>
           <td className="p-4 text-center">
-            <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase shadow-sm ${
-                displayStatus === "Em Dia" ? "bg-blue-50 text-blue-700 border border-blue-100"
-              : displayStatus === "Atrasado" ? "bg-red-50 text-red-700 border border-red-100"
-              : displayStatus === "Acordo" ? "bg-orange-50 text-orange-700 border border-orange-100"
-              : displayStatus === "Quitado" ? "bg-green-50 text-green-700 border border-green-100"
-              : "bg-gray-100 text-gray-500"
-            }`}>
-              {displayStatus}
-            </span>
+            <div className="flex flex-col items-center justify-center">
+                <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase shadow-sm ${
+                    displayStatus === "Em Dia" ? "bg-blue-50 text-blue-700 border border-blue-100"
+                  : displayStatus === "Atrasado" ? "bg-red-50 text-red-700 border border-red-100"
+                  : displayStatus === "Acordo" ? "bg-orange-50 text-orange-700 border border-orange-100"
+                  : displayStatus === "Quitado" ? "bg-green-50 text-green-700 border border-green-100"
+                  : "bg-gray-100 text-gray-500"
+                }`}>
+                  {displayStatus}
+                </span>
+                {subtitleLabel && (
+                    <span className={`text-[9px] font-bold mt-1 ${displayStatus === 'Atrasado' ? 'text-red-500' : 'text-orange-500'}`}>
+                        {subtitleLabel}
+                    </span>
+                )}
+            </div>
           </td>
-          <td className="p-4 text-right relative">
-            <button onClick={() => handleWhatsApp(loan as LoanExtended, (loan as any).snowball)} className="p-2 bg-green-100 text-green-700 rounded-lg mr-2" title="Whatsapp">
-              <MessageCircle size={18} />
-            </button>
-            <div className="relative inline-block text-left">
-              <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === loan.id ? null : loan.id); }} className={`p-2 rounded-lg transition-all ${openMenuId === loan.id ? "bg-slate-200 text-slate-900" : "text-slate-400 hover:text-slate-900 hover:bg-slate-100"}`}>
-                <MoreVertical size={18} />
-              </button>
-              {openMenuId === loan.id && (
-                <div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
-                  <div className="py-1">
-                    <button onClick={() => { setSelectedLoan(loan); setDetailTab("info"); setIsDetailsOpen(true); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
-                      <Eye size={16} className="text-blue-500" /> Ver Detalhes
-                    </button>
-                    {displayStatus !== "Quitado" && (
-                      <>
-                        <button onClick={() => { handleOpenPayment(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
-                          <DollarSign size={16} className="text-green-600" /> Registrar Baixa
+          <td className="p-4">
+            {/* 🚀 FIX: Flex layout puro para forçar os botões a ficarem na mesma linha sem sobreposição */}
+            <div className="flex justify-end items-center gap-1 relative">
+                <button onClick={() => handleWhatsApp(loan as LoanExtended, (loan as any).snowball)} className="p-2 bg-green-100 text-green-700 hover:bg-green-200 transition-colors rounded-lg flex-shrink-0" title="Whatsapp">
+                  <MessageCircle size={18} />
+                </button>
+                <div className="relative">
+                  <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === loan.id ? null : loan.id); }} className={`p-2 rounded-lg transition-all flex-shrink-0 ${openMenuId === loan.id ? "bg-slate-200 text-slate-900" : "text-slate-400 hover:text-slate-900 hover:bg-slate-100"}`}>
+                    <MoreVertical size={18} />
+                  </button>
+                  {openMenuId === loan.id && (
+                    <div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                      <div className="py-1">
+                        <button onClick={() => { setSelectedLoan(loan); setDetailTab("info"); setIsDetailsOpen(true); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                          <Eye size={16} className="text-blue-500" /> Ver Detalhes
                         </button>
-                        <button onClick={() => { handleOpenAgreement(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-orange-700 hover:bg-orange-50 flex items-center gap-2">
-                          <FileSignature size={16} /> Registrar Acordo
+                        {displayStatus !== "Quitado" && (
+                          <>
+                            <button onClick={() => { setReturnToModal(null); handleOpenPayment(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                              <DollarSign size={16} className="text-green-600" /> Registrar Baixa
+                            </button>
+                            <button onClick={() => { handleOpenAgreement(loan); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-orange-700 hover:bg-orange-50 flex items-center gap-2">
+                              <FileSignature size={16} /> Registrar Acordo
+                            </button>
+                          </>
+                        )}
+                        <button onClick={() => handleOpenEditContract(loan)} className="w-full text-left px-4 py-3 text-sm text-blue-600 hover:bg-blue-50 flex items-center gap-2">
+                          <Edit size={16} /> Editar Contrato
                         </button>
-                      </>
-                    )}
-                    <button onClick={() => handleOpenEditContract(loan)} className="w-full text-left px-4 py-3 text-sm text-blue-600 hover:bg-blue-50 flex items-center gap-2">
-                      <Edit size={16} /> Editar Contrato
-                    </button>
-                    <div className="border-t border-slate-100 my-1"></div>
-                    <button onClick={() => { const c = availableClients.find((cl) => cl.name === loan.client); generateContractPDF(loan, c, companySettings); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
-                      <Printer size={16} /> Contrato PDF
-                    </button>
-                    <button onClick={() => { const c = availableClients.find((cl) => cl.name === loan.client); generatePromissoryPDF(loan, c, companySettings); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
-                      <FileText size={16} /> Promissórias
-                    </button>
-                    <div className="border-t border-slate-100 my-1"></div>
-                    <button onClick={() => { handleDelete(loan.id); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2">
-                      <Trash2 size={16} /> Excluir
-                    </button>
-                  </div>
+                        <div className="border-t border-slate-100 my-1"></div>
+                        <button onClick={() => { const c = availableClients.find((cl) => cl.name === loan.client); generateContractPDF(loan, c, companySettings); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                          <Printer size={16} /> Contrato PDF
+                        </button>
+                        <button onClick={() => { const c = availableClients.find((cl) => cl.name === loan.client); generatePromissoryPDF(loan, c, companySettings); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                          <FileText size={16} /> Promissórias
+                        </button>
+                        <div className="border-t border-slate-100 my-1"></div>
+                        <button onClick={() => { handleDelete(loan.id); setOpenMenuId(null); }} className="w-full text-left px-4 py-3 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2">
+                          <Trash2 size={16} /> Excluir
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
             </div>
           </td>
         </tr>
@@ -2333,7 +2430,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
             
             <div className="flex flex-col gap-2 pt-4 border-t border-slate-100">
                 {selectedLoan.status !== 'Pago' && selectedLoan.status !== 'Quitado' && (
-                    <button onClick={() => { handleOpenPayment(selectedLoan); setIsDetailsOpen(false); }} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-slate-800 transition-all shadow-lg"><DollarSign size={18} /> Registrar Novo Pagamento</button>
+                    <button onClick={() => { setReturnToModal('details'); handleOpenPayment(selectedLoan); setIsDetailsOpen(false); }} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-slate-800 transition-all shadow-lg"><DollarSign size={18} /> Registrar Novo Pagamento</button>
                 )}
             </div>
           </div>
@@ -3333,10 +3430,11 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     </div>
                 )}
                 
-                <div className="grid grid-cols-3 gap-4">
-                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">{formData.isMigration ? 'Data Original (Criação)' : 'Data da Operação'}</label><input required type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" /></div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">{formData.isMigration ? 'Data Original' : 'Data da Operação'}</label><input required type="date" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5" /></div>
                     <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">Periodicidade</label><div className="relative"><Repeat size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/><select value={formData.frequency} onChange={e => setFormData({...formData, frequency: e.target.value})} className="w-full pl-10 p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5"><option value="MENSAL">Mensal</option><option value="SEMANAL">Semanal</option><option value="DIARIO">Diário</option></select></div></div>
-                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">{formData.isMigration ? 'Próximo Vencimento' : 'Primeiro Vencimento'}</label><input type="date" required={formData.isMigration} value={formData.firstPaymentDate} onChange={e => setFormData({...formData, firstPaymentDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 text-sm" placeholder="Opcional" title="Deixe vazio para automático"/></div>
+                    <div><label className="block text-xs font-bold uppercase text-slate-500 mb-2">{formData.isMigration ? 'Próximo Venc.' : 'Primeiro Venc.'}</label><input type="date" required={formData.isMigration} value={formData.firstPaymentDate} onChange={e => setFormData({...formData, firstPaymentDate: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-slate-900/5 text-sm" placeholder="Opcional" title="Deixe vazio para automático"/></div>
+                    <div><label className="block text-xs font-bold uppercase text-purple-600 mb-2" title="Define um prazo longo específico para validade jurídica da promissória.">Venc. Promissória</label><input type="date" value={formData.promissoryDueDate} onChange={e => setFormData({...formData, promissoryDueDate: e.target.value})} className="w-full p-3 border border-purple-200 bg-purple-50 rounded-xl outline-none focus:ring-2 focus:ring-purple-500/20 text-sm text-purple-900 font-bold" title="Opcional: Substitui o vencimento padrão na hora de gerar o PDF."/></div>
                 </div>
                 
                 <div className="flex items-center gap-2 mt-4"><input type="checkbox" id="hasGuarantor" checked={formData.hasGuarantor} onChange={(e) => setFormData({...formData, hasGuarantor: e.target.checked})} className="w-4 h-4 rounded text-slate-900 focus:ring-slate-500"/><label htmlFor="hasGuarantor" className="text-sm font-bold text-slate-700 cursor-pointer">Adicionar Fiador (Opcional)</label></div>

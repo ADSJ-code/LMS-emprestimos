@@ -39,6 +39,42 @@ const Clients = () => {
   const [isAuditorModalOpen, setIsAuditorModalOpen] = useState(false);
   const [isAuditing, setIsAuditing] = useState(false);
   const [auditorResults, setAuditorResults] = useState<{onlyInSystem: any[], onlyInExcel: any[], divergences: any[]} | null>(null);
+  
+  // 🚀 ESTADOS DO VINCULADOR MANUAL (DE-PARA)
+  const [matchingExcelClient, setMatchingExcelClient] = useState<any>(null);
+  const [matchSearchTerm, setMatchSearchTerm] = useState('');
+  const [isLinking, setIsLinking] = useState(false);
+
+  // 🚀 FUNÇÃO QUE GRAVA A TAG SECRETA NO BANCO DE DADOS DIRETO DO MODAL
+  const handleLinkClient = async (dbClient: Client, excelName: string) => {
+      setIsLinking(true);
+      try {
+          const currentObs = dbClient.observations || '';
+          const cleanObs = currentObs.replace(/\[PLANILHA:.*?\]/ig, '').trim();
+          const newObs = `${cleanObs} [PLANILHA: ${excelName}]`.trim();
+
+          const updatedClient = { ...dbClient, observations: newObs };
+          
+          // Salva no Banco de Dados
+          await clientService.update(dbClient.id.toString(), updatedClient as any);
+
+          // Atualiza a lista local para não precisar recarregar a página
+          setClients(prev => prev.map(c => c.id === dbClient.id ? updatedClient : c));
+
+          // Remove o cliente da lista de divergências na mesma hora (Magia Visual)
+          setAuditorResults((prev: any) => {
+              if (!prev) return prev;
+              return { ...prev, onlyInExcel: prev.onlyInExcel.filter((ec: any) => ec.name !== excelName) };
+          });
+
+          setMatchingExcelClient(null);
+          setMatchSearchTerm('');
+      } catch (error) {
+          alert("Erro ao vincular cliente.");
+      } finally {
+          setIsLinking(false);
+      }
+  };
 
   // 🚨 ESTADOS ADICIONADOS PARA EXPORTAÇÃO E FILTROS INTELIGENTES
   const [selectedIds, setSelectedIds] = useState<(string|number)[]>([]);
@@ -440,9 +476,12 @@ const Clients = () => {
       const searchLower = normalizeString(searchTerm);
       const searchNumbers = searchTerm.replace(/\D/g, '');
       const cNameNorm = normalizeString(c.name || '');
+      // 🚀 Extrai o apelido/observação sem os metadados e remove os acentos
+      const cNickNorm = normalizeString(getNickname(c.observations));
       
       const matchesSearch = (
         cNameNorm.includes(searchLower) || 
+        cNickNorm.includes(searchLower) || 
         (searchNumbers && (c.cpf || '').replace(/\D/g, '').includes(searchNumbers)) ||
         (c.displayNumber && c.displayNumber.toString() === searchNumbers)
       );
@@ -475,8 +514,11 @@ const Clients = () => {
       
       // Se houver busca, mantém a inteligência de colocar quem começa com o termo no topo
       const searchLower = normalizeString(searchTerm);
-      const aStarts = aName.startsWith(searchLower);
-      const bStarts = bName.startsWith(searchLower);
+      const aNick = normalizeString(getNickname(a.observations));
+      const bNick = normalizeString(getNickname(b.observations));
+      
+      const aStarts = aName.startsWith(searchLower) || aNick.startsWith(searchLower);
+      const bStarts = bName.startsWith(searchLower) || bNick.startsWith(searchLower);
       
       if (aStarts && !bStarts) return -1;
       if (!aStarts && bStarts) return 1;
@@ -659,7 +701,7 @@ const Clients = () => {
     if (confirm('Excluir cliente?')) { try { await clientService.delete(id.toString()); fetchData(); } catch (err) { alert('Erro.'); } }
   };
 
-  // 🚀 NOVA FUNÇÃO: Motor de Auditoria / Conciliação de Planilha (LEITOR OMNISCIENTE)
+  // 🚀 NOVA FUNÇÃO: Motor de Auditoria / Conciliação (SOMENTE FALTANTES NO SISTEMA)
   const handleAuditorUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -675,8 +717,7 @@ const Clients = () => {
 
           const excelClients: any[] = [];
 
-          // 🚀 LEITOR OMNISCIENTE: Ignora cabeçalhos e posições de colunas!
-          // Lê todas as linhas e captura qualquer coisa que pareça um Nome/Apelido ou CPF
+          // Lê a planilha
           worksheet.eachRow((row, rowNumber) => {
               let rowName = '';
               let rowCpf = '';
@@ -686,22 +727,19 @@ const Clients = () => {
                   if (!val) return;
 
                   const numbersOnly = val.replace(/\D/g, '');
-                  // Se a célula for um CPF ou CNPJ puro
                   if (numbersOnly.length === 11 || numbersOnly.length === 14) {
                       rowCpf = numbersOnly;
                   }
-                  // Se for um texto com mais de 3 letras e não for só número, assume que é Nome/Apelido
                   else if (val.length > 3 && isNaN(Number(val))) {
-                      // Ignora se for apenas a palavra do cabeçalho
                       if (!val.toUpperCase().includes('NOME') && !val.toUpperCase().includes('CLIENTE') && !val.toUpperCase().includes('CPF')) {
-                          // Se houver várias colunas com texto, junta tudo para não perder o apelido
                           rowName = rowName ? `${rowName} ${val}` : val;
                       }
                   }
               });
 
               if (rowName || rowCpf) {
-                  excelClients.push({ cpf: rowCpf, name: rowName, row: rowNumber });
+                  const cleanRowName = rowName.replace(/[()]/g, '').trim();
+                  excelClients.push({ cpf: rowCpf, name: cleanRowName, rawName: rowName, row: rowNumber });
               }
           });
 
@@ -712,47 +750,46 @@ const Clients = () => {
               return;
           }
 
-          const onlyInSystem: any[] = [];
-          const onlyInExcel: any[] = [];
-          const divergences: any[] = [];
+          // Motor Inteligente (Fuzzy)
+          const isFuzzyMatch = (excelName: string, dbName: string, dbNick: string) => {
+              if (!excelName) return false;
+              const excelWords = excelName.split(' ').filter(w => w.length > 2); 
+              const fullDbString = `${dbName} ${dbNick}`;
 
-          // 1. Procurar quem está no Sistema mas falta na Planilha
-          clients.forEach(dbClient => {
-              if (dbClient.name === 'teste andre duarte teste') return; // Ignora os testes
-              const dbCpf = (dbClient.cpf || '').replace(/\D/g, '');
-              const dbNameNorm = normalizeString(dbClient.name);
-              const dbNickNorm = normalizeString(getNickname(dbClient.observations)); // 🚀 PEGA O APELIDO DO SISTEMA
-
-              const matchInExcel = excelClients.find(ec => {
-                  const ecNameNorm = normalizeString(ec.name);
-                  
-                  const isCpfMatch = dbCpf && ec.cpf === dbCpf;
-                  const isNameMatch = ecNameNorm === dbNameNorm;
-                  // 🚀 MAGIA DO APELIDO: Verifica se o nome do Excel contém o apelido exato do sistema (Ex: Excel "ADRIANA ( PATRICIA BAIXADA )" dá match com "PATRICIA BAIXADA")
-                  const isNickMatch = dbNickNorm && (ecNameNorm === dbNickNorm || ecNameNorm.includes(dbNickNorm) || dbNickNorm.includes(ecNameNorm));
-
-                  return isCpfMatch || isNameMatch || isNickMatch;
-              });
-
-              if (!matchInExcel) {
-                  onlyInSystem.push(dbClient);
+              let matchCount = 0;
+              for (const word of excelWords) {
+                  if (fullDbString.includes(word)) matchCount++;
               }
-          });
 
-          // 2. Procurar quem está na Planilha mas falta no Sistema
+              if (excelWords.length === 1 && matchCount === 1) return true;
+              if (excelWords.length > 1 && matchCount >= 2) return true;
+
+              return false;
+          };
+
+          const onlyInExcel: any[] = [];
+
+          // 🚀 PROCURA APENAS QUEM ESTÁ NA PLANILHA MAS FALTA NO SISTEMA
           excelClients.forEach(ec => {
               const ecNameNorm = normalizeString(ec.name);
+              const ecRawNorm = normalizeString(ec.rawName);
               
               const matchInDb = clients.find(dbC => {
+                  if (dbC.name === 'teste andre duarte teste') return false;
+                  
                   const dbCpf = (dbC.cpf || '').replace(/\D/g, '');
                   const dbNameNorm = normalizeString(dbC.name);
                   const dbNickNorm = normalizeString(getNickname(dbC.observations));
+                  
+                  // Procura a Tag de Correção Manual: [PLANILHA: NOME EXATO]
+                  const obsMatch = (dbC.observations || '').match(/\[PLANILHA:(.*?)\]/i);
+                  const dbAliasNorm = obsMatch ? normalizeString(obsMatch[1]) : '';
 
                   const isCpfMatch = ec.cpf && dbCpf === ec.cpf;
-                  const isNameMatch = ecNameNorm === dbNameNorm;
-                  const isNickMatch = dbNickNorm && (ecNameNorm === dbNickNorm || ecNameNorm.includes(dbNickNorm) || dbNickNorm.includes(ecNameNorm));
+                  const isAliasMatch = dbAliasNorm && (ecNameNorm === dbAliasNorm || ecRawNorm === dbAliasNorm);
+                  const isFuzzy = isFuzzyMatch(ecNameNorm, dbNameNorm, dbNickNorm);
 
-                  return isCpfMatch || isNameMatch || isNickMatch;
+                  return isCpfMatch || isAliasMatch || isFuzzy;
               });
 
               if (!matchInDb) {
@@ -760,13 +797,13 @@ const Clients = () => {
               }
           });
 
-          setAuditorResults({ onlyInSystem, onlyInExcel, divergences });
+          setAuditorResults({ onlyInExcel } as any);
       } catch (error) {
-          alert("Erro ao ler a planilha. Certifique-se de que é um ficheiro .xlsx válido e não está corrompido.");
+          alert("Erro ao ler a planilha. Certifique-se de que é um ficheiro .xlsx válido.");
           setIsAuditorModalOpen(false);
       } finally {
           setIsAuditing(false);
-          e.target.value = ''; // Limpa o input para poder subir a mesma planilha de novo se quiser
+          if (e.target) e.target.value = ''; 
       }
   };
 
@@ -1365,57 +1402,111 @@ const Clients = () => {
       </Modal>
 
       {/* 🚀 MODAL DO CONCILIADOR DE PLANILHA (AUDITOR OMNISCIENTE) */}
-      <Modal isOpen={isAuditorModalOpen} onClose={() => setIsAuditorModalOpen(false)} title="Resultado da Conciliação">
+      <Modal isOpen={isAuditorModalOpen} onClose={() => { setIsAuditorModalOpen(false); setMatchingExcelClient(null); setMatchSearchTerm(''); }} title="Resultado da Conciliação">
           {isAuditing ? (
               <div className="flex flex-col items-center justify-center py-12">
                   <Loader2 className="animate-spin text-blue-600 mb-4" size={48} />
-                  <p className="text-slate-700 font-black text-lg">Cruzando dados Omniscientes...</p>
-                  <p className="text-xs text-slate-400 mt-2 text-center px-4">Lendo Nomes, Apelidos e CPFs.<br/>Isso pode levar alguns segundos dependendo do tamanho da planilha.</p>
+                  <p className="text-slate-700 font-black text-lg">Cruzando dados da Planilha...</p>
+                  <p className="text-xs text-slate-400 mt-2 text-center px-4">Analisando Nomes, Apelidos e CPFs.<br/>Aguarde um momento.</p>
               </div>
           ) : auditorResults ? (
               <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
                   
-                  {/* SÓ NO SISTEMA */}
+                  {/* SÓ NA PLANILHA (FALTAM NO SISTEMA) */}
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-sm">
                       <h4 className="text-sm font-black text-slate-800 mb-2 flex items-center gap-2">
-                          <Database size={16} className="text-blue-500"/> 
-                          Faltam na Planilha ({auditorResults.onlyInSystem.length})
+                          <AlertCircle size={16} className="text-orange-500"/> 
+                          Resolver Pendências ({auditorResults.onlyInExcel.length})
                       </h4>
-                      <p className="text-[10px] text-slate-500 mb-3 leading-relaxed">Clientes que estão <b>ativos no sistema</b>, mas que o leitor não encontrou na sua planilha do Excel.</p>
-                      
-                      {auditorResults.onlyInSystem.length === 0 ? (
-                          <p className="text-xs text-green-700 font-bold bg-green-100 p-3 rounded-lg border border-green-200 flex items-center gap-2"><CheckCircle size={16}/> Perfeito! Todos do sistema estão na planilha.</p>
-                      ) : (
-                          <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
-                              {auditorResults.onlyInSystem.map((c: any) => (
-                                  <div key={c.id} className="bg-white p-3 border border-slate-200 rounded-lg flex justify-between items-center shadow-sm hover:border-blue-300 transition-colors">
-                                      <div>
-                                          <p className="text-xs font-bold text-slate-800">{c.name}</p>
-                                          {getNickname(c.observations) && <p className="text-[10px] text-blue-600 font-bold mt-0.5 uppercase tracking-wider bg-blue-50 px-2 py-0.5 rounded inline-block">Apelido: {getNickname(c.observations)}</p>}
-                                      </div>
-                                      <span className="text-[10px] font-mono text-slate-400 bg-slate-50 px-2 py-1 rounded border border-slate-100">{c.cpf || 'S/ CPF'}</span>
-                                  </div>
-                              ))}
-                          </div>
-                      )}
-                  </div>
-
-                  {/* SÓ NA PLANILHA */}
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-sm">
-                      <h4 className="text-sm font-black text-slate-800 mb-2 flex items-center gap-2">
-                          <FileText size={16} className="text-orange-500"/> 
-                          Faltam no Sistema ({auditorResults.onlyInExcel.length})
-                      </h4>
-                      <p className="text-[10px] text-slate-500 mb-3 leading-relaxed">Nomes encontrados na sua planilha que <b>não existem no sistema</b> ou o nome/apelido está escrito de forma muito diferente.</p>
+                      <p className="text-[10px] text-slate-500 mb-3 leading-relaxed">Clique em <b>Vincular</b> para associar um nome do Excel ao cadastro correto no sistema.</p>
                       
                       {auditorResults.onlyInExcel.length === 0 ? (
-                          <p className="text-xs text-green-700 font-bold bg-green-100 p-3 rounded-lg border border-green-200 flex items-center gap-2"><CheckCircle size={16}/> Perfeito! Todos da planilha estão no sistema.</p>
+                          <div className="bg-green-100 p-4 rounded-xl border border-green-200 text-center">
+                              <CheckCircle size={32} className="text-green-500 mx-auto mb-2"/>
+                              <p className="text-sm text-green-800 font-black">Conciliação 100% Perfeita!</p>
+                              <p className="text-xs text-green-700 mt-1">Todos os clientes da sua planilha já estão vinculados no sistema.</p>
+                          </div>
                       ) : (
-                          <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                          <div className="space-y-2 max-h-96 overflow-y-auto custom-scrollbar pr-1 pb-4">
                               {auditorResults.onlyInExcel.map((ec: any, i: number) => (
-                                  <div key={i} className="bg-white p-3 border border-orange-100 rounded-lg flex justify-between items-center shadow-sm hover:border-orange-300 transition-colors">
-                                      <p className="text-xs font-bold text-orange-800">{ec.name || 'Sem Nome na Linha'}</p>
-                                      {ec.cpf && <span className="text-[10px] font-mono text-slate-400 bg-slate-50 px-2 py-1 rounded border border-slate-100">{ec.cpf}</span>}
+                                  <div key={i} className={`bg-white p-3 border rounded-lg shadow-sm transition-colors ${matchingExcelClient?.name === ec.name ? 'border-blue-400 ring-1 ring-blue-400' : 'border-orange-100 hover:border-orange-300'}`}>
+                                      <div className="flex justify-between items-center">
+                                          <div>
+                                              <p className="text-xs font-bold text-orange-800">{ec.name || 'Sem Nome na Linha'}</p>
+                                              <p className="text-[9px] text-slate-400 mt-0.5">Linha {ec.row} do Excel</p>
+                                          </div>
+                                          <div className="flex items-center gap-2">
+                                              {ec.cpf ? (
+                                                  <span className="text-[10px] font-mono text-slate-400 bg-slate-50 px-2 py-1 rounded border border-slate-100">{ec.cpf}</span>
+                                              ) : (
+                                                  <span className="text-[9px] font-bold text-orange-400 bg-orange-50 px-2 py-1 rounded border border-orange-100">Sem CPF</span>
+                                              )}
+                                              <button 
+                                                  onClick={() => { setMatchingExcelClient(ec); setMatchSearchTerm(''); }}
+                                                  className="text-[10px] font-bold bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors border border-blue-200"
+                                              >
+                                                  Vincular ➔
+                                              </button>
+                                          </div>
+                                      </div>
+
+                                      {/* 🚀 ÁREA DE BUSCA INTERNA (EXPANDE AO CLICAR EM VINCULAR) */}
+                                      {matchingExcelClient?.name === ec.name && (
+                                          <div className="mt-3 pt-3 border-t border-blue-100 animate-in slide-in-from-top-2">
+                                              <div className="flex justify-between items-center mb-2">
+                                                  <label className="text-[10px] font-bold text-slate-500 uppercase">Qual é o nome verdadeiro no sistema?</label>
+                                                  <button onClick={() => setMatchingExcelClient(null)} className="text-[10px] text-red-500 hover:underline font-bold">Cancelar</button>
+                                              </div>
+                                              <input 
+                                                  type="text" 
+                                                  placeholder="Busque por Nome ou Apelido..." 
+                                                  value={matchSearchTerm}
+                                                  onChange={e => setMatchSearchTerm(e.target.value)}
+                                                  className="w-full p-2 border border-slate-200 rounded-lg text-sm mb-2 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 bg-slate-50"
+                                                  autoFocus
+                                              />
+                                              <div className="space-y-1 max-h-40 overflow-y-auto custom-scrollbar">
+                                                  {(() => {
+                                                      const suggestions = clients.filter(c => {
+                                                          if (c.name === 'teste andre duarte teste' || c.status === 'Bloqueado') return false;
+                                                          const searchNorm = normalizeString(matchSearchTerm);
+                                                          
+                                                          // Se ele digitou algo na busca, filtra severamente
+                                                          if (searchNorm) {
+                                                              return normalizeString(c.name).includes(searchNorm) || normalizeString(getNickname(c.observations)).includes(searchNorm);
+                                                          }
+                                                          
+                                                          // Se a busca está vazia, o sistema usa IA para SUGERIR nomes baseados em palavras soltas do Excel
+                                                          const excelWords = normalizeString(ec.name).split(' ').filter(w => w.length > 2);
+                                                          let matchCount = 0;
+                                                          const fullDbString = `${normalizeString(c.name)} ${normalizeString(getNickname(c.observations))}`;
+                                                          for (const word of excelWords) {
+                                                              if (fullDbString.includes(word)) matchCount++;
+                                                          }
+                                                          return matchCount > 0; // Sugere quem tiver pelo menos 1 palavra igual
+                                                      }).slice(0, 5); // Mostra apenas o Top 5
+
+                                                      if (suggestions.length === 0) return <p className="text-[10px] text-slate-400 italic p-2">Nenhum cliente encontrado.</p>;
+
+                                                      return suggestions.map(sc => (
+                                                          <div key={sc.id} className="flex justify-between items-center p-2 bg-white rounded border border-slate-200 hover:border-blue-400 hover:shadow-sm transition-all group">
+                                                              <div>
+                                                                  <p className="text-xs font-bold text-slate-700 group-hover:text-blue-700">{sc.name}</p>
+                                                                  {getNickname(sc.observations) && <p className="text-[9px] text-slate-500 font-bold mt-0.5">Apelido: {getNickname(sc.observations)}</p>}
+                                                              </div>
+                                                              <button 
+                                                                  onClick={() => handleLinkClient(sc, ec.name)}
+                                                                  disabled={isLinking}
+                                                                  className="text-[10px] font-black bg-slate-900 text-white px-3 py-1.5 rounded hover:bg-green-600 transition-colors disabled:opacity-50"
+                                                              >
+                                                                  {isLinking ? <Loader2 size={12} className="animate-spin inline" /> : 'Confirmar'}
+                                                              </button>
+                                                          </div>
+                                                      ));
+                                                  })()}
+                                              </div>
+                                          </div>
+                                      )}
                                   </div>
                               ))}
                           </div>
@@ -1426,8 +1517,8 @@ const Clients = () => {
           ) : null}
           
           <div className="mt-4 pt-4 border-t border-slate-100 flex justify-end">
-              <button onClick={() => setIsAuditorModalOpen(false)} className="w-full md:w-auto px-8 py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 shadow-lg transition-all">
-                  Fechar Relatório
+              <button onClick={() => { setIsAuditorModalOpen(false); setMatchingExcelClient(null); setMatchSearchTerm(''); }} className="w-full md:w-auto px-8 py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 shadow-lg transition-all">
+                  Fechar Conciliador
               </button>
           </div>
       </Modal>

@@ -1275,6 +1275,11 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			campoDoc = "cpf"
 		}
 
+		docPrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(cnpjPrestador, "")
+		imPrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(imPrestador, "")
+		ibgePrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(ibgePrestador, "")
+		ibgePrestadorInt, _ := strconv.Atoi(ibgePrestadorLimpo)
+
 		// 🚀 BLINDAGEM GINFES (MAUÁ): Endereços vazios quebram o XSD!
 		cepLimpo := regexp.MustCompile(`\D`).ReplaceAllString(c.CEP, "")
 		if cepLimpo == "" { cepLimpo = "09310640" } // CEP genérico de Mauá
@@ -1297,7 +1302,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			"bairro":           bairro,
 			"cep":              cepLimpo,
 			"uf":               uf,
-			"codigo_municipio": "3529401", // IBGE Padrão Mauá
+			"codigo_municipio": ibgePrestadorLimpo, // 🚀 FIX: Usa o IBGE da sua empresa em vez de chumbar Mauá para todos
 		}
 
 		// 🚀 INJEÇÃO DINÂMICA DE COMPLEMENTO SE EXISTIR NO CADASTRO
@@ -1310,7 +1315,12 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if len(cepLimpo) == 8 {
-			respViaCep, err := http.Get("https://viacep.com.br/ws/" + cepLimpo + "/json/")
+			// 🚀 FIX: Client HTTP customizado com User-Agent, pois o ViaCEP bloqueia o Go padrão
+			clientVC := &http.Client{Timeout: 5 * time.Second}
+			reqVC, _ := http.NewRequest("GET", "https://viacep.com.br/ws/"+cepLimpo+"/json/", nil)
+			reqVC.Header.Set("User-Agent", "CreditNow-App/1.0")
+			
+			respViaCep, err := clientVC.Do(reqVC)
 			if err == nil {
 				defer respViaCep.Body.Close()
 				var vcData struct { Ibge string `json:"ibge"` }
@@ -1338,23 +1348,12 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 			tomadorMap["telefone"] = telefoneTomador
 		}
 
-		docPrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(cnpjPrestador, "")
-		imPrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(imPrestador, "")
-		ibgePrestadorLimpo := regexp.MustCompile(`\D`).ReplaceAllString(ibgePrestador, "")
-		ibgePrestadorInt, _ := strconv.Atoi(ibgePrestadorLimpo)
-
 		// 🚀 FORÇA O FUSO HORÁRIO DE BRASÍLIA E O FORMATO EXATO DA FOCUS (-0300)
         brt := time.FixedZone("BRT", -3*60*60)
         dataEmissaoBRT := time.Now().In(brt).Format("2006-01-02T15:04:05-0700")
 
-        // 🚀 Valores PIS e COFINS (Apuração Própria - 0,65% e 3%)
-		// ARREDONDAMENTO COMERCIAL PADRÃO (Round Half Up)
-		// Ex: 350 * 0.0065 = 2.275 -> math.Round() sobe para 2.28 exatos.
-		valorPis := math.Round(serviceValue * 0.0065 * 100) / 100.0
-		valorCofins := math.Round(serviceValue * 0.03 * 100) / 100.0
-
         // 🚀 Discriminação exata solicitada pelo Rodrigo
-        descricaoRica := "SERVIÇO PRESTADO\nValor Aproximado dos Tributos de 10.39%"
+		descricaoRica := "SERVIÇO PRESTADO\nValor Aproximado dos Tributos de 10.39%"
 
 		// 🚀 NOVO PAYLOAD: GABARITO OFICIAL DA FOCUS NFE (Fornecido pelo César)
 		payload := map[string]interface{}{
@@ -1377,17 +1376,11 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 				"codigo_indicador_operacao":        "100301",
 				"ibs_cbs_situacao_tributaria":      "010",
 				"ibs_cbs_classificacao_tributaria": "010002",
-				"codigo_municipio_incidencia":      3529401,
+				"codigo_municipio_incidencia":      ibgePrestadorInt, // 🚀 FIX: Removeu o chumbado de Mauá
 				"iss_retido":                       false,
 				
-				// 🚀 PIS E COFINS (O segredo do conversor da Focus era o "01")
-				"valor_pis":                      valorPis,
-				"valor_cofins":                   valorCofins,
-				"aliquota_pis":                   0.65,
-				"aliquota_cofins":                3.00,
-				"base_calculo_pis_cofins":        serviceValue,
-				"situacao_tributaria_pis_cofins": "01", 
-				"tipo_retencao_pis_cofins":       2,
+				// 🚀 FIX: Retenções federais removidas para evitar os erros "Valor inconsistente" e "Valores divergentes"
+				// Se a sua empresa não retém na fonte, a GINFES rejeita esses campos.
 			},
 			
 			// 🚀 IBPT OFICIAL: Adicionado conforme orientação do suporte da Focus
