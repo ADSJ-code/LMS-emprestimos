@@ -4,7 +4,7 @@ import {
   Users, AlertTriangle, TrendingUp, Plus, 
   Search, FileText, ArrowRight, Calendar, Activity, 
   Briefcase, PieChart, RefreshCw, ArrowLeft, Filter,
-  UserCheck, Bell, BellRing, X, Clock, CalendarDays, ChevronDown, CheckCircle
+  UserCheck, Bell, BellRing, X, Clock, CalendarDays, ChevronDown, CheckCircle, Eye
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { calculateOverdueValue, formatMoney, calculateCapitalBalance, calculateInstallmentBreakdown } from '../utils/finance';
@@ -71,6 +71,22 @@ const Dashboard = () => {
   });
 
   const [recentActivities, setRecentActivities] = useState<any[]>([]);
+
+  // 🚀 NOVO: Estado para ocultar valores (Modo Privacidade)
+  const [isPrivacyMode, setIsPrivacyMode] = useState(() => {
+      return localStorage.getItem('dashboardPrivacyMode') === 'true';
+  });
+
+  const togglePrivacyMode = () => {
+      const newValue = !isPrivacyMode;
+      setIsPrivacyMode(newValue);
+      localStorage.setItem('dashboardPrivacyMode', String(newValue));
+  };
+
+  const renderMoney = (value: number) => {
+      if (isPrivacyMode) return '•••••••';
+      return formatMoney(value);
+  };
 
   // Helpers de Tempo e Matemática
   const getToday = () => {
@@ -274,26 +290,34 @@ const Dashboard = () => {
           const todayDate = new Date();
           todayDate.setHours(0,0,0,0);
           
-          for (const slice of validSlices) {
+          // 🚀 FIX CLÓVIS/RODRIGO: Matemática Sequencial de Fatias
+          let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+              if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
+                  return acc + parseVal(h.amount);
+              }
+              return acc;
+          }, 0);
+
+          const sortedSlices = [...validSlices].sort((a: any, b: any) => Number(a.day) - Number(b.day));
+
+          for (const slice of sortedSlices) {
               const baseAmount = parseVal(slice.amount);
               const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
               
-              const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
-                  const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-                  if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                      return acc + parseVal(h.amount);
+              if (totalPaidInCycle >= (baseAmount - 0.05)) {
+                  totalPaidInCycle -= baseAmount;
+              } else {
+                  const slicePaidAmount = Math.max(0, totalPaidInCycle);
+                  totalPaidInCycle = 0; // O dinheiro acabou
+                  
+                  if (sliceDate < todayDate && loan.status !== 'Pago' && loan.status !== 'Quitado') {
+                      const ratio = breakdown.total > 0 ? (baseAmount / breakdown.total) : 0;
+                      const sliceDateStr = sliceDate.toISOString().split('T')[0];
+                      const sliceOverdue = calculateOverdueValue(baseAmount, sliceDateStr, 'Atrasado', parseVal(loan.fineRate) || 0, parseVal(loan.moraInterestRate) || 0, parseVal(loan.amount) * ratio);
+                      totalOverdue += (sliceOverdue - slicePaidAmount);
+                      missedCount++;
                   }
-                  return acc;
-              }, 0);
-
-              const isPaid = slicePaidAmount >= (baseAmount - 0.05);
-              
-              if (!isPaid && sliceDate < todayDate && loan.status !== 'Pago' && loan.status !== 'Quitado') {
-                  const ratio = baseAmount / (breakdown.total || 1);
-                  const sliceDateStr = sliceDate.toISOString().split('T')[0];
-                  const sliceOverdue = calculateOverdueValue(baseAmount, sliceDateStr, 'Atrasado', parseVal(loan.fineRate) || 0, parseVal(loan.moraInterestRate) || 0, parseVal(loan.amount) * ratio);
-                  totalOverdue += (sliceOverdue - slicePaidAmount);
-                  missedCount++;
               }
           }
           return { totalOverdue, missedCount };
@@ -304,6 +328,11 @@ const Dashboard = () => {
       const remainingInstallments = loan.interestType === 'SIMPLE' ? 1 : (parseVal(loan.installments) || 1);
       const pad = (n: number) => n.toString().padStart(2, '0');
       
+      // 🚀 BLINDAGEM VALQUÍRIA: Se o status real da pessoa é "Em Dia", "Quitado" ou "Acordo", não soma atraso no card vermelho!
+      if (realStatus !== 'Atrasado') {
+          return { totalOverdue: 0, missedCount: 0 };
+      }
+
       while (tempDue < today) {
           const dateStr = `${tempDue.getFullYear()}-${pad(tempDue.getMonth() + 1)}-${pad(tempDue.getDate())}`;
           totalOverdue += calculateOverdueValue(baseAmount, dateStr, 'Atrasado', parseVal(loan.fineRate) || 0, parseVal(loan.moraInterestRate) || 0, parseVal(loan.amount));
@@ -312,7 +341,8 @@ const Dashboard = () => {
           if (loan.status === 'Acordo') break;
           
           count++;
-          if (count >= remainingInstallments) break; 
+          // 🚀 FIX CLÓVIS: Em "Só Juros" (SIMPLE), a dívida acumula infinito mês a mês. Removemos a trava de 1 parcela.
+          if (loan.interestType !== 'SIMPLE' && count >= remainingInstallments) break; 
           if (count > 60) break; 
           
           if (loan.frequency === 'SEMANAL') tempDue.setDate(tempDue.getDate() + 7);
@@ -638,8 +668,8 @@ const Dashboard = () => {
           const contextIds = new Set(filteredLoansContext.map(l => l.id));
           baseList = allLoans.filter(l => {
               const realStatus = getLoanRealStatus(l);
-              // 🚀 FIX RODRIGO: Garante que "Acordos" não apareçam na lista de detalhamento do Card Vermelho
-              const isOverdue = realStatus !== 'Quitado' && realStatus !== 'Acordo' && realStatus === 'Atrasado';
+              // 🚀 FIX VISUAL: Apenas contratos estritamente e ativamente 'Atrasados' aparecem na lista do Dashboard
+              const isOverdue = realStatus === 'Atrasado';
               
               let passTier = true;
               if (tierFilters.overdue === 'low') passTier = parseVal(l.interestRate) < 10;
@@ -676,17 +706,21 @@ const Dashboard = () => {
           });
       }
 
-      // 🚀 APLICA A BUSCA SE EXISTIR (SEM ACENTOS)
+      // 🚀 APLICA A BUSCA SE EXISTIR (SEM ACENTOS E COM APELIDO)
       if (searchTerm) {
           const searchLower = normalizeString(searchTerm);
           const searchNumbers = searchTerm.replace(/\D/g, '');
           
           baseList = baseList.filter(l => {
               const cNameNorm = normalizeString(l.client || '');
+              const clientInfo = allClients.find(c => c.name === l.client);
+              const nickname = getNickname(clientInfo?.observations);
+
               return (
                   cNameNorm.includes(searchLower) ||
                   (l.id || '').toLowerCase().includes(searchLower) ||
-                  (searchNumbers && (allClients.find(c => c.name === l.client)?.cpf || '').replace(/\D/g, '').includes(searchNumbers))
+                  (nickname && normalizeString(nickname).includes(searchLower)) ||
+                  (searchNumbers && (clientInfo?.cpf || '').replace(/\D/g, '').includes(searchNumbers))
               );
           });
       }
@@ -1159,9 +1193,20 @@ const Dashboard = () => {
       ) : (
           <>
             <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-8 gap-4">
-                <div>
-                    <h2 className="text-2xl font-bold text-slate-800">Dashboard</h2>
-                    <p className="text-slate-500">Visão geral e projeções do sistema.</p>
+                <div className="flex items-center gap-4">
+                    <div>
+                        <h2 className="text-2xl font-bold text-slate-800">Dashboard</h2>
+                        <p className="text-slate-500">Visão geral e projeções do sistema.</p>
+                    </div>
+                    {/* 🚀 BOTÃO DO OLHO (MODO PRIVACIDADE) */}
+                    <button 
+                        onClick={togglePrivacyMode}
+                        title={isPrivacyMode ? "Exibir Valores" : "Ocultar Valores"}
+                        className="ml-2 p-2.5 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-800 transition-colors shadow-inner"
+                    >
+                        <Eye size={20} className={isPrivacyMode ? "opacity-50" : ""} />
+                        {isPrivacyMode && <div className="absolute w-5 h-0.5 bg-slate-500 -rotate-45 -ml-0.5 mt-[-10px]"></div>}
+                    </button>
                 </div>
                 
                 <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center w-full xl:w-auto">
@@ -1213,7 +1258,7 @@ const Dashboard = () => {
                     <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
                         {viewMode === 'fluxo' && period !== 'todos' ? 'Entrada Prevista (Capital)' : 'Capital a Receber (Global)'}
                     </h3>
-                    <p className="text-2xl font-black text-slate-800">{formatMoney(metrics.capitalNaRua[tierFilters.capital as keyof typeof defaultTiers])}</p>
+                    <p className="text-2xl font-black text-slate-800">R$ {renderMoney(metrics.capitalNaRua[tierFilters.capital as keyof typeof defaultTiers])}</p>
                 </div>
 
                 {/* CARD LUCRO */}
@@ -1230,7 +1275,7 @@ const Dashboard = () => {
                     <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
                         {viewMode === 'fluxo' && period !== 'todos' ? 'Lucro Previsto no Filtro' : 'Lucro Restante a Receber'}
                     </h3>
-                    <p className="text-2xl font-black text-green-600">+{formatMoney(metrics.lucroProjetado[tierFilters.profit as keyof typeof defaultTiers])}</p>
+                    <p className="text-2xl font-black text-green-600">{isPrivacyMode ? 'R$ •••••••' : `+R$ ${formatMoney(metrics.lucroProjetado[tierFilters.profit as keyof typeof defaultTiers])}`}</p>
                 </div>
 
                 {/* CARD ATRASO */}
@@ -1247,7 +1292,7 @@ const Dashboard = () => {
                     <h3 className="text-slate-500 text-xs font-bold uppercase mb-1">
                         {period === 'todos' ? 'Total em Atraso (Global)' : 'Total em Atraso (No Filtro)'}
                     </h3>
-                    <p className="text-2xl font-black text-slate-800 mb-3">{formatMoney(metrics.atrasoGeral[tierFilters.overdue as keyof typeof defaultTiers])}</p>
+                    <p className="text-2xl font-black text-slate-800 mb-3">R$ {renderMoney(metrics.atrasoGeral[tierFilters.overdue as keyof typeof defaultTiers])}</p>
                 </div>
                 
                 {/* CARD GLOBAL DE CLIENTES E CONTRATOS ATIVOS */}
@@ -1256,17 +1301,17 @@ const Dashboard = () => {
                     <h3 className="text-slate-300 text-xs font-bold uppercase mb-1 flex items-center gap-1"><Briefcase size={12}/> Clientes & Contratos</h3>
                     <div className="flex justify-between items-end mt-2">
                         <div>
-                            <p className="text-3xl font-black text-white">{metrics.clientesComDivida}</p>
+                            <p className="text-3xl font-black text-white">{isPrivacyMode ? '•••' : metrics.clientesComDivida}</p>
                             <p className="text-[10px] text-slate-400">Clientes Ativos</p>
                         </div>
                         <div className="text-right">
-                            <p className="text-xl font-bold text-white">{metrics.contratosAtivosGlobais}</p>
+                            <p className="text-xl font-bold text-white">{isPrivacyMode ? '•••' : metrics.contratosAtivosGlobais}</p>
                             <p className="text-[10px] text-slate-400">Contratos Ativos</p>
                         </div>
                     </div>
                     <div className="mt-4 pt-3 border-t border-slate-700/50 flex justify-between text-[10px] text-slate-400 font-medium">
-                        <span>Cadastros: {metrics.totalClientesCadastrados}</span>
-                        <span>Lançados: {metrics.totalContratosLancados}</span>
+                        <span>Cadastros: {isPrivacyMode ? '••' : metrics.totalClientesCadastrados}</span>
+                        <span>Lançados: {isPrivacyMode ? '••' : metrics.totalContratosLancados}</span>
                     </div>
                 </div>
             </div>
@@ -1288,15 +1333,15 @@ const Dashboard = () => {
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div onClick={() => { setTierFilters({...tierFilters, capital: 'low', profit: 'low'}); setSelectedRange(taxasViewMode === 'capital' ? 'capital' : 'profit'); }} className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-center cursor-pointer hover:bg-slate-100 transition-colors group">
                                 <p className="text-xs font-bold text-slate-500 uppercase mb-1 group-hover:text-blue-600 transition-colors">1% a 9% (Baixa)</p>
-                                <p className="text-2xl font-black text-slate-700">R$ {formatMoney(taxasViewMode === 'capital' ? metrics.taxas.lowCap : metrics.taxas.lowProf)}</p>
+                                <p className="text-2xl font-black text-slate-700">R$ {renderMoney(taxasViewMode === 'capital' ? metrics.taxas.lowCap : metrics.taxas.lowProf)}</p>
                             </div>
                             <div onClick={() => { setTierFilters({...tierFilters, capital: 'mid', profit: 'mid'}); setSelectedRange(taxasViewMode === 'capital' ? 'capital' : 'profit'); }} className="p-4 bg-blue-50 rounded-lg border border-blue-100 text-center cursor-pointer hover:bg-blue-100 transition-colors group">
                                 <p className="text-xs font-bold text-blue-500 uppercase mb-1 group-hover:text-blue-700 transition-colors">10% a 15% (Média)</p>
-                                <p className="text-2xl font-black text-blue-700">R$ {formatMoney(taxasViewMode === 'capital' ? metrics.taxas.midCap : metrics.taxas.midProf)}</p>
+                                <p className="text-2xl font-black text-blue-700">R$ {renderMoney(taxasViewMode === 'capital' ? metrics.taxas.midCap : metrics.taxas.midProf)}</p>
                             </div>
                             <div onClick={() => { setTierFilters({...tierFilters, capital: 'high', profit: 'high'}); setSelectedRange(taxasViewMode === 'capital' ? 'capital' : 'profit'); }} className="p-4 bg-indigo-50 rounded-lg border border-indigo-100 text-center cursor-pointer hover:bg-indigo-100 transition-colors group">
                                 <p className="text-xs font-bold text-indigo-500 uppercase mb-1 group-hover:text-indigo-700 transition-colors">Acima de 15% (Alta)</p>
-                                <p className="text-2xl font-black text-indigo-700">R$ {formatMoney(taxasViewMode === 'capital' ? metrics.taxas.highCap : metrics.taxas.highProf)}</p>
+                                <p className="text-2xl font-black text-indigo-700">R$ {renderMoney(taxasViewMode === 'capital' ? metrics.taxas.highCap : metrics.taxas.highProf)}</p>
                             </div>
                         </div>
                     </div>

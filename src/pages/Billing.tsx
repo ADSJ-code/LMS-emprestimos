@@ -233,7 +233,8 @@ const Billing = () => {
   const filteredClientsForSelect = useMemo(() => {
       return availableClients.filter(c => 
         c.name.toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
-        c.cpf.includes(clientSearchTerm)
+        c.cpf.includes(clientSearchTerm) ||
+        (c.observations && c.observations.toLowerCase().includes(clientSearchTerm.toLowerCase())) // 🚀 FIX RODRIGO: Busca por apelido/meta!
       );
   }, [availableClients, clientSearchTerm]);
 
@@ -637,18 +638,20 @@ const Billing = () => {
 
       historyPayments.forEach((p, idx) => {
           const isPartial = p.note?.includes('[PAGAMENTO PARCIAL]');
-          const completed = p.note?.includes('[CICLO COMPLETADO]') || p.note?.includes('[QUITAÇÃO TOTAL]');
+          const isRollover = p.note?.includes('[ROLAGEM DE DÍVIDA]');
+          const completedInstallment = p.note?.includes('[CICLO COMPLETADO]') || p.note?.includes('[QUITAÇÃO TOTAL]');
           const originalDateStr = p.originalDueDate ? `(Ref: ${formatDisplayDate(p.originalDueDate)})` : '';
           
           schedule.push({
               id: `paid-${idx}`, 
-              num: isPartial ? '◷' : '✓', 
-              label: isPartial ? `Pagamento Parcial` : `Parcela ${currentCycle} ${!isSimple ? `de ${totalOriginal}` : ''}`,
+              num: isPartial ? '◷' : isRollover ? '↻' : '✓', 
+              label: isPartial ? `Pagamento Parcial` : isRollover ? `Rolagem de Dívida (Juros)` : `Parcela ${currentCycle} ${!isSimple ? `de ${totalOriginal}` : ''}`,
               date: p.date, dateLabel: 'Pago em', amount: p.amount, status: 'Pago',
               note: originalDateStr
           });
 
-          if (completed) currentCycle++; // Só avança a contagem se a parcela foi totalmente paga
+          // 🚀 Rolagem de dívida não incrementa o número da parcela amortizada
+          if (completedInstallment) currentCycle++; 
       });
 
       if (loan.status !== 'Pago' && loan.status !== 'Quitado') {
@@ -1228,16 +1231,14 @@ const Billing = () => {
 
     let updatedLoan = { ...selectedLoan };
     
-    // Se o cliente pagou juros e havia multa, a multa "come" parte do juro pago para os registros
     let appliedPenalty = 0;
     if (totalPenalty > 0 && valInterest > 0) {
         appliedPenalty = Math.min(valInterest, totalPenalty);
-        // Não subtraímos do valInterest porque contabilisticamente a multa entra como "Lucro (Juro Pago)", 
-        // mas registramos isso numa anotação para auditoria.
     }
 
-    updatedLoan.totalPaidCapital = (updatedLoan.totalPaidCapital || 0) + valCapital;
-    updatedLoan.totalPaidInterest = (updatedLoan.totalPaidInterest || 0) + valInterest;
+    // 🚀 FIX QUITÉRIA: Impede valores negativos no banco
+    updatedLoan.totalPaidCapital = Math.max(0, (updatedLoan.totalPaidCapital || 0) + valCapital);
+    updatedLoan.totalPaidInterest = Math.max(0, (updatedLoan.totalPaidInterest || 0) + valInterest);
 
     const balance = updatedLoan.amount - updatedLoan.totalPaidCapital;
     let noteText = `Baixa Manual. Ref: ${new Date(payDate).toLocaleString('pt-BR')}`;
@@ -1245,6 +1246,14 @@ const Billing = () => {
     
     const originalDueStr = selectedLoan.nextDue; 
     const isSimple = selectedLoan.interestType === 'SIMPLE';
+
+    // 🚀 FIX EMERSON: Puxa o breakdown e as fatias para decidir se o ciclo do mês foi fechado!
+    const expectedInterest = getSyncedBreakdown(selectedLoan).interest;
+    let totalRequiredInCycle = isSimple ? expectedInterest : selectedLoan.installmentValue;
+    if (selectedLoan.multiDates && selectedLoan.multiDates.length > 0) {
+        totalRequiredInCycle = selectedLoan.multiDates.reduce((acc, s) => acc + (Number(s.amount) || 0), 0);
+    }
+    const totalAccumulatedInCycle = valTotal + cycleAcc.interest + cycleAcc.capital;
 
     let currentSliceDay = null;
     if ((window as any).lastSelectedDay) {
@@ -1254,13 +1263,20 @@ const Billing = () => {
     }
 
     let shouldAdvanceMonth = false;
+    let isRollover = false; // 🚀 Efeito Lilian: Rolagem de Juros
     
     if (forceAdvanceMonth) {
         shouldAdvanceMonth = true;
         noteText += " [AVANÇO MANUAL]";
     } else {
-        const paidNow = isSimple ? valInterest : valTotal;
-        shouldAdvanceMonth = paidNow >= (cycleMissing - 0.10);
+        // Usa a matemática acumulada do mês inteiro e não apenas do botão pago hoje
+        shouldAdvanceMonth = totalAccumulatedInCycle >= (totalRequiredInCycle - 1.0);
+        
+        // Se pagou só juros num contrato linear, rola a dívida
+        if (!shouldAdvanceMonth && !isSimple && (cycleAcc.capital + valCapital <= 0.10) && (cycleAcc.interest + valInterest >= expectedInterest - 0.10)) {
+            isRollover = true;
+            shouldAdvanceMonth = true; 
+        }
     }
 
     // 🚀 LÓGICA DE QUITAÇÃO COM DESCONTO
@@ -1314,18 +1330,24 @@ const Billing = () => {
                      updatedLoan.nextDue = `${currentDue.getFullYear()}-${nextM}-${nextD}`;
                  }
                  
-                 // 🚀 CORREÇÃO DO AVANÇO DE PARCELA
+                 // 🚀 CORREÇÃO DO AVANÇO DE PARCELA (EFEITO LILIAN)
                  if (!isSimple) {
-                     updatedLoan.installments = (updatedLoan.installments || 0) - 1;
-                     
-                     if (balance > 0.10 && updatedLoan.installments <= 0) {
-                         updatedLoan.installments = 1; 
-                     } else if (balance <= 0.10 && updatedLoan.installments <= 0) {
-                         updatedLoan.status = 'Quitado';
-                         updatedLoan.installments = 0;
+                     if (isRollover) {
+                         noteText += " [ROLAGEM DE DÍVIDA]";
+                     } else {
+                         updatedLoan.installments = (updatedLoan.installments || 0) - 1;
+                         
+                         if (balance > 0.10 && updatedLoan.installments <= 0) {
+                             updatedLoan.installments = 1; 
+                         } else if (balance <= 0.10 && updatedLoan.installments <= 0) {
+                             updatedLoan.status = 'Quitado';
+                             updatedLoan.installments = 0;
+                         }
+                         noteText += " [CICLO COMPLETADO]";
                      }
+                 } else {
+                     noteText += " [CICLO COMPLETADO]";
                  }
-                 noteText += " [CICLO COMPLETADO]";
             } else {
                  updatedLoan.nextDue = originalDueStr;
                  noteText += " [PAGAMENTO PARCIAL]";
@@ -3126,7 +3148,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                         autoComplete="off"
                     />
                     <datalist id="clients-datalist">
-                        {availableClients.filter(c => c.status !== 'Bloqueado').map((c) => (<option key={c.id} value={c.name}>{c.name} ({c.cpf})</option>))}
+                        {availableClients.filter(c => c.status !== 'Bloqueado').map((c) => (<option key={c.id} value={c.name}>{c.name} {getNickname(c.observations) ? `- ${getNickname(c.observations)}` : ''}</option>))}
                     </datalist>
                 </div>
 

@@ -258,35 +258,43 @@ const Overdue = () => {
         const currentMonth = tempDue.getMonth();
         const currentYear = tempDue.getFullYear();
         
-        for (const slice of validSlices) {
+        // 🚀 FIX: Matemática Sequencial de Fatias também no Overdue para abater corretamente o que foi pago
+        let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+            const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+            if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
+                return acc + parseVal(h.amount);
+            }
+            return acc;
+        }, 0);
+
+        const sortedSlices = [...validSlices].sort((a: any, b: any) => Number(a.day) - Number(b.day));
+
+        for (const slice of sortedSlices) {
             const baseAmount = parseVal(slice.amount);
             const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
             
-            const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
-                const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-                if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                    return acc + parseVal(h.amount);
+            if (totalPaidInCycle >= (baseAmount - 0.05)) {
+                totalPaidInCycle -= baseAmount;
+            } else {
+                const slicePaidAmount = Math.max(0, totalPaidInCycle);
+                totalPaidInCycle = 0;
+
+                if (sliceDate < today && loan.status !== 'Pago' && loan.status !== 'Quitado') {
+                    const ratio = breakdown.total > 0 ? (baseAmount / breakdown.total) : 0;
+                    const dateStr = sliceDate.toISOString().split('T')[0];
+                    const sliceOverdue = calculateOverdueValue(baseAmount, dateStr, 'Atrasado', parseVal(loan.fineRate) || 0, parseVal(loan.moraInterestRate) || 0, parseVal(loan.amount) * ratio);
+                    
+                    const debtOriginal = baseAmount - slicePaidAmount;
+                    const debtUpdated = sliceOverdue - slicePaidAmount;
+
+                    missedInstallments.push({ date: dateStr, original: debtOriginal, updated: debtUpdated });
+                    totalOriginal += debtOriginal;
+                    totalUpdated += debtUpdated;
                 }
-                return acc;
-            }, 0);
-
-            const isPaid = slicePaidAmount >= (baseAmount - 0.05);
-            
-            if (!isPaid && sliceDate < today && loan.status !== 'Pago' && loan.status !== 'Quitado') {
-                const ratio = baseAmount / (breakdown.total || 1);
-                const dateStr = sliceDate.toISOString().split('T')[0];
-                const sliceOverdue = calculateOverdueValue(baseAmount, dateStr, 'Atrasado', parseVal(loan.fineRate) || 0, parseVal(loan.moraInterestRate) || 0, parseVal(loan.amount) * ratio);
-                
-                const debtOriginal = baseAmount - slicePaidAmount;
-                const debtUpdated = sliceOverdue - slicePaidAmount;
-
-                missedInstallments.push({ date: dateStr, original: debtOriginal, updated: debtUpdated });
-                totalOriginal += debtOriginal;
-                totalUpdated += debtUpdated;
             }
         }
         return { totalOriginal, totalUpdated, missedInstallments };
-    }
+      }
 
     // 🚀 FIX: O breakdown.total já processa PRICE, SIMPLE e soma Acordos Extras automaticamente
     const baseAmount = breakdown.total; 

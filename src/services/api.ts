@@ -96,6 +96,7 @@ export interface Client {
   cep?: string;
   observations?: string;
   documents?: ClientDoc[];
+  aliases?: string[]; // 🚀 NOVO: Memória de conciliação de planilhas
 }
 
 export interface Affiliate {
