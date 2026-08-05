@@ -1306,52 +1306,58 @@ const Billing = () => {
         
         if (shouldAdvanceMonth) {
              if (selectedLoan.status === 'Acordo') {
+                 // 🚀 FIX: O avanço do Acordo deve preservar o dia exato assinado no contrato!
                  const startDate = new Date(selectedLoan.startDate);
                  startDate.setMinutes(startDate.getMinutes() + startDate.getTimezoneOffset());
                  const originalDay = startDate.getDate();
+                 
+                 // Avançamos 1 mês a partir do faturamento de hoje
                  const payDateObj = new Date(payDate);
                  let nextMonth = payDateObj.getMonth() + 1;
                  let nextYear = payDateObj.getFullYear();
                  if (nextMonth > 11) { nextMonth = 0; nextYear++; }
-                 const nextDueStr = `${nextYear}-${String(nextMonth + 1).padStart(2, '0')}-${String(originalDay).padStart(2, '0')}`;
-                 updatedLoan.nextDue = nextDueStr;
+                 
+                 // E engatamos de volta o dia original (blindando contra UTCs fantasma)
+                 updatedLoan.nextDue = `${nextYear}-${String(nextMonth + 1).padStart(2, '0')}-${String(originalDay).padStart(2, '0')}`;
                  updatedLoan.agreementValue = 0;
              } else {
-                     // 🚀 FIX FUSO HORÁRIO: Força a leitura exata do Ano, Mês e Dia para não retroceder dias por causa do UTC
-                     const [y, m, d] = updatedLoan.nextDue.split('T')[0].split('-').map(Number);
-                     const currentDue = new Date(y, m - 1, d);
-                     
-                     if (updatedLoan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
-                     else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
-                     else currentDue.setMonth(currentDue.getMonth() + 1);
-                     
-                     const nextM = String(currentDue.getMonth() + 1).padStart(2, '0');
-                     const nextD = String(currentDue.getDate()).padStart(2, '0');
-                     updatedLoan.nextDue = `${currentDue.getFullYear()}-${nextM}-${nextD}`;
-                 }
+                 // 🚀 FIX FUSO HORÁRIO: Força a leitura exata do Ano, Mês e Dia para não retroceder ou avançar dias por causa do UTC
+                 const [y, m, d] = updatedLoan.nextDue.split('T')[0].split('-').map(Number);
+                 const currentDue = new Date(y, m - 1, d); // Passamos o mês como array indexado a 0
                  
-                 // 🚀 CORREÇÃO DO AVANÇO DE PARCELA (EFEITO LILIAN)
-                 if (!isSimple) {
-                     if (isRollover) {
-                         noteText += " [ROLAGEM DE DÍVIDA]";
-                     } else {
-                         updatedLoan.installments = (updatedLoan.installments || 0) - 1;
-                         
-                         if (balance > 0.10 && updatedLoan.installments <= 0) {
-                             updatedLoan.installments = 1; 
-                         } else if (balance <= 0.10 && updatedLoan.installments <= 0) {
-                             updatedLoan.status = 'Quitado';
-                             updatedLoan.installments = 0;
-                         }
-                         noteText += " [CICLO COMPLETADO]";
-                     }
+                 if (updatedLoan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
+                 else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
+                 else currentDue.setMonth(currentDue.getMonth() + 1);
+                 
+                 const nextY = currentDue.getFullYear();
+                 const nextM = String(currentDue.getMonth() + 1).padStart(2, '0');
+                 const nextD = String(currentDue.getDate()).padStart(2, '0');
+                 
+                 updatedLoan.nextDue = `${nextY}-${nextM}-${nextD}`;
+             }
+             
+             // 🚀 CORREÇÃO DO AVANÇO DE PARCELA (EFEITO LILIAN)
+             if (!isSimple) {
+                 if (isRollover) {
+                     noteText += " [ROLAGEM DE DÍVIDA]";
                  } else {
+                     updatedLoan.installments = (updatedLoan.installments || 0) - 1;
+                     
+                     if (balance > 0.10 && updatedLoan.installments <= 0) {
+                         updatedLoan.installments = 1; 
+                     } else if (balance <= 0.10 && updatedLoan.installments <= 0) {
+                         updatedLoan.status = 'Quitado';
+                         updatedLoan.installments = 0;
+                     }
                      noteText += " [CICLO COMPLETADO]";
                  }
-            } else {
-                 updatedLoan.nextDue = originalDueStr;
-                 noteText += " [PAGAMENTO PARCIAL]";
-            }
+             } else {
+                 noteText += " [CICLO COMPLETADO]";
+             }
+        } else {
+             updatedLoan.nextDue = originalDueStr;
+             noteText += " [PAGAMENTO PARCIAL]";
+        }
 
         // Recálculo da Parcela para Juros Simples com base no novo saldo devedor
         if (isSimple && valCapital > 0) {
@@ -1810,12 +1816,18 @@ const handleFinalSave = async (e: React.FormEvent) => {
             setIsSaving(false); return;
         }
 
-        let nextDueDate = new Date(formData.firstPaymentDate || formData.startDate);
+        // 🚀 FIX: Blindagem de Fuso Horário (Criação de Contrato)
+        const baseDateStr = formData.firstPaymentDate || formData.startDate;
+        const [baseY, baseM, baseD] = baseDateStr.split('T')[0].split('-').map(Number);
+        let nextDueDate = new Date(baseY, baseM - 1, baseD);
+
         if (!formData.firstPaymentDate) {
             if (formData.frequency === 'SEMANAL') nextDueDate.setDate(nextDueDate.getDate() + 7);
             else if (formData.frequency === 'DIARIO') nextDueDate.setDate(nextDueDate.getDate() + 1);
             else nextDueDate.setMonth(nextDueDate.getMonth() + 1);
         }
+        
+        const finalNextDueStr = `${nextDueDate.getFullYear()}-${String(nextDueDate.getMonth() + 1).padStart(2, '0')}-${String(nextDueDate.getDate()).padStart(2, '0')}`;
 
         let finalAmount = parseFloat(formData.amount) || 0;
         let finalInterestRate = parseFloat(formData.interestRate) || 0;
@@ -1890,7 +1902,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
 
         const newLoan: any = { 
             id: finalID, client: formData.client, amount: finalAmount, installments: numInst,
-            interestRate: finalInterestRate, startDate: formData.startDate, nextDue: nextDueDate.toISOString().split('T')[0],
+            interestRate: finalInterestRate, startDate: formData.startDate, nextDue: finalNextDueStr,
             status: 'Em Dia', installmentValue: finalInstallmentValue,
             fineRate: parseRate(formData.fineRate), moraInterestRate: parseRate(formData.moraInterestRate),
             clientBank: formData.clientBank, paymentMethod: formData.paymentMethod, justification: '',
