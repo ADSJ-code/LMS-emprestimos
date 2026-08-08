@@ -307,8 +307,8 @@ type Client struct {
 	Phone        string      `json:"phone" bson:"phone"`
 	Address      string      `json:"address" bson:"address"`
 	Number       string      `json:"number" bson:"number"`
-	Block        string      `json:"block,omitempty" bson:"block,omitempty"` // 🚀 ADICIONADO
-	Floor        string      `json:"floor,omitempty" bson:"floor,omitempty"` // 🚀 ADICIONADO
+	Block        string      `json:"block,omitempty" bson:"block,omitempty"` 
+	Floor        string      `json:"floor,omitempty" bson:"floor,omitempty"` 
 	Neighborhood string      `json:"neighborhood" bson:"neighborhood"`
 	City         string      `json:"city" bson:"city"`
 	State        string      `json:"state" bson:"state"`
@@ -316,6 +316,7 @@ type Client struct {
 	Observations string      `json:"observations" bson:"observations"`
 	Documents    []ClientDoc `json:"documents" bson:"documents"`
 	Status       string      `json:"status" bson:"status"`
+	Aliases      []string    `json:"aliases,omitempty" bson:"aliases,omitempty"` // 🚀 NOVO: Memória de apelidos da planilha
 }
 
 type Affiliate struct {

@@ -45,7 +45,8 @@ export const calculateOverdueValue = (
   const diffTime = Math.abs(today.getTime() - due.getTime());
   const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-  const baseForCalculation = (totalAmount && safeNumber(totalAmount) > 0) ? safeNumber(totalAmount) : 0;
+  // A multa e a mora incidem APENAS sobre o valor da parcela/fatia em atraso, nunca sobre o capital total
+  const baseForCalculation = safeNumber(amount);
 
   const safeFine = safeNumber(finePercent);
   const fineValue = baseForCalculation * (safeFine / 100);

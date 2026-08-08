@@ -92,7 +92,10 @@ const Overdue = () => {
   useEffect(() => {
       if (selectedSnowball && isModalOpen) {
           const clientInfo = clients.find(c => c.name === selectedSnowball.client);
-          setClientObs(clientInfo?.observations || '');
+          // Extrai apenas o texto limpo, ignorando o código [META:...] da chave PIX
+          const rawObs = clientInfo?.observations || '';
+          const cleanObs = rawObs.split('[META:')[0].trim();
+          setClientObs(cleanObs);
       }
   }, [selectedSnowball, isModalOpen, clients]);
 
@@ -102,7 +105,12 @@ const Overdue = () => {
       try {
           const clientInfo = clients.find(c => c.name === selectedSnowball.client);
           if (clientInfo) {
-              const updatedClient = { ...clientInfo, observations: clientObs };
+              // Recupera o código [META:] antigo, se existir, para não deletar a chave PIX
+              const metaMatch = clientInfo.observations?.match(/\[META:.*\]/);
+              const metaString = metaMatch ? ` ${metaMatch[0]}` : '';
+
+              // Salva a anotação que o usuário digitou + o código PIX invisível
+              const updatedClient = { ...clientInfo, observations: clientObs.trim() + metaString };
               await clientService.update(clientInfo.id, updatedClient as any);
               setClients(prev => prev.map(c => c.id === clientInfo.id ? updatedClient : c));
               alert("✅ Diário de cobrança atualizado com sucesso!");
@@ -128,7 +136,16 @@ const Overdue = () => {
   const parseVal = (v: any): number => {
       if (typeof v === 'number') return isNaN(v) ? 0 : v;
       if (!v) return 0;
-      if (typeof v === 'string') return parseFloat(v.replace(/\./g, '').replace(',', '.')) || 0;
+      if (typeof v === 'string') {
+          const clean = v.trim();
+          if (clean.includes(',') && clean.includes('.')) {
+              return parseFloat(clean.replace(/\./g, '').replace(',', '.')) || 0;
+          }
+          if (clean.includes(',')) {
+              return parseFloat(clean.replace(',', '.')) || 0;
+          }
+          return parseFloat(clean) || 0;
+      }
       return 0;
   };
 
@@ -194,21 +211,22 @@ const Overdue = () => {
           return 'Acordo';
       }
 
+      const currentMonth = dueLocalDate.getMonth();
+      const currentYear = dueLocalDate.getFullYear();
+
+      // Calcula o total pago pelo cliente no ciclo/mês atual
+      let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+          const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+          if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
+              return acc + parseVal(h.amount);
+          }
+          return acc;
+      }, 0);
+
       const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
       if (validSlices.length > 0) {
-          const currentMonth = dueLocalDate.getMonth();
-          const currentYear = dueLocalDate.getFullYear();
           let hasLateSlice = false;
-
-          let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
-              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-              if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
-                  return acc + parseVal(h.amount);
-              }
-              return acc;
-          }, 0);
-
           const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
 
           for (const slice of sortedSlices) {
@@ -227,6 +245,11 @@ const Overdue = () => {
           if (hasLateSlice) return 'Atrasado';
           return 'Em Dia';
       }
+
+      // Para parcelas normais: se o valor pago cobriu o mês, está 'Em Dia' independente da data
+      const breakdown = getSyncedBreakdown(loan);
+      const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
+      if (totalPaidInCycle >= (requiredTotal - 0.10)) return 'Em Dia';
 
       if (dueLocalDate < today) return 'Atrasado';
       return 'Em Dia';
@@ -313,8 +336,8 @@ const Overdue = () => {
         baseAmount,
         dateStr,
         "Atrasado",
-        parseVal(loan.fineRate) || 2,
-        parseVal(loan.moraInterestRate) || 1,
+        parseVal(loan.fineRate) || 0,
+        parseVal(loan.moraInterestRate) || 0,
         parseVal(loan.amount)
       );
 
@@ -344,8 +367,8 @@ const Overdue = () => {
         baseAmount,
         dateStr,
         "Atrasado",
-        parseVal(loan.fineRate) || 2,
-        parseVal(loan.moraInterestRate) || 1,
+        parseVal(loan.fineRate) || 0,
+        parseVal(loan.moraInterestRate) || 0,
         parseVal(loan.amount)
       );
       missedInstallments.push({

@@ -308,11 +308,20 @@ const Billing = () => {
 
   const [exactInterest, setExactInterest] = useState<number | null>(null);
   const [simulation, setSimulation] = useState({ installment: 0, totalInterest: 0, totalPayable: 0, isValid: false });
-  // 🚀 LIMPADOR INTELIGENTE: Blindagem contra vírgulas brasileiras
+  // 🚀 LIMPADOR INTELIGENTE: Blindagem para formato brasileiro e americano
   const parseVal = (v: any): number => {
       if (typeof v === 'number') return isNaN(v) ? 0 : v;
       if (!v) return 0;
-      if (typeof v === 'string') return parseFloat(v.replace(/\./g, '').replace(',', '.')) || 0;
+      if (typeof v === 'string') {
+          const clean = v.trim();
+          if (clean.includes(',') && clean.includes('.')) {
+              return parseFloat(clean.replace(/\./g, '').replace(',', '.')) || 0;
+          }
+          if (clean.includes(',')) {
+              return parseFloat(clean.replace(',', '.')) || 0;
+          }
+          return parseFloat(clean) || 0;
+      }
       return 0;
   };
 
@@ -459,77 +468,62 @@ const Billing = () => {
 
   // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
-    if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
-    
-    const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
-    if (balance <= 0.10) return 'Quitado'; 
-    
-    // 🚀 FIX: Se não for Juros Simples e as parcelas chegaram a 0, está numericamente quitado!
-    if (loan.interestType !== 'SIMPLE' && Number(loan.installments) <= 0) return 'Quitado';
-    
-    const today = new Date();
-    today.setHours(0,0,0,0);
-    
-    const dueLocalDate = parseLocalDate(loan.nextDue);
+      if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
+      const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
+      if (balance <= 0.10) return 'Quitado'; 
+      
+      if (loan.interestType !== 'SIMPLE' && Number(loan.installments) <= 0) return 'Quitado';
+      
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      
+      const dueLocalDate = parseLocalDate(loan.nextDue);
 
-    if (loan.status === 'Acordo') {
-        if (dueLocalDate < today) return 'Atrasado';
-        return 'Acordo';
-    }
+      if (loan.status === 'Acordo') {
+          if (dueLocalDate < today) return 'Atrasado';
+          return 'Acordo';
+      }
 
-    const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+      const currentMonth = dueLocalDate.getMonth();
+      const currentYear = dueLocalDate.getFullYear();
 
-    if (validSlices.length > 0) {
-        const currentMonth = dueLocalDate.getMonth();
-        const currentYear = dueLocalDate.getFullYear();
-        let hasLateSlice = false;
+      let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+          const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+          if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
+              return acc + parseVal(h.amount);
+          }
+          return acc;
+      }, 0);
 
-        let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
-            const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-            if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
-                return acc + parseVal(h.amount);
-            }
-            return acc;
-        }, 0);
+      const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
-        const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+      if (validSlices.length > 0) {
+          let hasLateSlice = false;
+          const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
 
-        for (const slice of sortedSlices) {
-            const baseAmount = parseVal(slice.amount);
-            const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
-            
-            if (totalPaidInCycle >= (baseAmount - 0.05)) {
-                totalPaidInCycle -= baseAmount;
-            } else {
-                if (sliceDate < today) {
-                    hasLateSlice = true;
-                    break;
-                }
-            }
-        }
-        if (hasLateSlice) return 'Atrasado';
-        return 'Em Dia';
-    }
+          for (const slice of sortedSlices) {
+              const baseAmount = parseVal(slice.amount);
+              const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+              
+              if (totalPaidInCycle >= (baseAmount - 0.05)) {
+                  totalPaidInCycle -= baseAmount;
+              } else {
+                  if (sliceDate < today) {
+                      hasLateSlice = true;
+                      break;
+                  }
+              }
+          }
+          if (hasLateSlice) return 'Atrasado';
+          return 'Em Dia';
+      }
 
-    // 🚀 BLINDAGEM DE FALSOS ATRASADOS: Antes de cravar atraso pela data passada, checa se ele já pagou tudo no ciclo atual
-    const currentMonth = dueLocalDate.getMonth();
-    const currentYear = dueLocalDate.getFullYear();
-    
-    const totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
-        const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-        if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
-            return acc + parseVal(h.amount);
-        }
-        return acc;
-    }, 0);
+      const breakdown = getSyncedBreakdown(loan);
+      const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
+      if (totalPaidInCycle >= (requiredTotal - 0.10)) return 'Em Dia';
 
-    const breakdown = getSyncedBreakdown(loan);
-    const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
-
-    if (totalPaidInCycle >= (requiredTotal - 0.10)) return 'Em Dia';
-
-    if (dueLocalDate < today) return 'Atrasado';
-    return 'Em Dia';
+      if (dueLocalDate < today) return 'Atrasado';
+      return 'Em Dia';
   };
   const getLastPaymentDate = (loan: Loan) => {
       if (!loan.history || loan.history.length === 0) return '-';
@@ -583,7 +577,7 @@ const Billing = () => {
         let lateDays = 0;
         
         if (status === 'Atrasado') {
-            finalAmount = calculateOverdueValue(breakdown.total, loan.nextDue, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount);
+            finalAmount = calculateOverdueValue(breakdown.total, loan.nextDue, 'Atrasado', parseVal(loan.fineRate), parseVal(loan.moraInterestRate), parseVal(loan.amount));
             const due = new Date(loan.nextDue);
             const today = new Date();
             lateDays = Math.floor((today.getTime() - due.getTime()) / (1000 * 3600 * 24));
@@ -3148,20 +3142,34 @@ const handleFinalSave = async (e: React.FormEvent) => {
         <form onSubmit={handleFinalSave} className="space-y-6">
             <div className="space-y-4">
                 
-                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 relative">
                     <label className="flex items-center gap-2 text-xs font-bold uppercase text-slate-500 mb-2"><Search size={14}/> Cliente</label>
                     <input 
-                        list="clients-datalist"
                         required
-                        placeholder="Digite para buscar e selecione o cliente..."
+                        placeholder="Busque por nome ou apelido (sem acento)..."
                         value={formData.client}
                         onChange={e => setFormData({...formData, client: e.target.value})}
+                        onFocus={() => { (window as any).showClientDropdown = true; setFormData({...formData, client: formData.client}); }}
+                        onBlur={() => setTimeout(() => { (window as any).showClientDropdown = false; setFormData({...formData, client: formData.client}); }, 200)}
                         className="w-full p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5 font-bold"
                         autoComplete="off"
                     />
-                    <datalist id="clients-datalist">
-                        {availableClients.filter(c => c.status !== 'Bloqueado').map((c) => (<option key={c.id} value={c.name}>{c.name} {getNickname(c.observations) ? `- ${getNickname(c.observations)}` : ''}</option>))}
-                    </datalist>
+                    {((window as any).showClientDropdown || formData.client) && (
+                        <div className="absolute z-50 left-0 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto custom-scrollbar">
+                            {availableClients.filter(c => 
+                                c.status !== 'Bloqueado' && 
+                                (
+                                    normalizeString(c.name).includes(normalizeString(formData.client)) || 
+                                    (c.observations && normalizeString(c.observations).includes(normalizeString(formData.client)))
+                                )
+                            ).slice(0, 15).map((c) => (
+                                <div key={c.id} onMouseDown={(e) => { e.preventDefault(); setFormData({...formData, client: c.name}); (window as any).showClientDropdown = false; }} className="p-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-0 transition-colors flex items-center justify-between">
+                                    <span className="font-bold text-slate-700">{c.name}</span>
+                                    {getNickname(c.observations) && <span className="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full font-bold uppercase truncate max-w-[120px]">{getNickname(c.observations)}</span>}
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">

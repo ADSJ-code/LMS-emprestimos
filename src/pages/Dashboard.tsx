@@ -98,11 +98,20 @@ const Dashboard = () => {
       return new Date(ty, tm - 1, td);
   };
 
-  // 🚀 LIMPADOR INTELIGENTE: Blindagem contra vírgulas brasileiras
+  // 🚀 LIMPADOR INTELIGENTE: Blindagem para formato brasileiro (1.200,50) e americano (1200.50)
   const parseVal = (v: any): number => {
       if (typeof v === 'number') return isNaN(v) ? 0 : v;
       if (!v) return 0;
-      if (typeof v === 'string') return parseFloat(v.replace(/\./g, '').replace(',', '.')) || 0;
+      if (typeof v === 'string') {
+          const clean = v.trim();
+          if (clean.includes(',') && clean.includes('.')) {
+              return parseFloat(clean.replace(/\./g, '').replace(',', '.')) || 0;
+          }
+          if (clean.includes(',')) {
+              return parseFloat(clean.replace(',', '.')) || 0;
+          }
+          return parseFloat(clean) || 0;
+      }
       return 0;
   };
 
@@ -214,21 +223,22 @@ const Dashboard = () => {
           return 'Acordo';
       }
 
+      const currentMonth = dueLocalDate.getMonth();
+      const currentYear = dueLocalDate.getFullYear();
+
+      // Calcula o total pago pelo cliente no ciclo/mês atual
+      let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+          const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+          if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
+              return acc + parseVal(h.amount);
+          }
+          return acc;
+      }, 0);
+
       const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
       if (validSlices.length > 0) {
-          const currentMonth = dueLocalDate.getMonth();
-          const currentYear = dueLocalDate.getFullYear();
           let hasLateSlice = false;
-
-          let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
-              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-              if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
-                  return acc + parseVal(h.amount);
-              }
-              return acc;
-          }, 0);
-
           const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
 
           for (const slice of sortedSlices) {
@@ -247,6 +257,11 @@ const Dashboard = () => {
           if (hasLateSlice) return 'Atrasado';
           return 'Em Dia';
       }
+
+      // Para parcelas normais: se o valor pago cobriu o mês, está 'Em Dia' independente da data
+      const breakdown = getSyncedBreakdown(loan);
+      const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
+      if (totalPaidInCycle >= (requiredTotal - 0.10)) return 'Em Dia';
 
       if (dueLocalDate < today) return 'Atrasado';
       return 'Em Dia';
@@ -329,8 +344,8 @@ const Dashboard = () => {
         baseAmount,
         dateStr,
         "Atrasado",
-        parseVal(loan.fineRate) || 2,
-        parseVal(loan.moraInterestRate) || 1,
+        parseVal(loan.fineRate) || 0,
+        parseVal(loan.moraInterestRate) || 0,
         parseVal(loan.amount)
       );
 
