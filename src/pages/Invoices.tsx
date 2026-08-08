@@ -185,6 +185,12 @@ const Invoices = () => {
 
   const availableMonths = useMemo(() => {
       const months = new Set<string>();
+      
+      // 🚀 FORÇA A EXIBIÇÃO DO MÊS ATUAL MESMO QUE AINDA NÃO TENHA NENHUMA NOTA EMITIDA
+      const today = new Date();
+      const currentMonthVal = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+      months.add(currentMonthVal);
+
       allHistoricalInvoices.forEach(inv => {
           if (inv.issueDate) {
               const d = new Date(inv.issueDate);
@@ -400,6 +406,87 @@ const Invoices = () => {
     }
   };
 
+  // 🚀 MOTOR GERENCIAL: Resumo de Emissões por Mês (Destrincha as NFs por Contrato)
+  const monthSummary = useMemo(() => {
+      if (filterMonth === 'todos') return null;
+      
+      const summary = {
+          totalEmitted: 0,
+          clients: {} as Record<string, { total: number, contracts: Record<string, number> }>
+      };
+
+      // 1. Vasculha todos os contratos para encontrar pagamentos faturados
+      loans.forEach(loan => {
+          if (!loan.history) return;
+          const safeClientName = normalizeString(loan.client).replace(/[^a-z0-9]/g, '');
+
+          loan.history.forEach((record: any) => {
+              const type = record.type?.toLowerCase() || '';
+              if (type.includes('abertura') || type.includes('empréstimo') || type.includes('acordo') || parseVal(record.amount) <= 0) return;
+              if (record.nfeStatus === 'IGNORADA') return;
+
+              const jurosRecebido = record.nfeValue !== undefined ? parseVal(record.nfeValue) : parseVal(record.interestPaid);
+              if (jurosRecebido <= 0) return;
+
+              let isEmittedInFilteredMonth = false;
+
+              // Verifica se foi baixa manual no mês filtrado
+              if (record.nfeStatus === 'EMITIDA_MANUAL') {
+                  const recordMonth = record.date.substring(0, 7);
+                  if (recordMonth === filterMonth) isEmittedInFilteredMonth = true;
+              } else {
+                  // Verifica se pertence a um Pacote (NFG) que foi Autorizado pela Sefaz no mês filtrado
+                  const dateStr = record.date.split('T')[0];
+                  const groupId = `NFG-${safeClientName}-${dateStr.replace(/-/g, '')}`;
+                  const groupInvoices = invoices.filter(inv => inv.id === groupId || inv.id?.startsWith(`${groupId}-R`));
+                  
+                  const authorizedInv = groupInvoices.find(inv => inv.status === 'AUTORIZADA');
+                  if (authorizedInv && authorizedInv.issueDate) {
+                      const issueMonth = new Date(authorizedInv.issueDate).toISOString().substring(0, 7);
+                      if (issueMonth === filterMonth) isEmittedInFilteredMonth = true;
+                  }
+              }
+
+              if (isEmittedInFilteredMonth) {
+                  summary.totalEmitted += jurosRecebido;
+                  
+                  if (!summary.clients[loan.client]) summary.clients[loan.client] = { total: 0, contracts: {} };
+                  
+                  summary.clients[loan.client].total += jurosRecebido;
+                  
+                  if (!summary.clients[loan.client].contracts[loan.id]) summary.clients[loan.client].contracts[loan.id] = 0;
+                  summary.clients[loan.client].contracts[loan.id] += jurosRecebido;
+              }
+          });
+      });
+
+      // 2. Inclui Notas Avulsas (Fora de Contratos)
+      invoices.forEach(inv => {
+          if (inv.status === 'AUTORIZADA' && inv.id?.startsWith('NF-AVULSA')) {
+              if (inv.issueDate) {
+                  const issueMonth = new Date(inv.issueDate).toISOString().substring(0, 7);
+                  if (issueMonth === filterMonth) {
+                      const val = parseVal(inv.serviceValue);
+                      summary.totalEmitted += val;
+                      
+                      const clientName = inv.client || 'Cliente Desconhecido';
+                      if (!summary.clients[clientName]) summary.clients[clientName] = { total: 0, contracts: {} };
+                      
+                      summary.clients[clientName].total += val;
+                      if (!summary.clients[clientName].contracts['Avulsa / Extra']) summary.clients[clientName].contracts['Avulsa / Extra'] = 0;
+                      summary.clients[clientName].contracts['Avulsa / Extra'] += val;
+                  }
+              }
+          }
+      });
+
+      const sortedClients = Object.entries(summary.clients)
+          .map(([name, data]) => ({ name, ...data }))
+          .sort((a, b) => b.total - a.total); // Ordena quem gerou mais nota primeiro
+
+      return { totalEmitted: summary.totalEmitted, clients: sortedClients };
+  }, [loans, invoices, filterMonth]);
+
   return (
     <Layout>
       <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
@@ -574,92 +661,153 @@ const Invoices = () => {
 
         {/* ABA: HISTÓRICO DE EMISSÕES */}
         {activeTab === 'historico' && (
-          <div className="overflow-x-auto min-h-[400px]">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-100">
-                  <th className="p-4">Nº Solicitação</th>
-                  <th className="p-4">Data / Hora</th>
-                  <th className="p-4">Cliente / CPF</th>
-                  <th className="p-4 text-right">Valor do Serviço</th>
-                  <th className="p-4 text-center">Status Sefaz</th>
-                  <th className="p-4 text-center">Documento</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {filteredInvoices.length === 0 ? (
-                  <tr><td colSpan={6} className="p-8 text-center text-slate-400 italic">Nenhuma nota fiscal encontrada no histórico.</td></tr>
-                ) : (
-                  filteredInvoices.map((inv) => (
-                    <tr key={inv.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-4 font-mono font-bold text-slate-700">
-                          {inv.invoiceNumber ? (
-                              <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-md text-xs">NFS-e {inv.invoiceNumber}</span>
-                          ) : (
-                              inv.id
-                          )}
-                      </td>
-                      <td className="p-4 text-sm font-medium text-slate-600">
-                        {inv.issueDate ? new Date(inv.issueDate).toLocaleDateString('pt-BR') : '-'} 
-                        {inv.issueDate && <span className="text-slate-400 text-xs ml-1">{new Date(inv.issueDate).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</span>}
-                      </td>
-                      <td className="p-4">
-                        <div className="font-bold text-slate-800">{inv.client}</div>
-                        {getNickname(clients.find(c => c.name === inv.client)?.observations) && (
-                            <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 mb-1 w-fit truncate max-w-[200px]" title={getNickname(clients.find(c => c.name === inv.client)?.observations)}>
-                                {getNickname(clients.find(c => c.name === inv.client)?.observations)}
-                            </div>
-                        )}
-                        <div className="text-[10px] text-slate-500">{inv.cpf}</div>
-                      </td>
-                      <td className="p-4 text-right font-black text-slate-800">R$ {formatMoney(inv.serviceValue)}</td>
-                      <td className="p-4 text-center">
-                        <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase flex items-center justify-center gap-1 w-fit mx-auto ${
-                          inv.status === 'AUTORIZADA' ? 'bg-green-100 text-green-700 border border-green-200' :
-                          inv.status === 'EMITIDA_MANUAL' ? 'bg-purple-100 text-purple-700 border border-purple-200' :
-                          inv.status === 'ERRO' ? 'bg-red-100 text-red-700 border border-red-200' :
-                          String(inv.status) === 'CANCELADA' ? 'bg-slate-100 text-slate-500 border border-slate-300' :
-                          'bg-yellow-100 text-yellow-700 border border-yellow-200'
-                        }`}>
-                          {inv.status === 'AUTORIZADA' || inv.status === 'EMITIDA_MANUAL' ? <CheckCircle size={12}/> : inv.status === 'ERRO' ? <AlertCircle size={12}/> : String(inv.status) === 'CANCELADA' ? <Trash2 size={12}/> : <Clock size={12}/>}
-                          {inv.status === 'EMITIDA_MANUAL' ? 'Manual / Por fora' : inv.status}
-                        </span>
-                      </td>
-                      <td className="p-4">
-                        <div className="flex items-center justify-between min-w-[160px] gap-2">
-                          <div className="flex-1 flex justify-center">
-                            {inv.status === 'AUTORIZADA' && inv.pdfUrl ? (
-                              <button onClick={() => handleDownloadPDF(inv.pdfUrl!, inv)} className="text-blue-600 hover:text-blue-800 flex items-center gap-1 text-xs font-bold bg-blue-50 px-3 py-1.5 rounded-lg transition-colors border border-transparent hover:border-blue-200 w-fit">
-                                <Download size={14}/> Baixar PDF
-                              </button>
-                            ) : inv.status === 'EMITIDA_MANUAL' ? (
-                              <span className="text-[10px] text-purple-500 font-bold max-w-[150px] inline-block leading-tight truncate">Resolvido Manualmente</span>
-                            ) : inv.status === 'ERRO' ? (
-                              <span className="text-[10px] text-red-500 font-bold cursor-help max-w-[150px] inline-block leading-tight truncate" title={inv.errorMsg || 'Erro desconhecido'}>{inv.errorMsg || 'Ver Erro'}</span>
-                            ) : String(inv.status) === 'CANCELADA' ? (
-                              <span className="text-[10px] text-amber-700 font-black bg-amber-50 px-2.5 py-1 rounded-md border border-amber-200 uppercase tracking-wider">
-                                Sem efeito fiscal
-                              </span>
+          <div className="flex flex-col gap-4 min-h-[400px]">
+            
+            {/* 🚀 RELATÓRIO MENSAL GERENCIAL */}
+            {filterMonth !== 'todos' && monthSummary && (
+                <div className="p-5 bg-blue-50 border border-blue-200 rounded-2xl animate-in fade-in shadow-inner mx-4 mt-4">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 border-b border-blue-200 pb-3 gap-4">
+                        <div className="flex items-center gap-2">
+                            <Landmark size={20} className="text-blue-600" />
+                            <h3 className="font-black text-blue-900 uppercase tracking-widest text-sm">Resumo de Emissões: {filterMonth.split('-').reverse().join('/')}</h3>
+                        </div>
+                        <div className="text-left md:text-right">
+                            <span className="text-[10px] font-bold text-blue-700 uppercase block mb-0.5">Base de Cálculo Total Emitida no Mês</span>
+                            <span className="text-3xl font-black text-blue-900">R$ {formatMoney(monthSummary.totalEmitted)}</span>
+                        </div>
+                    </div>
+                    
+                    {monthSummary.clients.length > 0 ? (
+                        <div className="bg-white rounded-xl border border-blue-100 overflow-hidden shadow-sm">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-blue-100/50 text-[10px] uppercase tracking-wider text-blue-800 font-bold border-b border-blue-100">
+                                    <tr>
+                                        <th className="p-3">Cliente / Devedor</th>
+                                        <th className="p-3 text-right">Total Faturado no Mês</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {monthSummary.clients.map((c, i) => (
+                                        <React.Fragment key={i}>
+                                            <tr className="hover:bg-slate-50 transition-colors">
+                                                <td className="p-3 font-bold text-slate-800">{c.name}</td>
+                                                <td className="p-3 text-right font-black text-blue-600">R$ {formatMoney(c.total)}</td>
+                                            </tr>
+                                            {Object.entries(c.contracts).length > 0 && (
+                                                <tr className="bg-slate-50/50">
+                                                    <td colSpan={2} className="p-0">
+                                                        <div className="px-4 py-2 border-l-2 border-blue-300 ml-4 my-2">
+                                                            <p className="text-[9px] uppercase font-bold text-slate-400 mb-1.5 flex items-center gap-1"><FileText size={10}/> Detalhamento por Contrato</p>
+                                                            <div className="space-y-1">
+                                                                {Object.entries(c.contracts).map(([contractId, val]) => (
+                                                                    <div key={contractId} className="flex justify-between items-center text-xs">
+                                                                        <span className="text-slate-500 font-mono font-medium">CTR: {contractId}</span>
+                                                                        <span className="font-bold text-slate-600">R$ {formatMoney(val as number)}</span>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </React.Fragment>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    ) : (
+                        <p className="text-sm text-blue-600 font-medium italic text-center py-2">Nenhuma nota emitida ou autorizada neste mês.</p>
+                    )}
+                </div>
+            )}
+
+            <div className="overflow-x-auto w-full">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-100">
+                    <th className="p-4">Nº Solicitação</th>
+                    <th className="p-4">Data / Hora</th>
+                    <th className="p-4">Cliente / CPF</th>
+                    <th className="p-4 text-right">Valor do Serviço</th>
+                    <th className="p-4 text-center">Status Sefaz</th>
+                    <th className="p-4 text-center">Documento</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {filteredInvoices.length === 0 ? (
+                    <tr><td colSpan={6} className="p-8 text-center text-slate-400 italic">Nenhuma nota fiscal encontrada no histórico.</td></tr>
+                  ) : (
+                    filteredInvoices.map((inv) => (
+                      <tr key={inv.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4 font-mono font-bold text-slate-700">
+                            {inv.invoiceNumber ? (
+                                <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-md text-xs">NFS-e {inv.invoiceNumber}</span>
                             ) : (
-                              <span className="text-[10px] text-slate-400 font-bold flex items-center justify-center gap-1"><RefreshCw size={10} className="animate-spin"/> Aguardando...</span>
+                                inv.id
+                            )}
+                        </td>
+                        <td className="p-4 text-sm font-medium text-slate-600">
+                          {inv.issueDate ? new Date(inv.issueDate).toLocaleDateString('pt-BR') : '-'} 
+                          {inv.issueDate && <span className="text-slate-400 text-xs ml-1">{new Date(inv.issueDate).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</span>}
+                        </td>
+                        <td className="p-4">
+                          <div className="font-bold text-slate-800">{inv.client}</div>
+                          {getNickname(clients.find(c => c.name === inv.client)?.observations) && (
+                              <div className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full inline-block mt-0.5 mb-1 w-fit truncate max-w-[200px]" title={getNickname(clients.find(c => c.name === inv.client)?.observations)}>
+                                  {getNickname(clients.find(c => c.name === inv.client)?.observations)}
+                              </div>
+                          )}
+                          <div className="text-[10px] text-slate-500">{inv.cpf}</div>
+                        </td>
+                        <td className="p-4 text-right font-black text-slate-800">R$ {formatMoney(inv.serviceValue)}</td>
+                        <td className="p-4 text-center">
+                          <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase flex items-center justify-center gap-1 w-fit mx-auto ${
+                            inv.status === 'AUTORIZADA' ? 'bg-green-100 text-green-700 border border-green-200' :
+                            inv.status === 'EMITIDA_MANUAL' ? 'bg-purple-100 text-purple-700 border border-purple-200' :
+                            inv.status === 'ERRO' ? 'bg-red-100 text-red-700 border border-red-200' :
+                            String(inv.status) === 'CANCELADA' ? 'bg-slate-100 text-slate-500 border border-slate-300' :
+                            'bg-yellow-100 text-yellow-700 border border-yellow-200'
+                          }`}>
+                            {inv.status === 'AUTORIZADA' || inv.status === 'EMITIDA_MANUAL' ? <CheckCircle size={12}/> : inv.status === 'ERRO' ? <AlertCircle size={12}/> : String(inv.status) === 'CANCELADA' ? <Trash2 size={12}/> : <Clock size={12}/>}
+                            {inv.status === 'EMITIDA_MANUAL' ? 'Manual / Por fora' : inv.status}
+                          </span>
+                        </td>
+                        <td className="p-4">
+                          <div className="flex items-center justify-between min-w-[160px] gap-2">
+                            <div className="flex-1 flex justify-center">
+                              {inv.status === 'AUTORIZADA' && inv.pdfUrl ? (
+                                <button onClick={() => handleDownloadPDF(inv.pdfUrl!, inv)} className="text-blue-600 hover:text-blue-800 flex items-center gap-1 text-xs font-bold bg-blue-50 px-3 py-1.5 rounded-lg transition-colors border border-transparent hover:border-blue-200 w-fit">
+                                  <Download size={14}/> Baixar PDF
+                                </button>
+                              ) : inv.status === 'EMITIDA_MANUAL' ? (
+                                <span className="text-[10px] text-purple-500 font-bold max-w-[150px] inline-block leading-tight truncate">Resolvido Manualmente</span>
+                              ) : inv.status === 'ERRO' ? (
+                                <span className="text-[10px] text-red-500 font-bold cursor-help max-w-[150px] inline-block leading-tight truncate" title={inv.errorMsg || 'Erro desconhecido'}>{inv.errorMsg || 'Ver Erro'}</span>
+                              ) : String(inv.status) === 'CANCELADA' ? (
+                                <span className="text-[10px] text-amber-700 font-black bg-amber-50 px-2.5 py-1 rounded-md border border-amber-200 uppercase tracking-wider">
+                                  Sem efeito fiscal
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-400 font-bold flex items-center justify-center gap-1"><RefreshCw size={10} className="animate-spin"/> Aguardando...</span>
+                              )}
+                            </div>
+                            {inv.status !== 'EMITIDA_MANUAL' && String(inv.status) !== 'CANCELADA' && (
+                              <button 
+                                onClick={() => handleDeleteInvoice(inv.id!)}
+                                className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-md transition-colors shrink-0"
+                                title="Cancelar Nota Fiscal"
+                              >
+                                <Trash2 size={16} />
+                              </button>
                             )}
                           </div>
-                          {inv.status !== 'EMITIDA_MANUAL' && String(inv.status) !== 'CANCELADA' && (
-                            <button 
-                              onClick={() => handleDeleteInvoice(inv.id!)}
-                              className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-md transition-colors shrink-0"
-                              title="Cancelar Nota Fiscal"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
