@@ -412,15 +412,18 @@ const Invoices = () => {
       
       const summary = {
           totalEmitted: 0,
+          invoiceCount: 0,
           clients: {} as Record<string, { total: number, contracts: Record<string, number> }>
       };
+
+      const emittedInvoiceIds = new Set<string>();
 
       // 1. Vasculha todos os contratos para encontrar pagamentos faturados
       loans.forEach(loan => {
           if (!loan.history) return;
           const safeClientName = normalizeString(loan.client).replace(/[^a-z0-9]/g, '');
 
-          loan.history.forEach((record: any) => {
+          loan.history.forEach((record: any, index: number) => {
               const type = record.type?.toLowerCase() || '';
               if (type.includes('abertura') || type.includes('empréstimo') || type.includes('acordo') || parseVal(record.amount) <= 0) return;
               if (record.nfeStatus === 'IGNORADA') return;
@@ -429,11 +432,15 @@ const Invoices = () => {
               if (jurosRecebido <= 0) return;
 
               let isEmittedInFilteredMonth = false;
+              let currentInvoiceId = '';
 
               // Verifica se foi baixa manual no mês filtrado
               if (record.nfeStatus === 'EMITIDA_MANUAL') {
                   const recordMonth = record.date.substring(0, 7);
-                  if (recordMonth === filterMonth) isEmittedInFilteredMonth = true;
+                  if (recordMonth === filterMonth) {
+                      isEmittedInFilteredMonth = true;
+                      currentInvoiceId = `MANUAL-${loan.id}-${index}`;
+                  }
               } else {
                   // Verifica se pertence a um Pacote (NFG) que foi Autorizado pela Sefaz no mês filtrado
                   const dateStr = record.date.split('T')[0];
@@ -443,12 +450,16 @@ const Invoices = () => {
                   const authorizedInv = groupInvoices.find(inv => inv.status === 'AUTORIZADA');
                   if (authorizedInv && authorizedInv.issueDate) {
                       const issueMonth = new Date(authorizedInv.issueDate).toISOString().substring(0, 7);
-                      if (issueMonth === filterMonth) isEmittedInFilteredMonth = true;
+                      if (issueMonth === filterMonth) {
+                          isEmittedInFilteredMonth = true;
+                          currentInvoiceId = authorizedInv.id || groupId;
+                      }
                   }
               }
 
               if (isEmittedInFilteredMonth) {
                   summary.totalEmitted += jurosRecebido;
+                  if (currentInvoiceId) emittedInvoiceIds.add(currentInvoiceId);
                   
                   if (!summary.clients[loan.client]) summary.clients[loan.client] = { total: 0, contracts: {} };
                   
@@ -468,6 +479,7 @@ const Invoices = () => {
                   if (issueMonth === filterMonth) {
                       const val = parseVal(inv.serviceValue);
                       summary.totalEmitted += val;
+                      if (inv.id) emittedInvoiceIds.add(inv.id);
                       
                       const clientName = inv.client || 'Cliente Desconhecido';
                       if (!summary.clients[clientName]) summary.clients[clientName] = { total: 0, contracts: {} };
@@ -483,8 +495,10 @@ const Invoices = () => {
       const sortedClients = Object.entries(summary.clients)
           .map(([name, data]) => ({ name, ...data }))
           .sort((a, b) => b.total - a.total); // Ordena quem gerou mais nota primeiro
+          
+      summary.invoiceCount = emittedInvoiceIds.size;
 
-      return { totalEmitted: summary.totalEmitted, clients: sortedClients };
+      return { totalEmitted: summary.totalEmitted, invoiceCount: summary.invoiceCount, clients: sortedClients };
   }, [loans, invoices, filterMonth]);
 
   return (
@@ -667,11 +681,15 @@ const Invoices = () => {
             {filterMonth !== 'todos' && monthSummary && (
                 <div className="p-5 bg-blue-50 border border-blue-200 rounded-2xl animate-in fade-in shadow-inner mx-4 mt-4">
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 border-b border-blue-200 pb-3 gap-4">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-3 flex-wrap">
                             <Landmark size={20} className="text-blue-600" />
                             <h3 className="font-black text-blue-900 uppercase tracking-widest text-sm">Resumo de Emissões: {filterMonth.split('-').reverse().join('/')}</h3>
+                            <span className="bg-white text-blue-700 border border-blue-200 text-[10px] font-bold uppercase px-3 py-1 rounded-full shadow-sm flex items-center gap-1.5">
+                                <Receipt size={12} />
+                                {monthSummary.invoiceCount} {monthSummary.invoiceCount === 1 ? 'Nota Emitida' : 'Notas Emitidas'}
+                            </span>
                         </div>
-                        <div className="text-left md:text-right">
+                        <div className="text-left md:text-right mt-2 md:mt-0">
                             <span className="text-[10px] font-bold text-blue-700 uppercase block mb-0.5">Base de Cálculo Total Emitida no Mês</span>
                             <span className="text-3xl font-black text-blue-900">R$ {formatMoney(monthSummary.totalEmitted)}</span>
                         </div>
