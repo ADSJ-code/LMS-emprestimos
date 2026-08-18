@@ -487,41 +487,45 @@ const Billing = () => {
       const currentMonth = dueLocalDate.getMonth();
       const currentYear = dueLocalDate.getFullYear();
 
-      let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
-          const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-          if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
-              return acc + parseVal(h.amount);
-          }
-          return acc;
-      }, 0);
+      // 🚀 FIX: A blindagem de ciclo por valor acumulado mensal só deve acontecer para contratos MENSAIS.
+      if (loan.frequency === 'MENSAL') {
+          let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+              if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                  return acc + parseVal(h.amount);
+              }
+              return acc;
+          }, 0);
 
-      const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+          const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
-      if (validSlices.length > 0) {
-          let hasLateSlice = false;
-          const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+          if (validSlices.length > 0) {
+              let hasLateSlice = false;
+              const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
 
-          for (const slice of sortedSlices) {
-              const baseAmount = parseVal(slice.amount);
-              const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
-              
-              if (totalPaidInCycle >= (baseAmount - 0.05)) {
-                  totalPaidInCycle -= baseAmount;
-              } else {
-                  if (sliceDate < today) {
-                      hasLateSlice = true;
-                      break;
+              for (const slice of sortedSlices) {
+                  const baseAmount = parseVal(slice.amount);
+                  const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+                  
+                  if (totalPaidInCycle >= (baseAmount - 0.05)) {
+                      totalPaidInCycle -= baseAmount;
+                  } else {
+                      if (sliceDate < today) {
+                          hasLateSlice = true;
+                          break;
+                      }
                   }
               }
+              if (hasLateSlice) return 'Atrasado';
+              return 'Em Dia';
           }
-          if (hasLateSlice) return 'Atrasado';
-          return 'Em Dia';
+
+          const breakdown = getSyncedBreakdown(loan);
+          const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
+          if (totalPaidInCycle >= (requiredTotal - 0.10)) return 'Em Dia';
       }
 
-      const breakdown = getSyncedBreakdown(loan);
-      const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
-      if (totalPaidInCycle >= (requiredTotal - 0.10)) return 'Em Dia';
-
+      // Se for Semanal, Diário, ou se a blindagem mensal falhou, cai na regra absoluta da data:
       if (dueLocalDate < today) return 'Atrasado';
       return 'Em Dia';
   };
