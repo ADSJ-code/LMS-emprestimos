@@ -113,6 +113,7 @@ const Billing = () => {
   };
 
   const [loanFlowStep, setLoanFlowStep] = useState<LoanFlowStep>('closed');
+  const [showClientDropdown, setShowClientDropdown] = useState(false); // 🚀 FIX DROPDOWN: Controle nativo de renderização
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isAgreementModalOpen, setIsAgreementModalOpen] = useState(false);
@@ -469,6 +470,7 @@ const Billing = () => {
   // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
       if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
+      
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
       if (balance <= 0.10) return 'Quitado'; 
       
@@ -633,6 +635,7 @@ const Billing = () => {
 
       const schedule: any[] = [];
       let currentCycle = 1;
+      let accPaidInCurrentCycle = 0; // 🚀 Rastreador de pagamentos parciais no ciclo
 
       historyPayments.forEach((p, idx) => {
           const isPartial = p.note?.includes('[PAGAMENTO PARCIAL]');
@@ -649,7 +652,12 @@ const Billing = () => {
           });
 
           // 🚀 Rolagem de dívida não incrementa o número da parcela amortizada
-          if (completedInstallment) currentCycle++; 
+          if (completedInstallment) {
+              currentCycle++; 
+              accPaidInCurrentCycle = 0; // Resetou o ciclo
+          } else {
+              accPaidInCurrentCycle += Number(p.amount) || 0; // Soma o picadinho pago
+          }
       });
 
       if (loan.status !== 'Pago' && loan.status !== 'Quitado') {
@@ -669,7 +677,10 @@ const Billing = () => {
               let amountToDisplay = isSimple ? getSyncedBreakdown(loan).total : Number(loan.installmentValue || 0);
               let noteStr = '';
 
-              if (stepDate < today) {
+              // 🚀 FIX CRONOGRAMA: Consulta o Motor Inteligente para a parcela atual em vez de checar a data cegamente.
+              const isReallyLate = isFirst ? (getLoanRealStatus(loan) === 'Atrasado') : (stepDate < today);
+
+              if (isReallyLate) {
                   status = 'Atrasado';
                   const baseAmount = (isFirst && loan.status === 'Acordo') ? amountToDisplay + Number(loan.agreementValue || 0) : amountToDisplay;
                   const stepDateStr = stepDate.toISOString().split('T')[0];
@@ -683,6 +694,11 @@ const Billing = () => {
                       Number(loan.amount || 0)
                   );
                   
+                  if (isFirst && accPaidInCurrentCycle > 0) {
+                      const remaining = Math.max(0, amountToDisplay - accPaidInCurrentCycle);
+                      noteStr = `Restante da parcela: R$ ${formatMoney(remaining)} (com multa)`;
+                  }
+                  
               } else if (isFirst && loan.status === 'Acordo') {
                   status = 'Acordo';
                   amountToDisplay = amountToDisplay + Number(loan.agreementValue || 0);
@@ -693,6 +709,10 @@ const Billing = () => {
                   } else {
                       noteStr = `Acordo (+ R$ ${formatMoney(loan.agreementValue || 0)})`;
                   }
+              } else if (isFirst && accPaidInCurrentCycle > 0) {
+                  // 🚀 NOVA LÓGICA VISUAL: Mostra no cronograma o que falta pagar para fechar o ciclo
+                  const remaining = Math.max(0, amountToDisplay - accPaidInCurrentCycle);
+                  noteStr = `Restante da parcela: R$ ${formatMoney(remaining)}`;
               }
 
               schedule.push({
@@ -1106,13 +1126,11 @@ const Billing = () => {
     if (slices.length > 0) {
         let targetSlice = null;
         let targetRemaining = 0;
-        let targetSliceTotal = 0;
-        let targetRatio = 0;
         let targetPenalty = 0;
 
         for (const s of slices) {
             const baseAmount = Number(s.amount) || 0;
-            const ratio = baseAmount / (breakdown.total || 1);
+            const ratio = breakdown.total > 0 ? (baseAmount / breakdown.total) : 0;
             
             const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
                 const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
@@ -1136,24 +1154,30 @@ const Billing = () => {
             if (slicePaidAmount < (sliceTotal - 0.05) && !targetSlice) {
                 targetSlice = s;
                 targetRemaining = sliceTotal - slicePaidAmount;
-                targetSliceTotal = sliceTotal;
-                targetRatio = ratio;
                 targetPenalty = slicePenalty;
             }
         }
 
         if (targetSlice) {
-            const remRatio = targetRemaining / targetSliceTotal; 
-            const sliceIntOriginal = breakdown.interest * targetRatio;
-            const sliceCapOriginal = breakdown.capital * targetRatio;
-
+            // 🚀 FIX VÍDEOS 1 e 2: Respeita o valor bruto da fatia que foi salvo no banco em vez de recalcular proporções
             const remainingCapitalDebt = Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
-            let autoCap = sliceCapOriginal * remRatio;
+            const baseSliceValue = Number(targetSlice.amount);
             
-            if (autoCap > remainingCapitalDebt) autoCap = remainingCapitalDebt;
-            
-            const expectedTotal = targetRemaining;
-            const autoInt = expectedTotal - autoCap;
+            let autoCap = 0;
+            let autoInt = 0;
+
+            if (loan.interestType === 'SIMPLE') {
+                autoInt = targetRemaining;
+                autoCap = 0;
+            } else {
+                // Em Price/Linear, prioriza o pagamento do Juros da parcela inteira
+                const expectedInterestRatio = breakdown.total > 0 ? (breakdown.interest / breakdown.total) : 0;
+                let sliceExpectedInterest = baseSliceValue * expectedInterestRatio;
+                let sliceExpectedCapital = baseSliceValue - sliceExpectedInterest;
+
+                autoCap = Math.min(sliceExpectedCapital, remainingCapitalDebt);
+                autoInt = Math.max(0, targetRemaining - autoCap);
+            }
 
             autoCapital = autoCap.toFixed(2);
             autoInterest = autoInt.toFixed(2);
@@ -3152,14 +3176,17 @@ const handleFinalSave = async (e: React.FormEvent) => {
                         required
                         placeholder="Busque por nome ou apelido (sem acento)..."
                         value={formData.client}
-                        onChange={e => setFormData({...formData, client: e.target.value})}
-                        onFocus={() => { (window as any).showClientDropdown = true; setFormData({...formData, client: formData.client}); }}
-                        onBlur={() => setTimeout(() => { (window as any).showClientDropdown = false; setFormData({...formData, client: formData.client}); }, 200)}
-                        className="w-full p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5 font-bold"
+                        onChange={e => {
+                            setFormData({...formData, client: e.target.value});
+                            setShowClientDropdown(true); // 🚀 FIX: Abre a lista ao digitar
+                        }}
+                        onFocus={() => setShowClientDropdown(true)}
+                        onBlur={() => setTimeout(() => setShowClientDropdown(false), 200)}
+                        className="w-full p-3 border border-slate-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-slate-900/5 font-bold relative z-10"
                         autoComplete="off"
                     />
-                    {((window as any).showClientDropdown || formData.client) && (
-                        <div className="absolute z-50 left-0 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto custom-scrollbar">
+                    {showClientDropdown && (
+                        <div className="absolute z-[100] left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-56 overflow-y-auto custom-scrollbar">
                             {availableClients.filter(c => 
                                 c.status !== 'Bloqueado' && 
                                 (
@@ -3167,7 +3194,15 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                     (c.observations && normalizeString(c.observations).includes(normalizeString(formData.client)))
                                 )
                             ).slice(0, 15).map((c) => (
-                                <div key={c.id} onMouseDown={(e) => { e.preventDefault(); setFormData({...formData, client: c.name}); (window as any).showClientDropdown = false; }} className="p-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-0 transition-colors flex items-center justify-between">
+                                <div 
+                                    key={c.id} 
+                                    onMouseDown={(e) => { 
+                                        e.preventDefault(); 
+                                        setFormData({...formData, client: c.name}); 
+                                        setShowClientDropdown(false); // 🚀 FIX: Fecha IMEDIATAMENTE a lista ao clicar
+                                    }} 
+                                    className="p-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-0 transition-colors flex items-center justify-between"
+                                >
                                     <span className="font-bold text-slate-700">{c.name}</span>
                                     {getNickname(c.observations) && <span className="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full font-bold uppercase truncate max-w-[120px]">{getNickname(c.observations)}</span>}
                                 </div>

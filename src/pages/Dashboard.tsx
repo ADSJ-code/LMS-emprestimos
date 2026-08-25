@@ -210,8 +210,11 @@ const Dashboard = () => {
 
   const getLoanRealStatus = (loan: Loan) => {
       if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
+      
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
       if (balance <= 0.10) return 'Quitado'; 
+      
+      if (loan.interestType !== 'SIMPLE' && Number(loan.installments) <= 0) return 'Quitado';
       
       const today = new Date();
       today.setHours(0,0,0,0);
@@ -439,7 +442,7 @@ const Dashboard = () => {
       const pad = (n: number) => n.toString().padStart(2, '0');
 
       safeLoans.forEach((loan: any) => {
-        const isPaid = loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado';
+        const isPaid = getLoanRealStatus(loan) === 'Quitado'; // 🚀 FIX: Usa a régua inteligente!
         if (!isPaid) {
             totalGloballyActive++;
             activeDebtors.add(loan.client);
@@ -575,7 +578,7 @@ const Dashboard = () => {
           
           // Verifica se este cliente possui algum contrato ativo (não pago/quitado)
           const hasActiveLoan = safeLoans.some(l => 
-              l.client === c.name && l.status?.toLowerCase() !== 'pago' && l.status?.toLowerCase() !== 'quitado'
+              l.client === c.name && getLoanRealStatus(l) !== 'Quitado' // 🚀 FIX: Usa a régua inteligente!
           );
 
           if (hasActiveLoan) {
@@ -629,7 +632,7 @@ const Dashboard = () => {
          // 🚀 FIX: A lista allLoans já vem limpa de clientes bloqueados pelo fetchAndCalculate.
          // Só precisamos garantir que não aparecem quitados nem acordos antigos!
          const dStr = getDisplayNextDue(l);
-         const isActivelyDue = l.status?.toLowerCase() !== 'pago' && l.status?.toLowerCase() !== 'quitado';
+         const isActivelyDue = getLoanRealStatus(l) !== 'Quitado'; // 🚀 FIX: Usa a régua inteligente!
          return dStr === todayStr && isActivelyDue;
       });
       setTodaysLoans(dueToday);
@@ -679,7 +682,7 @@ const Dashboard = () => {
   const loansOnMaturityDate = useMemo(() => {
       if (!maturityDate) return [];
       return allLoans.filter(l => {
-          if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return false;
+          if (getLoanRealStatus(l) === 'Quitado') return false; // 🚀 FIX: Usa a régua inteligente!
           return getDisplayNextDue(l) === maturityDate; // 🚀 FIX: Aplica fatias e acordos na busca do calendário
       });
   }, [allLoans, maturityDate]);
@@ -773,7 +776,7 @@ const Dashboard = () => {
       const map = new Map();
       
       allLoans.forEach(l => {
-          if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return;
+          if (getLoanRealStatus(l) === 'Quitado') return; // 🚀 FIX: Usa a régua inteligente!
           if (!map.has(l.client)) map.set(l.client, { name: l.client, contracts: [], totalCapital: 0, totalProfit: 0 });
           const c = map.get(l.client);
           c.contracts.push(l);

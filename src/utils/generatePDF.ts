@@ -255,10 +255,18 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client, setti
     const anoAtual = new Date().getFullYear();
     addText(`${contractCity}, ${diaAtual} de ${mesAtual} de ${anoAtual}`, false, 'left');
 
+    // 🚀 FIX VÍDEO 3: Trava de quebra de página. Se o Y estiver muito baixo (fim da folha A4),
+    // cria uma nova página e aplica o timbre para não imprimir as assinaturas "no ar" fora do papel.
+    if (y > 210) {
+        doc.addPage();
+        aplicarFundoTimbrado(doc, settings);
+        y = 45; // Reseta a margem para o topo da nova página
+    }
+
     y += 20;
     const centerX = doc.internal.pageSize.getWidth() / 2;
     doc.setLineWidth(0.1);
-    doc.line(centerX - 45, y, centerX + 45, y); 
+    doc.line(centerX - 45, y, centerX + 45, y);
     y += 5;
     doc.setFont("times", "bold");
     doc.text(`MUTUANTE: ${lenderName}`, centerX, y, { align: "center" });
