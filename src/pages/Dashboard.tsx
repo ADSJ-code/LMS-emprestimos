@@ -490,13 +490,14 @@ const Dashboard = () => {
             uniqueMatchedContracts.add(loan.id);
             const tier = loan.interestRate < 10 ? 'low' : loan.interestRate <= 15 ? 'mid' : 'high';
 
+            // 🚀 FIX: A Bola de Neve é absoluta e global, calcula fora do filtro de período
+            if (realStatus === 'Atrasado') {
+                overAcc.all += totalOverdue; overAcc[tier] += totalOverdue;
+            }
+
             if (period !== 'todos') {
                 capAcc.all += capToAdd; capAcc[tier] += capToAdd;
                 profAcc.all += profToAdd; profAcc[tier] += profToAdd;
-                // 🚀 FIX: Acordos não podem somar no fluxo de Atrasados
-                if (realStatus !== 'Acordo') {
-                    overAcc.all += overToAdd; overAcc[tier] += overToAdd;
-                }
                 
                 slices.forEach(s => {
                     filteredContext.push({ 
@@ -552,11 +553,7 @@ const Dashboard = () => {
                 capAcc.all += gCap; capAcc[tier] += gCap;
                 profAcc.all += gProf; profAcc[tier] += gProf;
                 
-                if (realStatus === 'Atrasado') {
-                    overAcc.all += totalOverdue; overAcc[tier] += totalOverdue;
-                }
-
-                filteredContext.push({ 
+                filteredContext.push({
                     ...loan, uniqueSliceId: loan.id, projectedDate: loan.nextDue,
                     projectedCapitalForPeriod: gCap, projectedInterestForPeriod: gProf
                 });
@@ -693,10 +690,8 @@ const Dashboard = () => {
       let baseList = [];
 
       if (selectedRange === 'overdue') {
-          const contextIds = new Set(filteredLoansContext.map(l => l.id));
           baseList = allLoans.filter(l => {
               const realStatus = getLoanRealStatus(l);
-              // 🚀 FIX VISUAL: Apenas contratos estritamente e ativamente 'Atrasados' aparecem na lista do Dashboard
               const isOverdue = realStatus === 'Atrasado';
               
               let passTier = true;
@@ -704,7 +699,7 @@ const Dashboard = () => {
               if (tierFilters.overdue === 'mid') passTier = parseVal(l.interestRate) >= 10 && parseVal(l.interestRate) <= 15;
               if (tierFilters.overdue === 'high') passTier = parseVal(l.interestRate) > 15;
 
-              return isOverdue && contextIds.has(l.id) && passTier;
+              return isOverdue && passTier; // 🚀 FIX: Removida a trava contextIds para dívidas aparecerem em qualquer filtro de data
           });
       } else {
           baseList = filteredLoansContext.filter(l => {

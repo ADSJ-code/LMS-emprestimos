@@ -1547,7 +1547,7 @@ const handleOpenEditContract = (loan: Loan) => {
           let periodRate = loan.interestRate / 100;
           if (loan.frequency === 'SEMANAL') periodRate = periodRate / 4;
           else if (loan.frequency === 'DIARIO') periodRate = periodRate / 30;
-          const currentBalance = Math.max(0, loan.amount - (loan.totalPaidCapital || 0));
+          const currentBalance = loan.amount; // 🚀 FIX: O modal agora abre exibindo a parcela baseada no Valor Nominal Original
           displayInstallment = (currentBalance * periodRate).toFixed(2);
       }
 
@@ -1593,20 +1593,21 @@ const handleOpenEditContract = (loan: Loan) => {
       if (selectedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
       else if (selectedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
 
-      const currentBalance = Math.max(0, newAmount - (selectedLoan.totalPaidCapital || 0));
+      // 🚀 FIX: Usa sempre o novo Valor Bruto preenchido na tela para calcular a parcela!
+      const baseCalculationAmount = newAmount; 
 
       if (isSimple) {
-          newInstallmentValue = currentBalance * periodRate;
+          newInstallmentValue = baseCalculationAmount * periodRate;
       } else {
-          if (periodRate === 0) newInstallmentValue = currentBalance / numInst;
-          else newInstallmentValue = currentBalance * ((periodRate * Math.pow(1 + periodRate, numInst)) / (Math.pow(1 + periodRate, numInst) - 1));
+          if (periodRate === 0) newInstallmentValue = baseCalculationAmount / numInst;
+          else newInstallmentValue = baseCalculationAmount * ((periodRate * Math.pow(1 + periodRate, numInst)) / (Math.pow(1 + periodRate, numInst) - 1));
       }
       
       newInstallmentValue = Math.round(newInstallmentValue * 100) / 100;
 
       let newProjectedProfit = selectedLoan.projectedProfit;
       if (!isSimple) {
-          newProjectedProfit = Math.max(0, (newInstallmentValue * numInst) - newAmount);
+          newProjectedProfit = Math.max(0, (newInstallmentValue * numInst) - baseCalculationAmount);
       }
 
       // 🚀 FIX: Limpa e prepara as fatias editadas garantindo que são números válidos
@@ -2901,7 +2902,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                               if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
                               if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
                               let calcInst = 0;
-                              const currentBalance = Math.max(0, newAmtNum - (selectedLoan?.totalPaidCapital || 0));
+                              const currentBalance = newAmtNum; // 🚀 FIX: Calcula sempre pelo valor nominal editado
                               if (selectedLoan?.interestType === 'SIMPLE') calcInst = currentBalance * periodRate;
                               else {
                                   if (periodRate === 0) calcInst = currentBalance / inst;
@@ -2923,7 +2924,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                               if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
                               if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
                               let calcInst = 0;
-                              const currentBalance = Math.max(0, amt - (selectedLoan?.totalPaidCapital || 0));
+                              const currentBalance = amt; // 🚀 FIX: Calcula sempre pelo valor nominal editado
                               if (selectedLoan?.interestType === 'SIMPLE') calcInst = currentBalance * periodRate;
                               else {
                                   if (periodRate === 0) calcInst = currentBalance / inst;
@@ -2945,7 +2946,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                               if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
                               if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
                               let calcInst = 0;
-                              const currentBalance = Math.max(0, amt - (selectedLoan?.totalPaidCapital || 0));
+                              const currentBalance = amt; // 🚀 FIX: Calcula sempre pelo valor nominal editado
                               if (selectedLoan?.interestType === 'SIMPLE') calcInst = currentBalance * periodRate;
                               else {
                                   if (periodRate === 0) calcInst = currentBalance / inst;
@@ -2966,7 +2967,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                   if (val === '') return { ...prev, installmentValue: val };
                                   
                                   const pmtTarget = parseFloat(val) || 0;
-                                  const cap = Math.max(0, (parseFloat(prev.amount) || 0) - (selectedLoan?.totalPaidCapital || 0));
+                                  const cap = parseFloat(prev.amount) || 0; // 🚀 FIX: Ignora o que já foi pago
                                   const parcelas = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(prev.installments) || 1);
 
                                   if (cap > 0 && pmtTarget > 0) {
@@ -3013,7 +3014,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                               if (val === '') return;
                               
                               const jurosTarget = parseFloat(val) || 0;
-                              const cap = Math.max(0, (parseFloat(editContractData.amount) || 0) - (selectedLoan?.totalPaidCapital || 0));
+                              const cap = parseFloat(editContractData.amount) || 0; // 🚀 FIX: Ignora o que já foi pago
                               const parcelas = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(editContractData.installments) || 1);
 
                               if (cap > 0 && jurosTarget >= 0) {
@@ -3045,7 +3046,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                       if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
                                       
                                       let calcInst = 0;
-                                      if (selectedLoan?.interestType === 'SIMPLE') calcInst = Math.max(0, cap - (selectedLoan?.totalPaidCapital || 0)) * periodRate;
+                                      if (selectedLoan?.interestType === 'SIMPLE') calcInst = cap * periodRate; // 🚀 FIX: Ignora o que já foi pago
                                       else {
                                           if (periodRate === 0) calcInst = cap / parcelas;
                                           else calcInst = cap * ((periodRate * Math.pow(1 + periodRate, parcelas)) / (Math.pow(1 + periodRate, parcelas) - 1));

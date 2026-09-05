@@ -391,8 +391,19 @@ const Clients = () => {
     const clientLoans = loans.filter(l => l.client === clientName);
     if (clientLoans.length === 0) return { label: 'Sem Histórico', color: 'gray' };
     
-    const hasOverdue = clientLoans.some(l => {
-        if (l.status === 'Pago' || l.status === 'Quitado' || l.status === 'Acordo') return false;
+    // 🚀 FIX: Usa a mesma régua matemática inteligente do Dashboard
+    const activeLoans = clientLoans.filter(l => {
+        if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return false;
+        const balance = parseFloat(l.amount as any) - parseFloat(l.totalPaidCapital as any);
+        if (balance <= 0.10) return false;
+        if (l.interestType !== 'SIMPLE' && Number(l.installments) <= 0) return false;
+        return true;
+    });
+
+    if (activeLoans.length === 0) return { label: 'Quitado', color: 'green' };
+
+    const hasOverdue = activeLoans.some(l => {
+        if (l.status === 'Acordo') return false;
         
         const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseFloat(s.amount) > 0) || [];
         const today = new Date();
@@ -423,11 +434,10 @@ const Clients = () => {
     
     if (hasOverdue) return { label: 'Inadimplente', color: 'red' };
     
-    const hasAcordo = clientLoans.some(l => l.status === 'Acordo');
+    const hasAcordo = activeLoans.some(l => l.status === 'Acordo');
     if (hasAcordo) return { label: 'Em Acordo', color: 'orange' };
     
-    if (clientLoans.some(l => l.status !== 'Pago' && l.status !== 'Quitado')) return { label: 'Em Dia (Ativo)', color: 'blue' };
-    return { label: 'Quitado', color: 'green' };
+    return { label: 'Em Dia (Ativo)', color: 'blue' };
   };
 
   // 🚀 MOTOR DE MÉTRICAS UNIFICADO: Sincroniza a contagem dos Cards diretamente com os filtros visuais da tabela
