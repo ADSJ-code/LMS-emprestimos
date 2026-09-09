@@ -469,16 +469,14 @@ const Billing = () => {
 
   // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
-      if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
-      
+      // 1. PRIORIDADE ABSOLUTA: Saldo Devedor. Se não deve capital, está Quitado.
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
-      if (balance <= 0.10) return 'Quitado'; 
-      
-      if (loan.interestType !== 'SIMPLE' && Number(loan.installments) <= 0) return 'Quitado';
+      if (balance <= 0.10 || loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') {
+          return 'Quitado'; 
+      }
       
       const today = new Date();
       today.setHours(0,0,0,0);
-      
       const dueLocalDate = parseLocalDate(loan.nextDue);
 
       if (loan.status === 'Acordo') {
@@ -489,7 +487,7 @@ const Billing = () => {
       const currentMonth = dueLocalDate.getMonth();
       const currentYear = dueLocalDate.getFullYear();
 
-      // 🚀 FIX: A blindagem de ciclo por valor acumulado mensal só deve acontecer para contratos MENSAIS.
+      // 2. AVALIAÇÃO DE FATIAS MULTI-DATA (Se houver)
       if (loan.frequency === 'MENSAL') {
           let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
               const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
@@ -502,33 +500,43 @@ const Billing = () => {
           const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
           if (validSlices.length > 0) {
-              let hasLateSlice = false;
+              let tempPaidInCycle = totalPaidInCycle;
               const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
 
               for (const slice of sortedSlices) {
                   const baseAmount = parseVal(slice.amount);
                   const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                   
-                  if (totalPaidInCycle >= (baseAmount - 0.05)) {
-                      totalPaidInCycle -= baseAmount;
+                  if (tempPaidInCycle >= (baseAmount - 0.05)) {
+                      tempPaidInCycle -= baseAmount;
                   } else {
                       if (sliceDate < today) {
-                          hasLateSlice = true;
-                          break;
+                          return 'Atrasado'; // Atraso cravado direto na fatia
                       }
                   }
               }
-              if (hasLateSlice) return 'Atrasado';
-              return 'Em Dia';
+              // 🚀 A CORREÇÃO: Removemos o "return 'Em Dia'" daqui!
+              // O sistema NÃO PODE dar passe livre só porque as fatias em si foram cobertas.
+              // O código agora desce e checa obrigatoriamente se faltou dinheiro no mês e a data final.
           }
 
+          // Blindagem Mensal: Verifica se o valor pago NO MÊS quitou a parcela
           const breakdown = getSyncedBreakdown(loan);
           const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
-          if (totalPaidInCycle >= (requiredTotal - 0.10)) return 'Em Dia';
+          
+          // 🚀 A CORREÇÃO DO ROBSON AQUI:
+          // Só retorna 'Em Dia' antecipadamente se ele realmente tiver uma parcela válida (requiredTotal > 0.10)
+          // E se ele tiver pago o valor total daquela parcela. Se a parcela for = 0 (bug antigo), a regra falha e vai checar a Data!
+          if (requiredTotal > 0.10 && totalPaidInCycle >= (requiredTotal - 0.10)) {
+              return 'Em Dia';
+          }
       }
 
-      // Se for Semanal, Diário, ou se a blindagem mensal falhou, cai na regra absoluta da data:
-      if (dueLocalDate < today) return 'Atrasado';
+      // 3. REGRA DE ATRASO ABSOLUTO: Se venceu e sobrou saldo devedor, é Atrasado.
+      if (dueLocalDate < today) {
+          return 'Atrasado';
+      }
+      
       return 'Em Dia';
   };
   const getLastPaymentDate = (loan: Loan) => {

@@ -209,16 +209,14 @@ const Dashboard = () => {
   };
 
   const getLoanRealStatus = (loan: Loan) => {
-      if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
-      
+      // 1. PRIORIDADE ABSOLUTA: Saldo Devedor. Se não deve capital, está Quitado.
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
-      if (balance <= 0.10) return 'Quitado'; 
-      
-      if (loan.interestType !== 'SIMPLE' && Number(loan.installments) <= 0) return 'Quitado';
+      if (balance <= 0.10 || loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') {
+          return 'Quitado'; 
+      }
       
       const today = new Date();
       today.setHours(0,0,0,0);
-      
       const dueLocalDate = parseLocalDate(loan.nextDue);
 
       if (loan.status === 'Acordo') {
@@ -229,7 +227,7 @@ const Dashboard = () => {
       const currentMonth = dueLocalDate.getMonth();
       const currentYear = dueLocalDate.getFullYear();
 
-      // 🚀 FIX: A blindagem de ciclo por valor acumulado mensal só deve acontecer para contratos MENSAIS.
+      // 2. AVALIAÇÃO DE FATIAS MULTI-DATA (Se houver)
       if (loan.frequency === 'MENSAL') {
           let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
               const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
@@ -242,33 +240,35 @@ const Dashboard = () => {
           const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
           if (validSlices.length > 0) {
-              let hasLateSlice = false;
+              let tempPaidInCycle = totalPaidInCycle;
               const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
 
               for (const slice of sortedSlices) {
                   const baseAmount = parseVal(slice.amount);
                   const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                   
-                  if (totalPaidInCycle >= (baseAmount - 0.05)) {
-                      totalPaidInCycle -= baseAmount;
-                  } else {
-                      if (sliceDate < today) {
-                          hasLateSlice = true;
-                          break;
-                      }
+                  if (tempPaidInCycle >= (baseAmount - 0.05)) {
+                      tempPaidInCycle -= baseAmount;
+                  } else if (sliceDate < today) {
+                      return 'Atrasado'; // Atraso cravado direto na fatia
                   }
               }
-              if (hasLateSlice) return 'Atrasado';
-              return 'Em Dia';
           }
 
+          // Blindagem Mensal: Verifica se o valor pago NO MÊS quitou a parcela
           const breakdown = getSyncedBreakdown(loan);
           const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
-          if (totalPaidInCycle >= (requiredTotal - 0.10)) return 'Em Dia';
+          
+          if (requiredTotal > 0.10 && totalPaidInCycle >= (requiredTotal - 0.10)) {
+              return 'Em Dia';
+          }
       }
 
-      // Se for Semanal, Diário, ou se a blindagem mensal falhou, cai na regra absoluta da data:
-      if (dueLocalDate < today) return 'Atrasado';
+      // 3. REGRA DE ATRASO ABSOLUTO: Se venceu e sobrou saldo devedor, é Atrasado.
+      if (dueLocalDate < today) {
+          return 'Atrasado';
+      }
+      
       return 'Em Dia';
   };
 
@@ -288,74 +288,47 @@ const Dashboard = () => {
 
     const realStatus = getLoanRealStatus(loan);
     const breakdown = getSyncedBreakdown(loan);
-
-    const validSlices = loan.status === 'Acordo' ? [] : ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
-
-    if (validSlices.length > 0) {
-        const currentMonth = tempDue.getMonth();
-        const currentYear = tempDue.getFullYear();
-        
-        let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
-            const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-            if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
-                return acc + parseVal(h.amount);
-            }
-            return acc;
-        }, 0);
-
-        const sortedSlices = [...validSlices].sort((a: any, b: any) => Number(a.day) - Number(b.day));
-
-        for (const slice of sortedSlices) {
-            const baseAmount = parseVal(slice.amount);
-            const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
-            
-            if (totalPaidInCycle >= (baseAmount - 0.05)) {
-                totalPaidInCycle -= baseAmount;
-            } else {
-                const slicePaidAmount = Math.max(0, totalPaidInCycle);
-                totalPaidInCycle = 0;
-
-                if (sliceDate < today && loan.status !== 'Pago' && loan.status !== 'Quitado') {
-                    const ratio = breakdown.total > 0 ? (baseAmount / breakdown.total) : 0;
-                    const dateStr = sliceDate.toISOString().split('T')[0];
-                    const sliceOverdue = calculateOverdueValue(baseAmount, dateStr, 'Atrasado', parseVal(loan.fineRate) || 0, parseVal(loan.moraInterestRate) || 0, parseVal(loan.amount) * ratio);
-                    
-                    const debtUpdated = sliceOverdue - slicePaidAmount;
-
-                    totalOverdue += debtUpdated;
-                    missedCount++;
-                }
-            }
-        }
-        return { totalOverdue, missedCount };
-    }
-
     const baseAmount = breakdown.total; 
     
-    if (realStatus === 'Acordo') {
+    if (realStatus === 'Acordo' || realStatus !== 'Atrasado') {
         return { totalOverdue: 0, missedCount: 0 };
     }
 
-    if (realStatus !== 'Atrasado') {
-        return { totalOverdue: 0, missedCount: 0 };
-    }
+    const currentMonth = tempDue.getMonth();
+    const currentYear = tempDue.getFullYear();
+    
+    // 🚀 FIX: Calcula exatamente quanto foi pago no mês do atraso
+    let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+        const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+        if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+            return acc + parseVal(h.amount);
+        }
+        return acc;
+    }, 0);
 
     const remainingInstallments = parseVal(loan.installments) || 1;
     const pad = (n: number) => n.toString().padStart(2, '0');
 
     while (tempDue < today) {
       const dateStr = `${tempDue.getFullYear()}-${pad(tempDue.getMonth() + 1)}-${pad(tempDue.getDate())}`;
-      const updatedVal = calculateOverdueValue(
-        baseAmount,
-        dateStr,
-        "Atrasado",
-        parseVal(loan.fineRate) || 0,
-        parseVal(loan.moraInterestRate) || 0,
-        parseVal(loan.amount)
-      );
+      
+      // 🚀 MATEMÁTICA PERFEITA: Subtrai o que ele pagou picado ANTES de jogar a multa
+      const debtOriginal = count === 0 ? Math.max(0, baseAmount - totalPaidInCycle) : baseAmount;
 
-      totalOverdue += updatedVal;
-      missedCount++;
+      if (debtOriginal > 0.05) {
+          const ratio = breakdown.total > 0 ? (debtOriginal / breakdown.total) : 1;
+          const updatedVal = calculateOverdueValue(
+            debtOriginal,
+            dateStr,
+            "Atrasado",
+            parseVal(loan.fineRate) || 0,
+            parseVal(loan.moraInterestRate) || 0,
+            parseVal(loan.amount) * ratio
+          );
+          totalOverdue += updatedVal;
+          missedCount++;
+      }
+
       count++;
       
       if (loan.interestType !== 'SIMPLE' && count >= remainingInstallments) break;
@@ -367,17 +340,21 @@ const Dashboard = () => {
     }
 
     if (missedCount === 0 && realStatus === "Atrasado") {
-      const dateStr = loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
-      const updatedVal = calculateOverdueValue(
-        baseAmount,
-        dateStr,
-        "Atrasado",
-        parseVal(loan.fineRate) || 2,
-        parseVal(loan.moraInterestRate) || 1,
-        parseVal(loan.amount)
-      );
-      totalOverdue += updatedVal;
-      missedCount = 1;
+      const debtOriginal = Math.max(0, baseAmount - totalPaidInCycle);
+      if (debtOriginal > 0.05) {
+          const dateStr = loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
+          const ratio = breakdown.total > 0 ? (debtOriginal / breakdown.total) : 1;
+          const updatedVal = calculateOverdueValue(
+            debtOriginal,
+            dateStr,
+            "Atrasado",
+            parseVal(loan.fineRate) || 0,
+            parseVal(loan.moraInterestRate) || 0,
+            parseVal(loan.amount) * ratio
+          );
+          totalOverdue += updatedVal;
+          missedCount = 1;
+      }
     }
 
     return { totalOverdue, missedCount };
