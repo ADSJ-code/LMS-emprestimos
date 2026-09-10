@@ -456,7 +456,8 @@ const Billing = () => {
 
           for (const slice of sortedSlices) {
               const baseAmount = parseVal(slice.amount);
-              if (totalPaidInCycle >= (baseAmount - 0.05)) {
+              // 🚀 ALINHANDO COM A TOLERÂNCIA DE R$ 10,00 PARA O VISUAL DA TABELA
+              if (totalPaidInCycle >= (baseAmount - 10.00)) {
                   totalPaidInCycle -= baseAmount;
               } else {
                   const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
@@ -487,8 +488,11 @@ const Billing = () => {
       const currentMonth = dueLocalDate.getMonth();
       const currentYear = dueLocalDate.getFullYear();
 
+      // 🚀 CHAVE DE OURO: Contratos antigos sem frequência explícita assumem MENSAL para ler as fatias corretamente
+      const loanFreq = loan.frequency || 'MENSAL';
+
       // 2. AVALIAÇÃO DE FATIAS MULTI-DATA (Se houver)
-      if (loan.frequency === 'MENSAL') {
+      if (loanFreq === 'MENSAL') {
           let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
               const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
               if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
@@ -507,26 +511,23 @@ const Billing = () => {
                   const baseAmount = parseVal(slice.amount);
                   const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                   
-                  if (tempPaidInCycle >= (baseAmount - 0.05)) {
+                  // 🚀 DE VOLTA A 10 CENTAVOS: Blindagem contra calotes picados e perdas financeiras!
+                  if (tempPaidInCycle >= (baseAmount - 0.10)) {
                       tempPaidInCycle -= baseAmount;
                   } else {
                       if (sliceDate < today) {
-                          return 'Atrasado'; // Atraso cravado direto na fatia
+                          return 'Atrasado'; 
+                      } else {
+                          return 'Em Dia'; 
                       }
                   }
               }
-              // 🚀 A CORREÇÃO: Removemos o "return 'Em Dia'" daqui!
-              // O sistema NÃO PODE dar passe livre só porque as fatias em si foram cobertas.
-              // O código agora desce e checa obrigatoriamente se faltou dinheiro no mês e a data final.
           }
 
           // Blindagem Mensal: Verifica se o valor pago NO MÊS quitou a parcela
           const breakdown = getSyncedBreakdown(loan);
           const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
           
-          // 🚀 A CORREÇÃO DO ROBSON AQUI:
-          // Só retorna 'Em Dia' antecipadamente se ele realmente tiver uma parcela válida (requiredTotal > 0.10)
-          // E se ele tiver pago o valor total daquela parcela. Se a parcela for = 0 (bug antigo), a regra falha e vai checar a Data!
           if (requiredTotal > 0.10 && totalPaidInCycle >= (requiredTotal - 0.10)) {
               return 'Em Dia';
           }
@@ -793,7 +794,8 @@ const Billing = () => {
                    }
                    return acc;
                }, 0);
-               if (slicePaidAmount < (parseVal(targetSlice.amount) - 0.05)) return true;
+               // 🚀 ALINHADO: Usando R$ 10.00 para não notificar cobrança se o Rodrigo já deu o desconto
+               if (slicePaidAmount < (parseVal(targetSlice.amount) - 10.00)) return true;
            }
            return false;
        }
@@ -824,7 +826,8 @@ const Billing = () => {
                     return acc;
                 }, 0);
                 
-                if (slicePaidAmount < (parseVal(targetSlice.amount) - 0.05)) {
+                // 🚀 ALINHADO: Usando R$ 10.00 para esconder o cliente do pop-up de cobrança se já estiver coberto
+                if (slicePaidAmount < (parseVal(targetSlice.amount) - 10.00)) {
                     return true;
                 }
             }
@@ -1148,7 +1151,8 @@ const Billing = () => {
                 return acc;
             }, 0);
 
-            const isPaid = slicePaidAmount >= (baseAmount - 0.05);
+            // 🚀 ALINHADO: Modal agora respeita a tolerância de 10 reais para pintar a fatia de verde e pular pra próxima
+            const isPaid = slicePaidAmount >= (baseAmount - 10.00);
             let slicePenalty = 0;
             const sliceDate = new Date(currentYear, currentMonth, Number(s.day));
             
@@ -1159,7 +1163,7 @@ const Billing = () => {
             
             const sliceTotal = baseAmount + slicePenalty;
 
-            if (slicePaidAmount < (sliceTotal - 0.05) && !targetSlice) {
+            if (slicePaidAmount < (sliceTotal - 10.00) && !targetSlice) {
                 targetSlice = s;
                 targetRemaining = sliceTotal - slicePaidAmount;
                 targetPenalty = slicePenalty;

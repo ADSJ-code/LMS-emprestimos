@@ -208,6 +208,7 @@ const Dashboard = () => {
       return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
   };
 
+  // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
       // 1. PRIORIDADE ABSOLUTA: Saldo Devedor. Se não deve capital, está Quitado.
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
@@ -227,8 +228,11 @@ const Dashboard = () => {
       const currentMonth = dueLocalDate.getMonth();
       const currentYear = dueLocalDate.getFullYear();
 
+      // 🚀 CHAVE DE OURO: Contratos antigos sem frequência explícita assumem MENSAL para ler as fatias corretamente
+      const loanFreq = loan.frequency || 'MENSAL';
+
       // 2. AVALIAÇÃO DE FATIAS MULTI-DATA (Se houver)
-      if (loan.frequency === 'MENSAL') {
+      if (loanFreq === 'MENSAL') {
           let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
               const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
               if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
@@ -247,10 +251,15 @@ const Dashboard = () => {
                   const baseAmount = parseVal(slice.amount);
                   const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                   
-                  if (tempPaidInCycle >= (baseAmount - 0.05)) {
+                  // 🚀 DE VOLTA A 10 CENTAVOS: Blindagem contra calotes picados e perdas financeiras!
+                  if (tempPaidInCycle >= (baseAmount - 0.10)) {
                       tempPaidInCycle -= baseAmount;
-                  } else if (sliceDate < today) {
-                      return 'Atrasado'; // Atraso cravado direto na fatia
+                  } else {
+                      if (sliceDate < today) {
+                          return 'Atrasado'; 
+                      } else {
+                          return 'Em Dia'; // 🚀 A MÁGICA: Próxima fatia no futuro protege o contrato contra a data base antiga!
+                      }
                   }
               }
           }

@@ -196,6 +196,7 @@ const Overdue = () => {
       }
   };
 
+  // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
       // 1. PRIORIDADE ABSOLUTA: Saldo Devedor. Se não deve capital, está Quitado.
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
@@ -215,8 +216,11 @@ const Overdue = () => {
       const currentMonth = dueLocalDate.getMonth();
       const currentYear = dueLocalDate.getFullYear();
 
+      // 🚀 CHAVE DE OURO: Contratos antigos sem frequência explícita assumem MENSAL para ler as fatias corretamente
+      const loanFreq = loan.frequency || 'MENSAL';
+
       // 2. AVALIAÇÃO DE FATIAS MULTI-DATA (Se houver)
-      if (loan.frequency === 'MENSAL') {
+      if (loanFreq === 'MENSAL') {
           let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
               const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
               if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
@@ -235,10 +239,15 @@ const Overdue = () => {
                   const baseAmount = parseVal(slice.amount);
                   const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                   
-                  if (tempPaidInCycle >= (baseAmount - 0.05)) {
+                  // 🚀 DE VOLTA A 10 CENTAVOS: Blindagem contra calotes picados e perdas financeiras!
+                  if (tempPaidInCycle >= (baseAmount - 0.10)) {
                       tempPaidInCycle -= baseAmount;
-                  } else if (sliceDate < today) {
-                      return 'Atrasado'; // Atraso cravado direto na fatia
+                  } else {
+                      if (sliceDate < today) {
+                          return 'Atrasado'; 
+                      } else {
+                          return 'Em Dia'; // 🚀 A MÁGICA: Próxima fatia no futuro protege o contrato contra a data base antiga!
+                      }
                   }
               }
           }
@@ -303,7 +312,8 @@ const Overdue = () => {
       const dateStr = `${tempDue.getFullYear()}-${pad(tempDue.getMonth() + 1)}-${pad(tempDue.getDate())}`;
       const debtOriginal = count === 0 ? Math.max(0, baseAmount - totalPaidInCycle) : baseAmount;
 
-      if (debtOriginal > 0.05) {
+      // 🚀 ALINHADO: Tolerância rígida de 10 centavos para a dívida
+      if (debtOriginal > 0.10) {
           const ratio = breakdown.total > 0 ? (debtOriginal / breakdown.total) : 1;
           const updatedVal = calculateOverdueValue(
             debtOriginal,
@@ -337,7 +347,8 @@ const Overdue = () => {
 
     if (missedInstallments.length === 0 && realStatus === "Atrasado") {
       const debtOriginal = Math.max(0, baseAmount - totalPaidInCycle);
-      if (debtOriginal > 0.05) {
+      // 🚀 ALINHADO: Tolerância rígida de 10 centavos para a dívida
+      if (debtOriginal > 0.10) {
           const dateStr = loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
           const ratio = breakdown.total > 0 ? (debtOriginal / breakdown.total) : 1;
           const updatedVal = calculateOverdueValue(
