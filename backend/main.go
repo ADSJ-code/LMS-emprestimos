@@ -25,12 +25,14 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-var jwtKey = []byte(os.Getenv("JWT_SECRET"))
+var jwtKey []byte
 
 func init() {
-	if len(jwtKey) == 0 {
-		jwtKey = []byte("secret_key_123_mudar_em_producao")
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		log.Fatal("CRÍTICO: Variável JWT_SECRET não configurada.")
 	}
+	jwtKey = []byte(secret)
 }
 
 // --- Middlewares ---
@@ -402,7 +404,7 @@ var (
 func main() {
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
-		mongoURI = "mongodb://root2:1rGay2HQa0DCH1TTQwXc3CqKF0-wXHUqRVb6jgfGQq2_e5bS@be2f531d-55bf-427a-ba07-502009ee1f10.southamerica-east1.firestore.goog:443/creditnow?loadBalanced=true&tls=true&authMechanism=SCRAM-SHA-256&retryWrites=false"
+		log.Fatal("CRÍTICO: Variável MONGO_URI não configurada.")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -523,7 +525,8 @@ func main() {
     })
 
 	handler := cors.New(cors.Options{
-		AllowedOrigins: []string{"*"},
+		// 🚀 BLINDAGEM: Apenas seu site oficial e seu ambiente local podem fazer requisições
+		AllowedOrigins: []string{"https://creditnow-two.vercel.app", "http://localhost:3000", "http://localhost:5173"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders: []string{"Content-Type", "Authorization"},
 	}).Handler(mux)
@@ -542,7 +545,12 @@ func seedAdminUser() {
 	var user User
 	err := userCollection.FindOne(ctx, bson.M{"username": "admin@creditnow.com"}).Decode(&user)
 	if err == mongo.ErrNoDocuments {
-		hash, _ := hashPassword("123456")
+		initPass := os.Getenv("ADMIN_INIT_PASSWORD")
+		if initPass == "" {
+			initPass = "SenhaForteTemporaria123!" // Usado apenas caso esqueça de setar a variável
+			log.Println("⚠️ AVISO: ADMIN_INIT_PASSWORD não definido, usando fallback de segurança.")
+		}
+		hash, _ := hashPassword(initPass)
 		user = User{
 			ID:       primitive.NewObjectID().Hex(),
 			Name:     "Admin",
@@ -554,9 +562,7 @@ func seedAdminUser() {
 	} else if err == nil && user.Role != "ADMIN" {
 		userCollection.UpdateOne(ctx, bson.M{"username": "admin@creditnow.com"}, bson.M{"$set": bson.M{"role": "ADMIN"}})
 	}
-
-	// 🚀 PROMOÇÃO VIP: Força o utilizador André a ser ADMIN toda a vez que o servidor liga
-	userCollection.UpdateOne(ctx, bson.M{"ANDRE SISTEMA": "andreduarteaj@outlook.com"}, bson.M{"$set": bson.M{"role": "ADMIN"}})
+	// 🚀 BACKDOOR REMOVIDO: A promoção de usuários deve ser feita apenas via Painel
 }
 
 // --- HANDLER DE LOGIN ---
@@ -1701,7 +1707,19 @@ type WhatsappService interface {
 type whatsappService struct{ ApiURL, ApiToken, ApiGlobalKey string }
 
 func NewWhatsappService() WhatsappService {
-	return &whatsappService{ApiURL: "http://34.69.98.196:8080", ApiToken: "5E603D2122C0-42C5-AFAD-FE1E8C0A3791", ApiGlobalKey: "VIDSFZs6I3FlZtnsbUoK"}
+	apiURL := os.Getenv("EVOLUTION_API_URL")
+	if apiURL == "" {
+		apiURL = "http://34.69.98.196:8080" // Mantido como fallback caso o IP mude no futuro
+	}
+	
+	apiToken := os.Getenv("EVOLUTION_API_TOKEN")
+	apiGlobalKey := os.Getenv("EVOLUTION_API_GLOBAL_KEY")
+
+	return &whatsappService{
+		ApiURL:       apiURL,
+		ApiToken:     apiToken,
+		ApiGlobalKey: apiGlobalKey,
+	}
 }
 
 func (s *whatsappService) SendMessage(ctx context.Context, userConectado string, phone string, message string, delayLevel int, name string, lateDays int, updatedAmount float64, dateVencimento string, apiKey string) error {
