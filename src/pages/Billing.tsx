@@ -169,8 +169,9 @@ const Billing = () => {
 
   // 🚀 NOVO ESTADO: Controlo manual para avanço do mês
   const [forceAdvanceMonth, setForceAdvanceMonth] = useState(false);
-  // 🚀 NOVO ESTADO: Quitação com Desconto (Perdão de Juros)
+  // 🚀 NOVO ESTADO: Quitação Total (Com ou Sem Desconto)
   const [isDiscountSettlement, setIsDiscountSettlement] = useState(false);
+  const [settlementDiscount, setSettlementDiscount] = useState('');
 
   const [agreementDate, setAgreementDate] = useState('');
   const [agreementValue, setAgreementValue] = useState('');
@@ -1212,6 +1213,7 @@ const Billing = () => {
     setPayInterest(autoInterest);
     setSettleInterest(false);
     setIsDiscountSettlement(false); // 🚀 Limpa a checkbox de Desconto ao abrir novo modal
+    setSettlementDiscount(''); // Limpa o campo de desconto opcional
     
     // 🚀 FIX 3: Base do CycleMissing blindada para considerar Acordos extras.
     const expectedInterest = breakdown.interest;
@@ -1313,7 +1315,7 @@ const Billing = () => {
         }
     }
 
-    // 🚀 LÓGICA DE QUITAÇÃO COM DESCONTO
+    // 🚀 LÓGICA DE QUITAÇÃO (COM OU SEM DESCONTO)
     if (isDiscountSettlement) {
         updatedLoan.status = 'Quitado';
         updatedLoan.installments = 0;
@@ -1321,13 +1323,13 @@ const Billing = () => {
         
         updatedLoan.totalPaidCapital = updatedLoan.amount; 
         
-        const profitAlreadyPaid = (selectedLoan.totalPaidInterest || 0);
-        const profitPaidToday = valInterest;
-        const totalExpectedProfit = updatedLoan.projectedProfit || 0;
+        const discountGiven = parseFloat(settlementDiscount) || 0;
         
-        const discountGiven = Math.max(0, totalExpectedProfit - (profitAlreadyPaid + profitPaidToday));
-        
-        noteText += ` [QUITAÇÃO COM DESCONTO] Perdão concedido: R$ ${formatMoney(discountGiven)}`;
+        if (discountGiven > 0) {
+            noteText += ` [QUITAÇÃO COM DESCONTO] Perdão concedido: R$ ${formatMoney(discountGiven)}`;
+        } else {
+            noteText += ` [QUITAÇÃO TOTAL]`;
+        }
     } 
     else if (balance <= 0.10) {
         updatedLoan.status = 'Quitado';
@@ -2733,18 +2735,27 @@ const handleFinalSave = async (e: React.FormEvent) => {
                             <h4 className="text-purple-900 font-black text-sm uppercase">Modo de Quitação Ativo</h4>
                             <p className="text-purple-700 text-xs">O contrato será encerrado imediatamente após este pagamento.</p>
                         </div>
-                        <button onClick={() => setIsDiscountSettlement(false)} className="text-xs bg-white text-purple-600 font-bold px-3 py-1 rounded-lg border border-purple-200 hover:bg-purple-100">Cancelar Quitação</button>
+                        <button onClick={() => handleOpenPayment(selectedLoan)} className="text-xs bg-white text-purple-600 font-bold px-3 py-1 rounded-lg border border-purple-200 hover:bg-purple-100 transition-colors">Cancelar Quitação</button>
                     </div>
 
                     {(() => {
                         const totalCapitalDebt = Math.max(0, (Number(selectedLoan.amount) || 0) - (Number(selectedLoan.totalPaidCapital) || 0));
                         const totalExpectedProfit = selectedLoan.projectedProfit || 0;
                         const profitAlreadyPaid = selectedLoan.totalPaidInterest || 0;
-                        const totalInterestDebt = Math.max(0, totalExpectedProfit - profitAlreadyPaid);
                         
+                        const breakdown = getSyncedBreakdown(selectedLoan);
+                        const status = getLoanRealStatus(selectedLoan);
+                        let totalPenalty = 0;
+                        if (status === 'Atrasado') {
+                            const fullOverdue = calculateOverdueValue(breakdown.total, selectedLoan.nextDue, 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount);
+                            totalPenalty = fullOverdue - breakdown.total;
+                        }
+
+                        const totalInterestDebt = Math.max(0, totalExpectedProfit - profitAlreadyPaid) + totalPenalty;
                         const totalDebt = totalCapitalDebt + totalInterestDebt;
-                        const userPaying = (parseFloat(payCapital) || 0) + (parseFloat(payInterest) || 0);
-                        const suggestedDiscount = Math.max(0, totalDebt - userPaying);
+                        
+                        const discountValue = parseFloat(settlementDiscount) || 0;
+                        const userPaying = Math.max(0, totalDebt - discountValue);
 
                         return (
                             <>
@@ -2754,34 +2765,35 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                         <span className="font-black text-slate-700">R$ {formatMoney(totalCapitalDebt)}</span>
                                     </div>
                                     <div className="bg-white p-3 rounded-xl border border-purple-100">
-                                        <span className="block text-[10px] uppercase font-bold text-slate-400">Juros Restantes</span>
+                                        <span className="block text-[10px] uppercase font-bold text-slate-400">Juros + Multas Restantes</span>
                                         <span className="font-black text-slate-700">R$ {formatMoney(totalInterestDebt)}</span>
                                     </div>
                                 </div>
 
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-[10px] font-black uppercase text-purple-800 mb-1">Amortização (Exigido)</label>
-                                        <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" 
-                                            value={payCapital} 
-                                            onChange={(e) => setPayCapital(e.target.value)} 
-                                            className="w-full p-3 border border-purple-300 rounded-xl outline-none font-black text-purple-900 bg-white focus:ring-2 focus:ring-purple-500/20" 
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-[10px] font-black uppercase text-green-700 mb-1">Juros Pagos Agora</label>
-                                        <input type="number" onWheel={(e) => e.currentTarget.blur()} step="0.01" 
-                                            value={payInterest} 
-                                            onChange={(e) => setPayInterest(e.target.value)} 
-                                            className="w-full p-3 border border-green-300 rounded-xl outline-none font-black text-green-800 bg-green-50 focus:ring-2 focus:ring-green-500/20" 
-                                        />
-                                    </div>
+                                <div>
+                                    <label className="block text-[10px] font-black uppercase text-green-700 mb-1">Desconto Concedido (R$) - Opcional</label>
+                                    <input type="text" inputMode="decimal"
+                                        value={settlementDiscount} 
+                                        onChange={(e) => {
+                                            // 🚀 FIX: Troca a vírgula por ponto automaticamente e limpa letras
+                                            const val = e.target.value.replace(/[^0-9.,]/g, '').replace(',', '.');
+                                            setSettlementDiscount(val);
+                                            const parsedDiscount = parseFloat(val) || 0;
+                                            
+                                            // Atualiza os valores por trás dos panos abatendo o desconto no lucro final
+                                            setPayCapital(totalCapitalDebt.toFixed(2));
+                                            setPayInterest(Math.max(0, totalInterestDebt - parsedDiscount).toFixed(2));
+                                        }} 
+                                        placeholder="0.00"
+                                        className="w-full p-3 border border-green-300 rounded-xl outline-none font-black text-green-800 bg-green-50 focus:ring-2 focus:ring-green-500/20" 
+                                    />
+                                    <p className="text-[10px] text-slate-500 mt-1">Deixe em branco para cobrar o valor integral e quitar o contrato.</p>
                                 </div>
 
                                 <div className="bg-white border border-purple-200 p-4 rounded-xl flex justify-between items-center shadow-sm">
                                     <div>
-                                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Desconto / Perdão Calculado:</span>
-                                        <span className="text-sm font-bold text-orange-500">R$ {formatMoney(suggestedDiscount)}</span>
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Total da Dívida:</span>
+                                        <span className="text-sm font-bold text-slate-500 line-through">R$ {formatMoney(totalDebt)}</span>
                                     </div>
                                     <div className="text-right">
                                         <span className="text-[10px] font-bold text-purple-600 uppercase block">Total a Receber Agora:</span>
@@ -2805,7 +2817,7 @@ const handleFinalSave = async (e: React.FormEvent) => {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-2 p-3 bg-purple-50 border border-purple-200 rounded-xl hover:bg-purple-100 transition-colors">
+                    <div className="flex items-center gap-2 p-3 bg-purple-50 border border-purple-200 rounded-xl hover:bg-purple-100 transition-colors mt-4">
                         <input 
                             type="checkbox" 
                             id="isDiscountSettlement" 
@@ -2813,15 +2825,33 @@ const handleFinalSave = async (e: React.FormEvent) => {
                             onChange={(e) => {
                                 setIsDiscountSettlement(e.target.checked);
                                 if (e.target.checked) {
-                                    // Se marcou quitação, preenche o capital com o saldo devedor atual
-                                    const currentDebt = calculateCapitalBalance(selectedLoan);
-                                    setPayCapital(currentDebt.toFixed(2));
+                                    setSettlementDiscount(''); // Limpa se houver algo antigo
+                                    
+                                    // Calcula Dívida Plena Total Exata (Capital + Juros + Multas)
+                                    const totalCapitalDebt = Math.max(0, (Number(selectedLoan.amount) || 0) - (Number(selectedLoan.totalPaidCapital) || 0));
+                                    const totalExpectedProfit = selectedLoan.projectedProfit || 0;
+                                    const profitAlreadyPaid = selectedLoan.totalPaidInterest || 0;
+                                    
+                                    const breakdown = getSyncedBreakdown(selectedLoan);
+                                    const status = getLoanRealStatus(selectedLoan);
+                                    let totalPenalty = 0;
+                                    if (status === 'Atrasado') {
+                                        const fullOverdue = calculateOverdueValue(breakdown.total, selectedLoan.nextDue, 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount);
+                                        totalPenalty = fullOverdue - breakdown.total;
+                                    }
+                                    const totalInterestDebt = Math.max(0, totalExpectedProfit - profitAlreadyPaid) + totalPenalty;
+
+                                    setPayCapital(totalCapitalDebt.toFixed(2));
+                                    setPayInterest(totalInterestDebt.toFixed(2));
+                                } else {
+                                    // Se desmarcar, reinicia a tela com os valores originais da parcela normal
+                                    handleOpenPayment(selectedLoan);
                                 }
                             }} 
                             className="w-5 h-5 rounded text-purple-600 focus:ring-purple-500 cursor-pointer" 
                         />
                         <label htmlFor="isDiscountSettlement" className="text-sm font-bold text-purple-800 cursor-pointer leading-tight flex-1">
-                            Quitação com Desconto (Encerrar Contrato)
+                            Quitação Total (Encerrar Contrato)
                         </label>
                     </div>
 

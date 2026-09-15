@@ -15,6 +15,7 @@ main.exe
 .env.development.local
 .env.test.local
 .env.production.local
+.env.production
 
 .DS_Store
 Thumbs.db
@@ -22,4 +23,6 @@ desktop.ini
 
 .vscode/
 .idea/
-.env.production
+
+# Scripts locais com credenciais
+run.sh
