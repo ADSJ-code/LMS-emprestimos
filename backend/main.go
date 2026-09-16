@@ -1386,17 +1386,8 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 				"ibs_cbs_classificacao_tributaria": "010002",
 				"codigo_municipio_incidencia":      ibgePrestadorInt, // 🚀 FIX: Removeu o chumbado de Mauá
 				"iss_retido":                       false,
-				
-				// 🚀 FIX: Retenções federais removidas para evitar os erros "Valor inconsistente" e "Valores divergentes"
-				// Se a sua empresa não retém na fonte, a GINFES rejeita esses campos.
+				"indicador_total_tributacao":       0, // 🚀 AQUI: Opcão pelo Decreto 8.264/2014 (Não preenchimento)
 			},
-			
-			// 🚀 IBPT OFICIAL: Adicionado conforme orientação do suporte da Focus
-			"percentual_total_tributos_federais":   5.39,
-			"percentual_total_tributos_municipais": 5.00,
-			"percentual_total_tributos_estaduais":  0.00,
-			// A tag do Simples Nacional foi removida para não gerar o erro 'pTotTribSN' no XML
-			
 			"consumidor_final":       0,
 			"indicador_destinatario": 0,
 		}
