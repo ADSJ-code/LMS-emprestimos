@@ -492,30 +492,40 @@ const Billing = () => {
       // 🚀 CHAVE DE OURO: Contratos antigos sem frequência explícita assumem MENSAL para ler as fatias corretamente
       const loanFreq = loan.frequency || 'MENSAL';
 
-      // 2. AVALIAÇÃO DE FATIAS MULTI-DATA (Se houver)
-      if (loanFreq === 'MENSAL') {
-          let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
-              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-              if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
-                  return acc + parseVal(h.amount);
-              }
-              return acc;
-          }, 0);
+      // 2. AVALIAÇÃO DE PAGAMENTOS DO CICLO (Aplica a todas as frequências)
+      let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+          const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+          
+          let isSameCycle = false;
+          if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
+              // 🚀 FIX: Semanal e Diário agrupam pelo DIA EXATO do vencimento
+              isSameCycle = hDue.getDate() === dueLocalDate.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+          } else {
+              isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+          }
 
+          if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+              return acc + parseVal(h.amount);
+          }
+          return acc;
+      }, 0);
+
+      if (loanFreq === 'MENSAL') {
           const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
           if (validSlices.length > 0) {
               let tempPaidInCycle = totalPaidInCycle;
               const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+              let todasFatiasPagas = true;
 
               for (const slice of sortedSlices) {
                   const baseAmount = parseVal(slice.amount);
                   const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                   
-                  // 🚀 DE VOLTA A 10 CENTAVOS: Blindagem contra calotes picados e perdas financeiras!
                   if (tempPaidInCycle >= (baseAmount - 0.10)) {
                       tempPaidInCycle -= baseAmount;
                   } else {
+                      todasFatiasPagas = false;
                       if (sliceDate < today) {
                           return 'Atrasado'; 
                       } else {
@@ -523,15 +533,16 @@ const Billing = () => {
                       }
                   }
               }
+              if (todasFatiasPagas) return 'Em Dia'; // 🚀 FIX: Se pagou tudo picado, não é atraso!
           }
+      }
 
-          // Blindagem Mensal: Verifica se o valor pago NO MÊS quitou a parcela
-          const breakdown = getSyncedBreakdown(loan);
-          const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
-          
-          if (requiredTotal > 0.10 && totalPaidInCycle >= (requiredTotal - 0.10)) {
-              return 'Em Dia';
-          }
+      // Blindagem Universal: Verifica se o valor pago no ciclo quitou a parcela
+      const breakdown = getSyncedBreakdown(loan);
+      const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
+      
+      if (requiredTotal > 0.10 && totalPaidInCycle >= (requiredTotal - 0.10)) {
+          return 'Em Dia';
       }
 
       // 3. REGRA DE ATRASO ABSOLUTO: Se venceu e sobrou saldo devedor, é Atrasado.
@@ -788,14 +799,26 @@ const Billing = () => {
        if (validSlices.length > 0 && l.status !== 'Acordo') {
            const targetSlice = validSlices.find((s: any) => Number(s.day) === targetDay);
            if (targetSlice) {
-               const slicePaidAmount = (l.history || []).reduce((acc: number, h: any) => {
+               let tempPaidInCycle = (l.history || []).reduce((acc: number, h: any) => {
                    const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
-                   if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${targetSlice.day}`)) {
-                       return acc + h.amount;
+                   if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                       return acc + parseVal(h.amount);
                    }
                    return acc;
                }, 0);
-               // 🚀 ALINHADO: Usando R$ 10.00 para não notificar cobrança se o Rodrigo já deu o desconto
+               
+               const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+               let slicePaidAmount = 0;
+               for (const s of sortedSlices) {
+                   const baseAmt = parseVal(s.amount);
+                   if (Number(s.day) === targetDay) {
+                       slicePaidAmount = Math.min(baseAmt, tempPaidInCycle);
+                       break;
+                   }
+                   tempPaidInCycle = Math.max(0, tempPaidInCycle - baseAmt);
+               }
+               
+               // 🚀 ALINHADO: Usando Efeito Cascata para abater amortizações extras da fatia diária
                if (slicePaidAmount < (parseVal(targetSlice.amount) - 10.00)) return true;
            }
            return false;
@@ -819,15 +842,26 @@ const Billing = () => {
         if (validSlices.length > 0 && l.status !== 'Acordo') {
             const targetSlice = validSlices.find((s: any) => Number(s.day) === targetDayCollection);
             if (targetSlice) {
-                const slicePaidAmount = (l.history || []).reduce((acc: number, h: any) => {
-                    const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
-                    if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${targetSlice.day}`)) {
-                        return acc + h.amount;
-                    }
-                    return acc;
-                }, 0);
+               let tempPaidInCycle = (l.history || []).reduce((acc: number, h: any) => {
+                   const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                   if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                       return acc + parseVal(h.amount);
+                   }
+                   return acc;
+               }, 0);
+               
+               const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+               let slicePaidAmount = 0;
+               for (const s of sortedSlices) {
+                   const baseAmt = parseVal(s.amount);
+                   if (Number(s.day) === targetDayCollection) {
+                       slicePaidAmount = Math.min(baseAmt, tempPaidInCycle);
+                       break;
+                   }
+                   tempPaidInCycle = Math.max(0, tempPaidInCycle - baseAmt);
+               }
                 
-                // 🚀 ALINHADO: Usando R$ 10.00 para esconder o cliente do pop-up de cobrança se já estiver coberto
+                // 🚀 ALINHADO: Usando Efeito Cascata no modal de cobrança
                 if (slicePaidAmount < (parseVal(targetSlice.amount) - 10.00)) {
                     return true;
                 }
@@ -843,9 +877,33 @@ const Billing = () => {
       if (l.status === 'Pago' || l.status === 'Quitado') return acc;
       const realStatus = getLoanRealStatus(l);
       if (realStatus === 'Atrasado') {
-          // 🚀 FIX: Usa o breakdown que já injeta o valor extra do acordo em todas as modalidades
-          const baseVal = getSyncedBreakdown(l).total;
+          const breakdown = getSyncedBreakdown(l);
           
+          // 🚀 FIX: Calcula exatamente quanto foi pago no mês/semana do atraso para abater (Igual ao Dashboard)
+          const currentDue = parseLocalDate(l.nextDue);
+          const currentMonth = currentDue.getMonth();
+          const currentYear = currentDue.getFullYear();
+          const loanFreq = l.frequency || 'MENSAL';
+
+          const totalPaidInCycle = (l.history || []).reduce((sum: number, h: any) => {
+              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+              
+              let isSameCycle = false;
+              if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
+                  isSameCycle = hDue.getDate() === currentDue.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+              } else {
+                  isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+              }
+
+              if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                  return sum + parseVal(h.amount);
+              }
+              return sum;
+          }, 0);
+          
+          const baseVal = Math.max(0, breakdown.total - totalPaidInCycle);
+          if (baseVal <= 0.10) return acc; // Impede cálculo de multa sobre o nada
+
           const val = calculateOverdueValue(
               baseVal, 
               l.nextDue, 
@@ -994,8 +1052,13 @@ const Billing = () => {
       const searchLower = normalizeString(searchTerm);
       
       const filtered = loans.filter(l => {
+        const clientInfo = availableClients.find(c => c.name === l.client);
+        const nickname = getNickname(clientInfo?.observations); // 🚀 FIX: Puxando apelido na tabela principal
+        
         const cNameNorm = normalizeString(l.client || '');
-        const matchesSearch = cNameNorm.includes(searchLower) || (l.id || '').toLowerCase().includes(searchLower);
+        const matchesSearch = cNameNorm.includes(searchLower) || 
+                              (l.id || '').toLowerCase().includes(searchLower) ||
+                              (nickname && normalizeString(nickname).includes(searchLower));
         const realStatus = getLoanRealStatus(l);
         let matchesStatus = true;
         
@@ -1063,7 +1126,35 @@ const Billing = () => {
               const isSimple = loan.interestType === 'SIMPLE';
               const breakdown = getSyncedBreakdown(loan);
               
-              installmentSum += breakdown.total; 
+              // 🚀 FIX: Calcula exatamente a dívida pendente (abatendo parciais e somando multas)
+              const currentDue = parseLocalDate(loan.nextDue);
+              const currentMonth = currentDue.getMonth();
+              const currentYear = currentDue.getFullYear();
+              const loanFreq = loan.frequency || 'MENSAL';
+
+              const totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+                  const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+                  let isSameCycle = false;
+                  if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
+                      isSameCycle = hDue.getDate() === currentDue.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+                  } else {
+                      isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+                  }
+
+                  if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                      return acc + parseVal(h.amount);
+                  }
+                  return acc;
+              }, 0);
+              
+              const baseVal = Math.max(0, breakdown.total - totalPaidInCycle);
+              const realStatus = getLoanRealStatus(loan);
+              
+              if (realStatus === 'Atrasado' && baseVal > 0.10) {
+                  installmentSum += calculateOverdueValue(baseVal, loan.nextDue, 'Atrasado', parseVal(loan.fineRate), parseVal(loan.moraInterestRate), parseVal(loan.amount));
+              } else {
+                  installmentSum += baseVal;
+              }
 
               // 🚀 FIX: Isola tanto os Juros quanto o Capital APENAS do período filtrado para o rodapé
               if (filterStart && filterEnd && statusFilter === 'PagosNoPeriodo' && loan.history) {
@@ -1140,19 +1231,25 @@ const Billing = () => {
         let targetRemaining = 0;
         let targetPenalty = 0;
 
-        for (const s of slices) {
+        // 🚀 A MÁGICA DA AMORTIZAÇÃO EM CASCATA: Soma tudo do mês e vai abatendo fatia por fatia
+        let tempPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+            const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+            if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                return acc + parseVal(h.amount);
+            }
+            return acc;
+        }, 0);
+
+        const sortedSlices = [...slices].sort((a, b) => Number(a.day) - Number(b.day));
+
+        for (const s of sortedSlices) {
             const baseAmount = Number(s.amount) || 0;
             const ratio = breakdown.total > 0 ? (baseAmount / breakdown.total) : 0;
             
-            const slicePaidAmount = (loan.history || []).reduce((acc, h) => {
-                const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
-                if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${s.day}`)) {
-                    return acc + h.amount;
-                }
-                return acc;
-            }, 0);
+            const slicePaidAmount = Math.min(baseAmount, tempPaidInCycle);
+            tempPaidInCycle = Math.max(0, tempPaidInCycle - baseAmount);
 
-            // 🚀 ALINHADO: Modal agora respeita a tolerância de 10 reais para pintar a fatia de verde e pular pra próxima
+            // 🚀 ALINHADO: Modal agora respeita a tolerância de 10 reais com a amortização engatada
             const isPaid = slicePaidAmount >= (baseAmount - 10.00);
             let slicePenalty = 0;
             const sliceDate = new Date(currentYear, currentMonth, Number(s.day));
@@ -1291,10 +1388,8 @@ const Billing = () => {
     }
     const totalAccumulatedInCycle = valTotal + cycleAcc.interest + cycleAcc.capital;
 
-    let currentSliceDay = null;
+    // 🚀 EFEITO CASCATA FINAL: Agora o botão não carimba mais o Dia X. Ele só calcula se todo o dinheiro do mês bateu a meta!
     if ((window as any).lastSelectedDay) {
-        currentSliceDay = (window as any).lastSelectedDay;
-        noteText += ` [Pagamento Referente ao Dia ${currentSliceDay}]`;
         delete (window as any).lastSelectedDay;
     }
 
@@ -1630,8 +1725,13 @@ const handleOpenEditContract = (loan: Loan) => {
           amount: parseFloat(md.amount)
       })).filter((md: any) => !isNaN(md.day) && !isNaN(md.amount));
 
+      // 🚀 FIX: Destrava o status caso o contrato estivesse Quitado, mas a edição gerou um saldo devedor válido
+      const newBalance = newAmount - (selectedLoan.totalPaidCapital || 0);
+      const newStatus = (newBalance > 0.10 && (selectedLoan.status === 'Quitado' || selectedLoan.status === 'Pago')) ? 'Em Dia' : selectedLoan.status;
+
       const updatedLoan = { 
           ...selectedLoan, 
+          status: newStatus, // 🚀 FIX: Injetando o status destravado
           id: editContractData.id,
           amount: newAmount,
           interestRate: newInterestRate,
@@ -2012,8 +2112,32 @@ const handleFinalSave = async (e: React.FormEvent) => {
       let subtitleLabel = '';
       if (displayStatus === 'Atrasado') {
           const breakdown = getSyncedBreakdown(loan);
-          const fullOverdue = calculateOverdueValue(breakdown.total, loan.nextDue, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount);
-          const penaltyOnly = fullOverdue - breakdown.total;
+          
+          // 🚀 FIX: Subtrai o valor parcial para não inflacionar o rótulo da multa na aba Cobrança
+          const currentDue = parseLocalDate(loan.nextDue);
+          const currentMonth = currentDue.getMonth();
+          const currentYear = currentDue.getFullYear();
+          const loanFreq = loan.frequency || 'MENSAL';
+
+          const totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+              let isSameCycle = false;
+              if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
+                  isSameCycle = hDue.getDate() === currentDue.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+              } else {
+                  isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+              }
+
+              if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                  return acc + parseVal(h.amount);
+              }
+              return acc;
+          }, 0);
+          
+          const baseVal = Math.max(0, breakdown.total - totalPaidInCycle);
+          const fullOverdue = calculateOverdueValue(baseVal, loan.nextDue, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount);
+          const penaltyOnly = fullOverdue - baseVal;
+          
           if (penaltyOnly > 0) subtitleLabel = `+ R$ ${formatMoney(penaltyOnly)} (Multa)`;
       } else if (displayStatus === 'Acordo' && loan.agreementValue > 0) {
           subtitleLabel = `+ R$ ${formatMoney(loan.agreementValue)} (Acordo)`;
@@ -2376,9 +2500,9 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     <td className="p-4 text-right font-black text-green-600 text-lg" title="Soma dos Juros já recebidos">
                         R$ {formatMoney(tableTotals.interest)}
                     </td>
-                    <td className="p-4 text-right font-black text-slate-500 text-lg" title="Soma das Parcelas Fixas">
+                    <td className="p-4 text-right font-black text-slate-500 text-lg" title="Soma das parcelas pendentes (c/ multas ou abatimentos parciais)">
                         R$ {formatMoney(tableTotals.installment)}
-                        <span className="block text-[9px] text-slate-400 font-bold mt-1 uppercase">Total Parcelas</span>
+                        <span className="block text-[9px] text-slate-400 font-bold mt-1 uppercase">Valor Devido (Atual)</span>
                     </td>
                     <td colSpan={2}></td>
                 </tr>
@@ -2619,101 +2743,110 @@ const handleFinalSave = async (e: React.FormEvent) => {
                         <h4 className="text-sm font-black text-slate-800 uppercase tracking-wide">Fatias do Mês Atual</h4>
                     </div>
                     <div className="space-y-3">
-                        {(selectedLoan as any).multiDates.map((slice: any, idx: number) => {
-                            const breakdown = getSyncedBreakdown(selectedLoan);
-                            const baseAmount = Number(slice.amount) || 0;
+                        {(() => {
+                            // 🚀 PRÉ-CÁLCULO CASCATA PARA UI: Distribui o que o cliente pagou por todas as fatias visualmente!
                             const currentMonth = new Date(selectedLoan.nextDue).getMonth();
                             const currentYear = new Date(selectedLoan.nextDue).getFullYear();
-                            const today = new Date();
-                            today.setHours(0,0,0,0);
-                            const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                             
-                            const slicePaidAmount = (selectedLoan.history || []).reduce((acc, h) => {
+                            let tempPaidUI = (selectedLoan.history || []).reduce((acc: number, h: any) => {
                                 const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
-                                if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                                    return acc + h.amount;
+                                if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                                    return acc + parseVal(h.amount);
                                 }
                                 return acc;
                             }, 0);
 
-                            const isPaid = slicePaidAmount >= (baseAmount - 0.05);
-                            let slicePenalty = 0;
-                            
-                            if (!isPaid && sliceDate < today && selectedLoan.status !== 'Pago' && selectedLoan.status !== 'Quitado') {
-                                const ratio = baseAmount / (breakdown.total || 1);
-                                const sliceOverdue = calculateOverdueValue(baseAmount, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount * ratio);
-                                slicePenalty = sliceOverdue - baseAmount;
-                            }
-                            
-                            const finalAmount = baseAmount + slicePenalty;
-                            const remainingToPay = Math.max(0, finalAmount - slicePaidAmount);
-                            const isSelected = (window as any).lastSelectedDay === slice.day;
+                            const sortedSlicesUI = [...(selectedLoan as any).multiDates].sort((a: any, b: any) => Number(a.day) - Number(b.day));
 
-                            return (
-                                <div key={idx} className={`flex justify-between items-center p-4 border rounded-xl transition-all ${
-                                    isPaid ? 'bg-green-50 border-green-200 opacity-80' : 
-                                    isSelected ? 'bg-blue-50 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-white border-slate-200 hover:border-slate-300 shadow-sm'
-                                }`}>
-                                    <div className="flex items-center gap-4">
-                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm border-2 ${
-                                            isPaid ? 'bg-green-100 text-green-600 border-green-200' : 
-                                            isSelected ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-100 text-slate-500 border-slate-200'
-                                        }`}>
-                                            {isPaid ? <Check size={16}/> : idx + 1}
-                                        </div>
-                                        <div>
-                                            <p className={`text-[11px] font-black uppercase tracking-wider mb-0.5 ${
-                                                isPaid ? 'text-green-600' : isSelected ? 'text-blue-700' : 'text-slate-500'
-                                            }`}>Vencimento: Dia {String(slice.day).padStart(2, '0')}</p>
-                                            
-                                            <div className="flex items-center flex-wrap gap-2">
-                                                <p className={`text-base font-black ${
-                                                    isPaid ? 'text-green-700 line-through opacity-70' : 
-                                                    isSelected ? 'text-blue-900' : 'text-slate-900'
-                                                }`}>
-                                                    R$ {formatMoney(remainingToPay > 0 ? remainingToPay : finalAmount)}
-                                                </p>
+                            return sortedSlicesUI.map((slice: any, idx: number) => {
+                                const breakdown = getSyncedBreakdown(selectedLoan);
+                                const baseAmount = Number(slice.amount) || 0;
+                                const today = new Date();
+                                today.setHours(0,0,0,0);
+                                const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+                                
+                                const slicePaidAmount = Math.min(baseAmount, tempPaidUI);
+                                tempPaidUI = Math.max(0, tempPaidUI - baseAmount);
+
+                                const isPaid = slicePaidAmount >= (baseAmount - 0.05);
+                                let slicePenalty = 0;
+                                
+                                if (!isPaid && sliceDate < today && selectedLoan.status !== 'Pago' && selectedLoan.status !== 'Quitado') {
+                                    const ratio = baseAmount / (breakdown.total || 1);
+                                    const sliceOverdue = calculateOverdueValue(baseAmount, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount * ratio);
+                                    slicePenalty = sliceOverdue - baseAmount;
+                                }
+                                
+                                const finalAmount = baseAmount + slicePenalty;
+                                const remainingToPay = Math.max(0, finalAmount - slicePaidAmount);
+                                const isSelected = (window as any).lastSelectedDay === slice.day;
+
+                                return (
+                                    <div key={idx} className={`flex justify-between items-center p-4 border rounded-xl transition-all ${
+                                        isPaid ? 'bg-green-50 border-green-200 opacity-80' : 
+                                        isSelected ? 'bg-blue-50 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-white border-slate-200 hover:border-slate-300 shadow-sm'
+                                    }`}>
+                                        <div className="flex items-center gap-4">
+                                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm border-2 ${
+                                                isPaid ? 'bg-green-100 text-green-600 border-green-200' : 
+                                                isSelected ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-100 text-slate-500 border-slate-200'
+                                            }`}>
+                                                {isPaid ? <Check size={16}/> : idx + 1}
+                                            </div>
+                                            <div>
+                                                <p className={`text-[11px] font-black uppercase tracking-wider mb-0.5 ${
+                                                    isPaid ? 'text-green-600' : isSelected ? 'text-blue-700' : 'text-slate-500'
+                                                }`}>Vencimento: Dia {String(slice.day).padStart(2, '0')}</p>
                                                 
-                                                {slicePaidAmount > 0 && !isPaid && (
-                                                    <span className="text-[10px] text-orange-700 font-bold bg-orange-100 border border-orange-200 px-2 py-0.5 rounded-full shadow-sm">
-                                                        Já pago: R$ {formatMoney(slicePaidAmount)}
-                                                    </span>
-                                                )}
-                                                {slicePenalty > 0 && !isPaid && (
-                                                    <span className="text-[10px] text-red-600 font-bold bg-red-100 border border-red-200 px-2 py-0.5 rounded-full shadow-sm">
-                                                        + Multa inclusa
-                                                    </span>
-                                                )}
+                                                <div className="flex items-center flex-wrap gap-2">
+                                                    <p className={`text-base font-black ${
+                                                        isPaid ? 'text-green-700 line-through opacity-70' : 
+                                                        isSelected ? 'text-blue-900' : 'text-slate-900'
+                                                    }`}>
+                                                        R$ {formatMoney(remainingToPay > 0 ? remainingToPay : finalAmount)}
+                                                    </p>
+                                                    
+                                                    {slicePaidAmount > 0 && !isPaid && (
+                                                        <span className="text-[10px] text-orange-700 font-bold bg-orange-100 border border-orange-200 px-2 py-0.5 rounded-full shadow-sm">
+                                                            Já pago: R$ {formatMoney(slicePaidAmount)}
+                                                        </span>
+                                                    )}
+                                                    {slicePenalty > 0 && !isPaid && (
+                                                        <span className="text-[10px] text-red-600 font-bold bg-red-100 border border-red-200 px-2 py-0.5 rounded-full shadow-sm">
+                                                            + Multa inclusa
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </div>
                                         </div>
+                                        {!isPaid && (
+                                            <button 
+                                                type="button"
+                                                onClick={() => {
+                                                    const remRatio = remainingToPay / finalAmount;
+                                                    const ratio = baseAmount / (breakdown.total || 1);
+                                                    const sliceCapOriginal = breakdown.capital * ratio;
+                                                    const sliceIntOriginal = breakdown.interest * ratio;
+                                                    
+                                                    setPayCapital((sliceCapOriginal * remRatio).toFixed(2));
+                                                    setPayInterest(((sliceIntOriginal + slicePenalty) * remRatio).toFixed(2));
+                                                    (window as any).lastSelectedDay = slice.day;
+                                                    setLoans([...loans]);
+                                                }}
+                                                className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all ${
+                                                    isSelected 
+                                                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' 
+                                                        : 'bg-slate-900 text-white hover:bg-slate-800 shadow-md'
+                                                }`}
+                                            >
+                                                {isSelected ? 'SELECIONADO ✓' : 'SELECIONAR'}
+                                            </button>
+                                        )}
+                                        {isPaid && <span className="text-xs font-black text-green-600 uppercase flex items-center gap-1.5 bg-green-100 px-3 py-1.5 rounded-lg border border-green-200"><CheckCircle size={14}/> Quitado</span>}
                                     </div>
-                                    {!isPaid && (
-                                        <button 
-                                            type="button"
-                                            onClick={() => {
-                                                const remRatio = remainingToPay / finalAmount;
-                                                const ratio = baseAmount / (breakdown.total || 1);
-                                                const sliceCapOriginal = breakdown.capital * ratio;
-                                                const sliceIntOriginal = breakdown.interest * ratio;
-                                                
-                                                setPayCapital((sliceCapOriginal * remRatio).toFixed(2));
-                                                setPayInterest(((sliceIntOriginal + slicePenalty) * remRatio).toFixed(2));
-                                                (window as any).lastSelectedDay = slice.day;
-                                                setLoans([...loans]);
-                                            }}
-                                            className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all ${
-                                                isSelected 
-                                                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' 
-                                                    : 'bg-slate-900 text-white hover:bg-slate-800 shadow-md'
-                                            }`}
-                                        >
-                                            {isSelected ? 'SELECIONADO ✓' : 'SELECIONAR'}
-                                        </button>
-                                    )}
-                                    {isPaid && <span className="text-xs font-black text-green-600 uppercase flex items-center gap-1.5 bg-green-100 px-3 py-1.5 rounded-lg border border-green-200"><CheckCircle size={14}/> Quitado</span>}
-                                </div>
-                            );
-                        })}
+                                );
+                            });
+                        })()}
                     </div>
                 </div>
             ) : (

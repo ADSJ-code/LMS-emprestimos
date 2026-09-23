@@ -231,46 +231,58 @@ const Dashboard = () => {
       // 🚀 CHAVE DE OURO: Contratos antigos sem frequência explícita assumem MENSAL para ler as fatias corretamente
       const loanFreq = loan.frequency || 'MENSAL';
 
-      // 2. AVALIAÇÃO DE FATIAS MULTI-DATA (Se houver)
-      if (loanFreq === 'MENSAL') {
-          let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
-              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-              if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
-                  return acc + parseVal(h.amount);
-              }
-              return acc;
-          }, 0);
+      // 2. AVALIAÇÃO DE PAGAMENTOS DO CICLO (Aplica a todas as frequências)
+      let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+          const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+          
+          let isSameCycle = false;
+          if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
+              // 🚀 FIX: Semanal e Diário agrupam pelo DIA EXATO do vencimento, não pelo mês inteiro!
+              isSameCycle = hDue.getDate() === dueLocalDate.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+          } else {
+              // Mensal agrupa pelo mês inteiro
+              isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+          }
 
+          if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+              return acc + parseVal(h.amount);
+          }
+          return acc;
+      }, 0);
+
+      if (loanFreq === 'MENSAL') {
           const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
           if (validSlices.length > 0) {
               let tempPaidInCycle = totalPaidInCycle;
               const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+              let todasFatiasPagas = true;
 
               for (const slice of sortedSlices) {
                   const baseAmount = parseVal(slice.amount);
                   const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                   
-                  // 🚀 DE VOLTA A 10 CENTAVOS: Blindagem contra calotes picados e perdas financeiras!
                   if (tempPaidInCycle >= (baseAmount - 0.10)) {
                       tempPaidInCycle -= baseAmount;
                   } else {
+                      todasFatiasPagas = false;
                       if (sliceDate < today) {
                           return 'Atrasado'; 
                       } else {
-                          return 'Em Dia'; // 🚀 A MÁGICA: Próxima fatia no futuro protege o contrato contra a data base antiga!
+                          return 'Em Dia'; 
                       }
                   }
               }
+              if (todasFatiasPagas) return 'Em Dia'; // 🚀 FIX: Se pagou tudo picado, não é atraso!
           }
+      }
 
-          // Blindagem Mensal: Verifica se o valor pago NO MÊS quitou a parcela
-          const breakdown = getSyncedBreakdown(loan);
-          const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
-          
-          if (requiredTotal > 0.10 && totalPaidInCycle >= (requiredTotal - 0.10)) {
-              return 'Em Dia';
-          }
+      // Blindagem Universal: Verifica se o valor pago no ciclo quitou a parcela
+      const breakdown = getSyncedBreakdown(loan);
+      const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
+      
+      if (requiredTotal > 0.10 && totalPaidInCycle >= (requiredTotal - 0.10)) {
+          return 'Em Dia';
       }
 
       // 3. REGRA DE ATRASO ABSOLUTO: Se venceu e sobrou saldo devedor, é Atrasado.
@@ -305,11 +317,20 @@ const Dashboard = () => {
 
     const currentMonth = tempDue.getMonth();
     const currentYear = tempDue.getFullYear();
+    const loanFreq = loan.frequency || 'MENSAL';
     
-    // 🚀 FIX: Calcula exatamente quanto foi pago no mês do atraso
+    // 🚀 FIX: Calcula exatamente quanto foi pago no mês (ou semana) do atraso
     let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
         const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-        if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+        
+        let isSameCycle = false;
+        if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
+            isSameCycle = hDue.getDate() === tempDue.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+        } else {
+            isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+        }
+
+        if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
             return acc + parseVal(h.amount);
         }
         return acc;
@@ -779,13 +800,15 @@ const Dashboard = () => {
       const filteredResult = result.filter(c => {
           const clientInfo = allClients.find(cli => cli.name === c.name);
           const cpfLimpo = clientInfo?.cpf ? clientInfo.cpf.replace(/\D/g, '') : '';
+          const nickname = getNickname(clientInfo?.observations); // 🚀 FIX: Pegando o apelido para a busca
 
           const cNameNorm = normalizeString(c.name || '');
           const matchNome = cNameNorm.includes(term);
           const matchCpf = buscaCpf && cpfLimpo.includes(buscaCpf);
           const matchContrato = c.contracts.some((cnt: any) => cnt.id.toString().toLowerCase().includes(term));
+          const matchApelido = nickname && normalizeString(nickname).includes(term); // 🚀 FIX: Validando o apelido
 
-          return matchNome || matchCpf || matchContrato;
+          return matchNome || matchCpf || matchContrato || matchApelido; // 🚀 FIX: Incluindo na resposta
       });
 
       // 2. 🚀 Ordenação Inteligente do Rodrigo
