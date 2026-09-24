@@ -182,16 +182,21 @@ const Overdue = () => {
       } else {
           const totalReceivable = parseVal(loan.amount) + parseVal(loan.projectedProfit);
           const originalInstallments = Math.max(1, Math.round(totalReceivable / parseVal(loan.installmentValue)));
-          const flatInterest = parseVal(loan.projectedProfit) / originalInstallments;
-          const flatCapital = parseVal(loan.installmentValue) - flatInterest;
-
+          // 🚀 FIX: Garante que os Juros da parcela não fiquem negativos ou estranhos
+          const flatInterest = Math.max(0, parseVal(loan.projectedProfit) / originalInstallments);
+          
           let extraAcordo = 0;
           if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
 
+          // 🚀 FIX: O capital é simplesmente a parcela menos os juros. Limitado à dívida global.
+          const globalRemainingCap = Math.max(0, parseVal(loan.amount) - parseVal(loan.totalPaidCapital));
+          const theoreticalCapital = parseVal(loan.installmentValue) - flatInterest;
+          const flatCapital = Math.max(0, Math.min(globalRemainingCap, theoreticalCapital));
+
           return { 
-              interest: Math.max(0, flatInterest) + extraAcordo, 
-              capital: Math.max(0, flatCapital), 
-              total: parseVal(loan.installmentValue) + extraAcordo
+              interest: flatInterest + extraAcordo, 
+              capital: flatCapital, 
+              total: flatCapital + flatInterest + extraAcordo
           };
       }
   };

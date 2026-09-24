@@ -331,17 +331,24 @@ const Billing = () => {
   const getSyncedBreakdown = (loan: Loan | null) => {
     if (!loan) return { interest: 0, capital: 0, total: 0 };
 
-    const dueDate = new Date(loan.nextDue);
-    const cycleStart = new Date(dueDate);
-    cycleStart.setMonth(cycleStart.getMonth() - 1);
-    cycleStart.setHours(23, 59, 59, 999);
+    const currentDue = parseLocalDate(loan.nextDue);
+    const currentMonth = currentDue.getMonth();
+    const currentYear = currentDue.getFullYear();
+    const loanFreq = loan.frequency || 'MENSAL';
 
     let capitalPaidInThisCycle = 0;
     if (loan.history) {
         loan.history.forEach(h => {
-            const hDate = new Date(h.date);
-            // 🚀 BLINDAGEM: Ignora "Ajuste de Migração" e "Abertura" no cálculo do ciclo!
-            if (hDate > cycleStart && !h.note?.includes('[CICLO COMPLETADO]') && h.type !== 'Abertura' && h.type !== 'Ajuste de Migração') {
+            const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+            
+            let isSameCycle = false;
+            if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
+                isSameCycle = hDue.getDate() === currentDue.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+            } else {
+                isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+            }
+            
+            if (isSameCycle && !h.note?.includes('[CICLO COMPLETADO]') && h.type !== 'Abertura' && h.type !== 'Ajuste de Migração' && h.type !== 'Acordo') {
                 capitalPaidInThisCycle += parseVal(h.capitalPaid);
             }
         });
@@ -361,18 +368,23 @@ const Billing = () => {
         return { interest: dynamicInterest + extraAcordo, capital: 0, total: dynamicInterest + extraAcordo };
         
     } else {
-        // 🚀 MATEMÁTICA PERFEITA PARA PRICE/LINEAR: Lê a dívida e divide pelas parcelas restantes!
-        const activeInst = Math.max(1, loan.installments);
-        const flatCapital = principalAtStartOfCycle / activeInst;
-        const flatInterest = parseVal(loan.installmentValue) - flatCapital;
-
+        const totalReceivable = parseVal(loan.amount) + parseVal(loan.projectedProfit);
+        const originalInstallments = Math.max(1, Math.round(totalReceivable / parseVal(loan.installmentValue)));
+        // 🚀 FIX: Garante que os Juros da parcela não fiquem negativos ou estranhos
+        const flatInterest = Math.max(0, parseVal(loan.projectedProfit) / originalInstallments);
+        
         let extraAcordo = 0;
         if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
 
+        // 🚀 FIX: O capital é simplesmente a parcela menos os juros. Limitado à dívida global.
+        const globalRemainingCap = Math.max(0, parseVal(loan.amount) - parseVal(loan.totalPaidCapital));
+        const theoreticalCapital = parseVal(loan.installmentValue) - flatInterest;
+        const flatCapital = Math.max(0, Math.min(globalRemainingCap, theoreticalCapital));
+
         return { 
-            interest: Math.max(0, flatInterest) + extraAcordo, 
-            capital: Math.max(0, flatCapital), 
-            total: parseVal(loan.installmentValue) + extraAcordo
+            interest: flatInterest + extraAcordo, 
+            capital: flatCapital, 
+            total: flatCapital + flatInterest + extraAcordo
         };
     }
   };
@@ -1204,16 +1216,28 @@ const Billing = () => {
     const slices = (loan as any).multiDates || [];
     const status = getLoanRealStatus(loan);
 
-    // 🚀 FIX 1: O sistema agora olha PRIMEIRO o que o cliente já pagou de picadinho no ciclo atual
+    // 🚀 FIX 1: O sistema agora olha PRIMEIRO o que o cliente já pagou de picadinho no ciclo atual (À prova de Semanas e Dias)
+    const currentDue = parseLocalDate(loan.nextDue);
+    const currentMonth = currentDue.getMonth();
+    const currentYear = currentDue.getFullYear();
+    const loanFreq = loan.frequency || 'MENSAL';
+
     let accInt = 0; let accCap = 0;
     if(loan.history) {
-        for (let i = loan.history.length - 1; i >= 0; i--) {
-            const h = loan.history[i];
-            // 🚀 BLINDAGEM: Trava a leitura no Ajuste de Migração para não engolir o Capital Inicial
-            if (h.note?.includes('[CICLO COMPLETADO]') || h.type === 'Abertura' || h.type === 'Ajuste de Migração') break;
-            accInt += (h.interestPaid || 0);
-            accCap += (h.capitalPaid || 0);
-        }
+        loan.history.forEach(h => {
+            const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+            let isSameCycle = false;
+            if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
+                isSameCycle = hDue.getDate() === currentDue.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+            } else {
+                isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+            }
+
+            if (isSameCycle && h.type !== 'Abertura' && h.type !== 'Ajuste de Migração' && h.type !== 'Acordo') {
+                accInt += parseVal(h.interestPaid);
+                accCap += parseVal(h.capitalPaid);
+            }
+        });
     }
     setCycleAcc({ interest: accInt, capital: accCap });
     
@@ -1221,8 +1245,6 @@ const Billing = () => {
     let autoInterest = '';
     let totalPenalty = 0;
 
-    const currentMonth = new Date(loan.nextDue).getMonth();
-    const currentYear = new Date(loan.nextDue).getFullYear();
     const today = new Date();
     today.setHours(0,0,0,0);
 
@@ -1295,15 +1317,33 @@ const Billing = () => {
         }
     } else {
         if (status === 'Atrasado') {
-            const fullOverdue = calculateOverdueValue(breakdown.total, loan.nextDue, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount);
-            totalPenalty = fullOverdue - breakdown.total;
+            // 🚀 FIX: Calcula a multa apenas sobre o que realmente ficou a faltar!
+            const remainingBase = Math.max(0, breakdown.total - (accCap + accInt));
+            if (remainingBase > 0) {
+                const fullOverdue = calculateOverdueValue(remainingBase, loan.nextDue, 'Atrasado', Number(loan.fineRate || 0), Number(loan.moraInterestRate || 0), loan.amount);
+                totalPenalty = fullOverdue - remainingBase;
+            }
         }
-        // 🚀 FIX 2: Subtrai o que o cara JÁ PAGOU da sugestão na tela. Não cobra o valor cheio de novo!
-        const remainingCap = Math.max(0, breakdown.capital - accCap);
-        const remainingInt = Math.max(0, (breakdown.interest + totalPenalty) - accInt);
+        // 🚀 FIX 2: Subtrai o que o cara JÁ PAGOU da sugestão na tela, impedindo valores bizarros
+        const expectedTotalCapital = breakdown.capital;
+        const expectedTotalInterest = breakdown.interest + totalPenalty;
+        
+        let remainingCap = expectedTotalCapital - accCap;
+        let remainingInt = expectedTotalInterest - accInt;
 
-        autoCapital = remainingCap > 0 ? remainingCap.toFixed(2) : '';
-        autoInterest = remainingInt > 0 ? remainingInt.toFixed(2) : '';
+        // Se adiantou dinheiro (ex: pagou R$ 350 numa parcela de R$ 300)
+        // Isso gerará "negative remainingCap". NUNCA devemos converter isso em juros falsos se o juro era 0.
+        if (remainingInt < 0) {
+            remainingCap += remainingInt;
+            remainingInt = 0;
+        } 
+        if (remainingCap < 0) {
+            // Em vez de somar aos juros, o capital excedente simplesmente some (fica 0), pois já foi abatido do global.
+            remainingCap = 0;
+        }
+
+        autoCapital = remainingCap > 0.05 ? remainingCap.toFixed(2) : '';
+        autoInterest = remainingInt > 0.05 ? remainingInt.toFixed(2) : '';
     }
 
     setPayCapital(autoCapital);
@@ -1453,8 +1493,11 @@ const Billing = () => {
                  updatedLoan.agreementValue = 0;
              } else {
                  // 🚀 FIX FUSO HORÁRIO: Força a leitura exata do Ano, Mês e Dia para não retroceder ou avançar dias por causa do UTC
+                 // E também preserva o dia original (o que foi digitado ao criar o contrato) para não variar em meses de 31 e 30!
                  const [y, m, d] = updatedLoan.nextDue.split('T')[0].split('-').map(Number);
-                 const currentDue = new Date(y, m - 1, d); // Passamos o mês como array indexado a 0
+                 const originalContractDay = new Date(updatedLoan.startDate).getDate();
+                 
+                 const currentDue = new Date(y, m - 1, d);
                  
                  if (updatedLoan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
                  else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
@@ -2285,7 +2328,15 @@ const handleFinalSave = async (e: React.FormEvent) => {
                  <div className="p-5 bg-slate-50/80 border-b border-slate-100 flex flex-col gap-3 shrink-0">
                      <div>
                          <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Data de Referência</label>
-                         <input type="date" value={collectionDate} onChange={(e) => setCollectionDate(e.target.value)} className="w-full p-3.5 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-yellow-400/30 focus:border-yellow-400 transition-all shadow-sm bg-white"/>
+                         <div className="relative">
+                             <input type="date" value={collectionDate} onChange={(e) => setCollectionDate(e.target.value)} className="w-full p-3.5 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-yellow-400/30 focus:border-yellow-400 transition-all shadow-sm bg-white" style={{color: 'transparent'}}/>
+                             <div className="absolute inset-0 flex items-center px-3.5 pointer-events-none font-bold text-slate-700 bg-white border border-slate-200 rounded-xl">
+                                 {collectionDate ? formatDisplayDate(collectionDate) : 'Selecione uma data'}
+                             </div>
+                             <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                                 <Calendar size={18}/>
+                             </div>
+                         </div>
                      </div>
                      <div className="relative">
                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
@@ -2857,7 +2908,12 @@ const handleFinalSave = async (e: React.FormEvent) => {
 
             <div className="mb-1 mt-4">
                 <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Data da Baixa (Pagamento)</label>
-                <input type="datetime-local" value={payDate} onChange={(e) => setPayDate(e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none font-bold text-slate-700 focus:ring-2 focus:ring-blue-500/20"/>
+                <div className="relative">
+                    <input type="datetime-local" value={payDate} onChange={(e) => setPayDate(e.target.value)} className="w-full p-3 border border-slate-200 rounded-xl outline-none font-bold text-slate-700 focus:ring-2 focus:ring-blue-500/20" style={{color: 'transparent'}}/>
+                    <div className="absolute inset-0 flex items-center px-3 pointer-events-none font-bold text-slate-700">
+                        {payDate ? new Date(payDate).toLocaleString('pt-BR', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'}) : 'Selecione uma data e hora'}
+                    </div>
+                </div>
             </div>
 
             {/* INTERFACE INTELIGENTE: Muda conforme a opção de Quitação */}

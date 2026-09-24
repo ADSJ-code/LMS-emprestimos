@@ -149,16 +149,21 @@ const Dashboard = () => {
       } else {
           const totalReceivable = parseVal(loan.amount) + parseVal(loan.projectedProfit);
           const originalInstallments = Math.max(1, Math.round(totalReceivable / parseVal(loan.installmentValue)));
-          const flatInterest = parseVal(loan.projectedProfit) / originalInstallments;
-          const flatCapital = parseVal(loan.installmentValue) - flatInterest;
-
+          // 🚀 FIX: Garante que os Juros da parcela não fiquem negativos ou estranhos
+          const flatInterest = Math.max(0, parseVal(loan.projectedProfit) / originalInstallments);
+          
           let extraAcordo = 0;
           if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
 
+          // 🚀 FIX: O capital é simplesmente a parcela menos os juros. Limitado à dívida global.
+          const globalRemainingCap = Math.max(0, parseVal(loan.amount) - parseVal(loan.totalPaidCapital));
+          const theoreticalCapital = parseVal(loan.installmentValue) - flatInterest;
+          const flatCapital = Math.max(0, Math.min(globalRemainingCap, theoreticalCapital));
+
           return { 
-              interest: Math.max(0, flatInterest) + extraAcordo, 
-              capital: Math.max(0, flatCapital), 
-              total: parseVal(loan.installmentValue) + extraAcordo
+              interest: flatInterest + extraAcordo, 
+              capital: flatCapital, 
+              total: flatCapital + flatInterest + extraAcordo
           };
       }
   };
@@ -395,9 +400,9 @@ const Dashboard = () => {
     try {
       const [loans, clients] = await Promise.all([ loanService.getAll(), clientService.getAll() ]);
       
-      // 🚀 FILTRO GLOBAL (LISTA NEGRA + TESTES): Remove clientes bloqueados e o de teste de TODAS as contas e listas
-      const blockedNames = new Set((clients || []).filter(c => c.status === 'Bloqueado' || c.name === 'teste andre duarte teste').map(c => c.name));
-      const cleanClients = (clients || []).filter(c => c.status !== 'Bloqueado' && c.name !== 'teste andre duarte teste');
+      // 🚀 FILTRO GLOBAL (LISTA NEGRA): Remove clientes bloqueados de TODAS as contas e listas
+      const blockedNames = new Set((clients || []).filter(c => c.status === 'Bloqueado').map(c => c.name));
+      const cleanClients = (clients || []).filter(c => c.status !== 'Bloqueado');
       const cleanLoans = (loans || []).filter(l => !blockedNames.has(l.client));
 
       const safeLoans = cleanLoans.map(l => ({
@@ -977,7 +982,15 @@ const Dashboard = () => {
                  <div className="p-5 bg-white border-b border-slate-200 shadow-sm relative z-10 flex flex-col gap-3">
                      <div>
                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">Escolha uma Data</label>
-                         <input type="date" value={maturityDate} onChange={(e) => setMaturityDate(e.target.value)} className="w-full p-3.5 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-400/30 focus:border-orange-400 transition-all bg-slate-50 hover:bg-white"/>
+                         <div className="relative">
+                             <input type="date" value={maturityDate} onChange={(e) => setMaturityDate(e.target.value)} className="w-full p-3.5 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-400/30 focus:border-orange-400 transition-all bg-slate-50 hover:bg-white" style={{color: 'transparent'}}/>
+                             <div className="absolute inset-0 flex items-center px-3.5 pointer-events-none font-bold text-slate-700">
+                                 {maturityDate ? maturityDate.split('-').reverse().join('/') : 'Selecione uma data'}
+                             </div>
+                             <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                                 <Calendar size={18}/>
+                             </div>
+                         </div>
                      </div>
                      <div className="relative">
                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
