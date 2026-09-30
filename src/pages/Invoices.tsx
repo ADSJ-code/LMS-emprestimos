@@ -352,17 +352,18 @@ const Invoices = () => {
           ? `${selectedPayment.uniqueId}-R${Date.now().toString().slice(-6)}` 
           : selectedPayment.uniqueId;
 
+      // 🚀 TESTE MAUÁ: Enviando "outras_retencoes: null" para forçar a Focus NFe a omitir a tag no GINFES
       await invoiceService.emit({
         id: finalEmissionId,
         client: selectedPayment.client,
         cpf: selectedPayment.cpf,
         serviceValue: selectedPayment.interestPaid,
-        // 🚀 FIX ERRO PREFEITURA: Zera explicitamente as retenções para evitar "PIS Inconsistente" ou "Valores Divergentes"
         pis: 0,
         cofins: 0,
         csll: 0,
         inss: 0,
-        ir: 0
+        ir: 0,
+        outras_retencoes: null // Tenta anular a tag
       } as any);
       
       const updatedInvoices = await invoiceService.getAll();

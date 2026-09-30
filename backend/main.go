@@ -1363,7 +1363,7 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
         // 🚀 Discriminação exata solicitada pelo Rodrigo
 		descricaoRica := "SERVIÇO PRESTADO\nValor Aproximado dos Tributos de 10.39%"
 
-		// 🚀 NOVO PAYLOAD: GABARITO OFICIAL DA FOCUS NFE (Fornecido pelo César)
+		// 🚀 NOVO PAYLOAD: GABARITO DA FOCUS NFE ADAPTADO PARA O GINFES (MAUÁ)
 		payload := map[string]interface{}{
 			"data_emissao":             dataEmissaoBRT,
 			"natureza_operacao":        1, 
@@ -1380,16 +1380,11 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 				"aliquota":                         5.00,
 				"item_lista_servico":               itemServico,
 				"codigo_tributario_municipio":      "649999900",
-				"codigo_nbs":                       "1.0905.40.00",
-				"codigo_indicador_operacao":        "100301",
-				"ibs_cbs_situacao_tributaria":      "010",
-				"ibs_cbs_classificacao_tributaria": "010002",
-				"codigo_municipio_incidencia":      ibgePrestadorInt, // 🚀 FIX: Removeu o chumbado de Mauá
+				// 🚀 FIX EXTREMO GINFES: Prefeituras antigas quebram com tags do SPED e Reforma. 
+				// Removemos TUDO que for NBS, Indicadores Nacionais ou Tributação Total.
+				"codigo_municipio_incidencia":      ibgePrestadorInt,
 				"iss_retido":                       false,
-				"indicador_total_tributacao":       0, // 🚀 AQUI: Opcão pelo Decreto 8.264/2014 (Não preenchimento)
 			},
-			"consumidor_final":       0,
-			"indicador_destinatario": 0,
 		}
 
 		log.Println("🚀 [DEPLOY V2] Teste antibug!")
