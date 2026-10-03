@@ -451,10 +451,29 @@ const Billing = () => {
       if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
       if (loan.status === 'Acordo') return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
 
+      let baseDue = parseLocalDate(loan.nextDue);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // 🚀 BLINDAGEM VISUAL DE DATAS PRESAS: Se a data do banco está no passado (ex: meses atrás),
+      // normalizamos para o mês atual/futuro para que a interface não exiba datas mortas.
+      if (baseDue < today) {
+          const originalDay = new Date(loan.startDate).getDate() || baseDue.getDate();
+          let currentMonth = today.getMonth();
+          let currentYear = today.getFullYear();
+          
+          baseDue = new Date(currentYear, currentMonth, originalDay);
+          if (baseDue < today) {
+              // Se o dia deste mês já passou, aponta para o dia do mês seguinte
+              currentMonth++;
+              if (currentMonth > 11) { currentMonth = 0; currentYear++; }
+              baseDue = new Date(currentYear, currentMonth, originalDay);
+          }
+      }
+
       const validSlices = (loan.multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
       
       if (validSlices.length > 0) {
-          const baseDue = parseLocalDate(loan.nextDue);
           const currentMonth = baseDue.getMonth();
           const currentYear = baseDue.getFullYear();
           const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
@@ -469,7 +488,6 @@ const Billing = () => {
 
           for (const slice of sortedSlices) {
               const baseAmount = parseVal(slice.amount);
-              // 🚀 ALINHANDO COM A TOLERÂNCIA DE R$ 10,00 PARA O VISUAL DA TABELA
               if (totalPaidInCycle >= (baseAmount - 10.00)) {
                   totalPaidInCycle -= baseAmount;
               } else {
@@ -478,7 +496,7 @@ const Billing = () => {
               }
           }
       }
-      return loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
+      return baseDue.toISOString().split('T')[0];
   };
 
   // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
@@ -1500,14 +1518,24 @@ const Billing = () => {
                  const currentDue = new Date(y, m - 1, d);
                  
                  if (updatedLoan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
-                 else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
-                 else currentDue.setMonth(currentDue.getMonth() + 1);
-                 
-                 const nextY = currentDue.getFullYear();
-                 const nextM = String(currentDue.getMonth() + 1).padStart(2, '0');
-                 const nextD = String(currentDue.getDate()).padStart(2, '0');
-                 
-                 updatedLoan.nextDue = `${nextY}-${nextM}-${nextD}`;
+   else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
+   else currentDue.setMonth(currentDue.getMonth() + 1);
+
+   // 🚀 BLINDAGEM TEMPORAL: Se após o avanço a data ainda estiver no passado, 
+   // empurra iterativamente até estar no mês/futuro correto.
+   const todayCheck = new Date();
+   todayCheck.setHours(0,0,0,0);
+   while (currentDue < todayCheck) {
+       if (updatedLoan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
+       else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
+       else currentDue.setMonth(currentDue.getMonth() + 1);
+   }
+   
+   const nextY = currentDue.getFullYear();
+   const nextM = String(currentDue.getMonth() + 1).padStart(2, '0');
+   const nextD = String(currentDue.getDate()).padStart(2, '0');
+   
+   updatedLoan.nextDue = `${nextY}-${nextM}-${nextD}`;
              }
              
              // 🚀 CORREÇÃO DO AVANÇO DE PARCELA (EFEITO LILIAN)
@@ -1634,7 +1662,20 @@ const Billing = () => {
     }
 
     if (lastEntry.originalDueDate) {
-        updatedLoan.nextDue = lastEntry.originalDueDate;
+        let restoredDate = parseLocalDate(lastEntry.originalDueDate);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // 🚀 BLINDAGEM: Se a data estornada for menor que hoje, traz para o ciclo atual em aberto
+        if (restoredDate < today) {
+            restoredDate = new Date(); // Ancorada em hoje
+            const y = restoredDate.getFullYear();
+            const m = String(restoredDate.getMonth() + 1).padStart(2, '0');
+            const d = String(restoredDate.getDate()).padStart(2, '0');
+            updatedLoan.nextDue = `${y}-${m}-${d}`;
+        } else {
+            updatedLoan.nextDue = lastEntry.originalDueDate;
+        }
     }
 
     updatedLoan.history = history.slice(0, -1);
@@ -2216,8 +2257,8 @@ const handleFinalSave = async (e: React.FormEvent) => {
             R$ {formatMoney(displayInterestPaid)}
           </td>
           <td className="p-4 text-right font-bold text-slate-500">
-            R$ {formatMoney(loan.installmentValue)}
-          </td>
+          R$ {formatMoney(loan.interestType === 'SIMPLE' ? getSyncedBreakdown(loan).total : loan.installmentValue)}
+        </td>
           <td className="p-4 text-center">
             <div className="flex flex-col items-center justify-center">
                 <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase shadow-sm ${
