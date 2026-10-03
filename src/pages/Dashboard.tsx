@@ -400,10 +400,10 @@ const Dashboard = () => {
     try {
       const [loans, clients] = await Promise.all([ loanService.getAll(), clientService.getAll() ]);
       
-      // 🚀 FILTRO GLOBAL (LISTA NEGRA): Remove clientes bloqueados de TODAS as contas e listas
+      // 🚀 FILTRO GLOBAL (LISTA NEGRA E TESTES): Remove bloqueados e clientes de teste de TODAS as contas
       const blockedNames = new Set((clients || []).filter(c => c.status === 'Bloqueado').map(c => c.name));
-      const cleanClients = (clients || []).filter(c => c.status !== 'Bloqueado');
-      const cleanLoans = (loans || []).filter(l => !blockedNames.has(l.client));
+      const cleanClients = (clients || []).filter(c => c.status !== 'Bloqueado' && c.name.toLowerCase() !== 'teste andre duarte teste');
+      const cleanLoans = (loans || []).filter(l => !blockedNames.has(l.client) && l.client.toLowerCase() !== 'teste andre duarte teste');
 
       const safeLoans = cleanLoans.map(l => ({
           ...l,

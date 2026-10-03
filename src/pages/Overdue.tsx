@@ -237,7 +237,7 @@ const Overdue = () => {
               isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
           }
 
-          if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+          if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Ajuste de Migração' && h.type !== 'Acordo') {
               return acc + parseVal(h.amount);
           }
           return acc;
@@ -290,11 +290,36 @@ const Overdue = () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // 🚀 FIX: Se for acordo, a nova data combinada anula qualquer fatia antiga
     let tempDue = parseLocalDate(loan.nextDue);
     if (loan.status === 'Acordo') {
         const isoDue = loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
         tempDue = parseLocalDate(isoDue);
+    }
+
+    // 🚀 BLINDAGEM DE DATAS PASSADAS: Se o contrato tem fatias (multiDates), 
+    // encontra a primeira fatia do mês atual que já passou (<= hoje) para iniciar a contagem do atraso real.
+    const slices = (loan as any).multiDates || [];
+    if (slices.length > 0) {
+        const currentMonth = tempDue.getMonth();
+        const currentYear = tempDue.getFullYear();
+        const sortedSlices = [...slices].sort((a, b) => Number(a.day) - Number(b.day));
+        
+        let foundPastSlice = false;
+        for (const slice of sortedSlices) {
+            const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+            if (sliceDate <= today) {
+                tempDue = sliceDate;
+                foundPastSlice = true;
+                break;
+            }
+        }
+        if (!foundPastSlice && tempDue > today) {
+            tempDue.setMonth(tempDue.getMonth() - 1);
+        }
+    } else if (tempDue > today) {
+        if (loan.frequency === "SEMANAL") tempDue.setDate(tempDue.getDate() - 7);
+        else if (loan.frequency === "DIARIO") tempDue.setDate(tempDue.getDate() - 1);
+        else tempDue.setMonth(tempDue.getMonth() - 1);
     }
 
     let totalOriginal = 0;
@@ -326,7 +351,7 @@ const Overdue = () => {
             isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
         }
 
-        if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+        if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Ajuste de Migração' && h.type !== 'Acordo') {
             return acc + parseVal(h.amount);
         }
         return acc;
@@ -602,17 +627,34 @@ const Overdue = () => {
       if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return;
       const realStatus = getLoanRealStatus(l);
       
-      // 🚨 Apenas 'Atrasado' entra na Tabela
       const isOverdue = realStatus === "Atrasado";
 
       if (isOverdue) {
         const snowball = getSnowballDetails(l);
         if (snowball && snowball.totalUpdated > 0) {
           const dueDate = parseLocalDate(l.nextDue);
-          const oldestDate = snowball.missedInstallments.length > 0 ? parseLocalDate(snowball.missedInstallments[0].date) : dueDate;
-          const diffTime = Math.abs(today.getTime() - oldestDate.getTime());
+          
+          // 🚀 BUSCA DA FATIA REAL: Se o contrato tem fatias (multiDates), 
+          // acha exatamente qual foi a primeira fatia que passou de a data de hoje e não foi paga!
+          let validDate = dueDate;
+          if (snowball.missedInstallments.length > 0) {
+              // Procura na lista de parcelas perdidas a mais antiga que já passou no calendário
+              const pastMissed = snowball.missedInstallments.filter((m: any) => parseLocalDate(m.date) <= today);
+              if (pastMissed.length > 0) {
+                  validDate = parseLocalDate(pastMissed[0].date);
+              } else {
+                  validDate = parseLocalDate(snowball.missedInstallments[0].date);
+              }
+          }
+
+          // Se por acaso a data calculada ainda estiver no futuro, trava em hoje ou no vencimento base
+          if (validDate > today) {
+              validDate = dueDate <= today ? dueDate : today;
+          }
+
+          const diffTime = Math.abs(today.getTime() - validDate.getTime());
           const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-          overdueList.push({ ...l, snowball, diffDays });
+          overdueList.push({ ...l, snowball, diffDays: Math.max(1, diffDays) });
         }
       }
     });
