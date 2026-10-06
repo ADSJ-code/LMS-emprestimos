@@ -296,32 +296,6 @@ const Overdue = () => {
         tempDue = parseLocalDate(isoDue);
     }
 
-    // 🚀 BLINDAGEM DE DATAS PASSADAS: Se o contrato tem fatias (multiDates), 
-    // encontra a primeira fatia do mês atual que já passou (<= hoje) para iniciar a contagem do atraso real.
-    const slices = (loan as any).multiDates || [];
-    if (slices.length > 0) {
-        const currentMonth = tempDue.getMonth();
-        const currentYear = tempDue.getFullYear();
-        const sortedSlices = [...slices].sort((a, b) => Number(a.day) - Number(b.day));
-        
-        let foundPastSlice = false;
-        for (const slice of sortedSlices) {
-            const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
-            if (sliceDate <= today) {
-                tempDue = sliceDate;
-                foundPastSlice = true;
-                break;
-            }
-        }
-        if (!foundPastSlice && tempDue > today) {
-            tempDue.setMonth(tempDue.getMonth() - 1);
-        }
-    } else if (tempDue > today) {
-        if (loan.frequency === "SEMANAL") tempDue.setDate(tempDue.getDate() - 7);
-        else if (loan.frequency === "DIARIO") tempDue.setDate(tempDue.getDate() - 1);
-        else tempDue.setMonth(tempDue.getMonth() - 1);
-    }
-
     let totalOriginal = 0;
     let totalUpdated = 0;
     let missedInstallments: any[] = [];
@@ -331,7 +305,7 @@ const Overdue = () => {
     const breakdown = getSyncedBreakdown(loan);
     const baseAmount = breakdown.total; 
     
-    // 🚀 FIX RODRIGO: Contratos em Acordo (que não venceram) NÃO geram bola de neve e não aparecem na lista de atrasados
+    // 🚀 FIX RODRIGO: Contratos em Acordo (que não venceram) NÃO geram bola de neve
     if (realStatus === 'Acordo' || realStatus !== 'Atrasado') {
         return { totalOriginal: 0, totalUpdated: 0, missedInstallments: [] };
     }
@@ -340,10 +314,8 @@ const Overdue = () => {
     const currentYear = tempDue.getFullYear();
     const loanFreq = loan.frequency || 'MENSAL';
     
-    // 🚀 FIX: Calcula exatamente quanto foi pago no mês (ou semana) do atraso
     let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
         const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-        
         let isSameCycle = false;
         if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
             isSameCycle = hDue.getDate() === tempDue.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
@@ -357,14 +329,63 @@ const Overdue = () => {
         return acc;
     }, 0);
 
-    const remainingInstallments = parseVal(loan.installments) || 1;
     const pad = (n: number) => n.toString().padStart(2, '0');
+    const validSlices = (loan as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
+
+    // 🚀 BLINDAGEM FATIAS (MULTI-DATE): Calcula o atraso iterando fatia por fatia
+    if (validSlices.length > 0) {
+        const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+        let tempPaid = totalPaidInCycle;
+
+        for (const s of sortedSlices) {
+            const sliceBaseAmount = parseVal(s.amount);
+            const sliceDate = new Date(currentYear, currentMonth, Number(s.day));
+            
+            const slicePaidAmount = Math.min(sliceBaseAmount, tempPaid);
+            tempPaid = Math.max(0, tempPaid - sliceBaseAmount);
+            
+            const isPaid = slicePaidAmount >= (sliceBaseAmount - 10.00);
+            
+            if (!isPaid && sliceDate < today) {
+                const remainingSlice = Math.max(0, sliceBaseAmount - slicePaidAmount);
+                if (remainingSlice > 0.10) {
+                    const ratio = sliceBaseAmount / (breakdown.total || 1);
+                    const updatedVal = calculateOverdueValue(
+                        remainingSlice,
+                        sliceDate.toISOString().split('T')[0],
+                        "Atrasado",
+                        parseVal(loan.fineRate) || 0,
+                        parseVal(loan.moraInterestRate) || 0,
+                        parseVal(loan.amount) * ratio
+                    );
+
+                    missedInstallments.push({
+                        date: `${sliceDate.getFullYear()}-${pad(sliceDate.getMonth() + 1)}-${pad(sliceDate.getDate())}`,
+                        original: remainingSlice,
+                        updated: updatedVal,
+                    });
+
+                    totalOriginal += remainingSlice;
+                    totalUpdated += updatedVal;
+                }
+            }
+        }
+        return { totalOriginal, totalUpdated, missedInstallments };
+    }
+
+    // 🚀 LÓGICA PADRÃO PARA CONTRATOS SEM FATIAS
+    if (tempDue > today) {
+        if (loan.frequency === "SEMANAL") tempDue.setDate(tempDue.getDate() - 7);
+        else if (loan.frequency === "DIARIO") tempDue.setDate(tempDue.getDate() - 1);
+        else tempDue.setMonth(tempDue.getMonth() - 1);
+    }
+
+    const remainingInstallments = parseVal(loan.installments) || 1;
 
     while (tempDue < today) {
       const dateStr = `${tempDue.getFullYear()}-${pad(tempDue.getMonth() + 1)}-${pad(tempDue.getDate())}`;
       const debtOriginal = count === 0 ? Math.max(0, baseAmount - totalPaidInCycle) : baseAmount;
 
-      // 🚀 ALINHADO: Tolerância rígida de 10 centavos para a dívida
       if (debtOriginal > 0.10) {
           const ratio = breakdown.total > 0 ? (debtOriginal / breakdown.total) : 1;
           const updatedVal = calculateOverdueValue(
@@ -388,7 +409,6 @@ const Overdue = () => {
 
       count++;
       
-      // 🚀 FIX RODRIGO: Em "Só Juros" (SIMPLE), a dívida acumula infinito mês a mês.
       if (loan.interestType !== 'SIMPLE' && count >= remainingInstallments) break;
       if (count > 60) break; // Trava de 5 anos
 
@@ -399,7 +419,6 @@ const Overdue = () => {
 
     if (missedInstallments.length === 0 && realStatus === "Atrasado") {
       const debtOriginal = Math.max(0, baseAmount - totalPaidInCycle);
-      // 🚀 ALINHADO: Tolerância rígida de 10 centavos para a dívida
       if (debtOriginal > 0.10) {
           const dateStr = loan.nextDue.includes('T') ? loan.nextDue.split('T')[0] : loan.nextDue;
           const ratio = breakdown.total > 0 ? (debtOriginal / breakdown.total) : 1;
@@ -432,9 +451,9 @@ const Overdue = () => {
         clientService.getAll(),
       ]);
 
-      // 🚀 FILTRO GLOBAL DA LISTA NEGRA: Remove os bloqueados da matemática de atraso
+      // 🚀 FILTRO GLOBAL (LISTA NEGRA E TESTES): Remove bloqueados e testes da matemática de atraso
       const blockedNames = new Set((clientsData || []).filter(c => c.status === 'Bloqueado').map(c => c.name));
-      const activeLoans = (loansData || []).filter(l => !blockedNames.has(l.client));
+      const activeLoans = (loansData || []).filter(l => !blockedNames.has(l.client) && l.client.toLowerCase() !== 'teste andre duarte teste');
 
       setLoans(activeLoans); // <-- Agora só contratos de clientes "não bloqueados" vão para a conta!
       setClients(clientsData || []);

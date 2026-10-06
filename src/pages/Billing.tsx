@@ -455,19 +455,31 @@ const Billing = () => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      // 🚀 BLINDAGEM VISUAL DE DATAS PRESAS: Se a data do banco está no passado (ex: meses atrás),
-      // normalizamos para o mês atual/futuro para que a interface não exiba datas mortas.
-      if (baseDue < today) {
-          const originalDay = new Date(loan.startDate).getDate() || baseDue.getDate();
-          let currentMonth = today.getMonth();
-          let currentYear = today.getFullYear();
-          
-          baseDue = new Date(currentYear, currentMonth, originalDay);
-          if (baseDue < today) {
-              // Se o dia deste mês já passou, aponta para o dia do mês seguinte
-              currentMonth++;
-              if (currentMonth > 11) { currentMonth = 0; currentYear++; }
+      const realStatus = getLoanRealStatus(loan);
+      const loanFreq = loan.frequency || 'MENSAL';
+
+      // 🚀 BLINDAGEM VISUAL CORRIGIDA: Só empurra a data pra frente se NÃO estiver atrasado.
+      if (realStatus === 'Em Dia' && baseDue < today) {
+          if (loanFreq === 'MENSAL') {
+              // Extrai o dia exato da string para evitar o bug de fuso horário (GMT-3) que roubava 1 dia
+              const startStr = loan.startDate ? loan.startDate.split('T')[0] : loan.nextDue.split('T')[0];
+              const originalDay = Number(startStr.split('-')[2]);
+              
+              let currentMonth = today.getMonth();
+              let currentYear = today.getFullYear();
+              
               baseDue = new Date(currentYear, currentMonth, originalDay);
+              if (baseDue < today) {
+                  currentMonth++;
+                  if (currentMonth > 11) { currentMonth = 0; currentYear++; }
+                  baseDue = new Date(currentYear, currentMonth, originalDay);
+              }
+          } else {
+              // Para Semanal ou Diário, a data macro acompanha o ciclo iterativamente
+              while (baseDue < today) {
+                  if (loanFreq === 'SEMANAL') baseDue.setDate(baseDue.getDate() + 7);
+                  else if (loanFreq === 'DIARIO') baseDue.setDate(baseDue.getDate() + 1);
+              }
           }
       }
 
@@ -1179,9 +1191,35 @@ const Billing = () => {
               
               const baseVal = Math.max(0, breakdown.total - totalPaidInCycle);
               const realStatus = getLoanRealStatus(loan);
+              const validSlices = (loan as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
+              const today = new Date();
+              today.setHours(0,0,0,0);
               
-              if (realStatus === 'Atrasado' && baseVal > 0.10) {
-                  installmentSum += calculateOverdueValue(baseVal, loan.nextDue, 'Atrasado', parseVal(loan.fineRate), parseVal(loan.moraInterestRate), parseVal(loan.amount));
+              if (realStatus === 'Atrasado') {
+                  if (validSlices.length > 0 && loan.status !== 'Acordo') {
+                      const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+                      let cycleRemaining = 0;
+                      let tempPaid = totalPaidInCycle;
+
+                      for (const s of sortedSlices) {
+                          const baseAmount = parseVal(s.amount);
+                          const sliceDate = new Date(currentYear, currentMonth, Number(s.day));
+                          const slicePaidAmount = Math.min(baseAmount, tempPaid);
+                          tempPaid = Math.max(0, tempPaid - baseAmount);
+                          const remainingSlice = Math.max(0, baseAmount - slicePaidAmount);
+                          
+                          if (remainingSlice > 0.10) {
+                              if (sliceDate < today) {
+                                  const ratio = baseAmount / (breakdown.total || 1);
+                                  cycleRemaining += calculateOverdueValue(remainingSlice, sliceDate.toISOString().split('T')[0], 'Atrasado', parseVal(loan.fineRate), parseVal(loan.moraInterestRate), parseVal(loan.amount) * ratio);
+                              }
+                              // 🚀 FIX RODAPÉ: Removemos o 'else' para não somar os R$ 800 (fatias futuras) na contagem de atrasados!
+                          }
+                      }
+                      installmentSum += cycleRemaining;
+                  } else if (baseVal > 0.10) {
+                      installmentSum += calculateOverdueValue(baseVal, loan.nextDue, 'Atrasado', parseVal(loan.fineRate), parseVal(loan.moraInterestRate), parseVal(loan.amount));
+                  }
               } else {
                   installmentSum += baseVal;
               }
@@ -2516,24 +2554,49 @@ const handleFinalSave = async (e: React.FormEvent) => {
               </div>
           </div>
           
-          <div className="flex flex-wrap gap-4 items-end bg-white p-3 rounded-xl border border-slate-200 shadow-sm w-fit">
-              <div>
-                  <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Data Inicial</label>
-                  <input type="date" value={filterStart} onChange={e => setFilterStart(e.target.value)} className="p-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10"/>
+          <div className="flex flex-col lg:flex-row justify-between items-end gap-4 w-full">
+              {/* Bloco de Filtros de Data */}
+              <div className="flex flex-wrap gap-4 items-end bg-white p-3 rounded-xl border border-slate-200 shadow-sm w-fit">
+                  <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Data Inicial</label>
+                      <input type="date" value={filterStart} onChange={e => setFilterStart(e.target.value)} className="p-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10"/>
+                  </div>
+                  <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Data Final</label>
+                      <input type="date" value={filterEnd} onChange={e => setFilterEnd(e.target.value)} className="p-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10"/>
+                  </div>
+                  {(filterStart || filterEnd) && (
+                      <button onClick={() => { setFilterStart(''); setFilterEnd(''); }} className="px-4 py-2 text-red-600 font-bold text-sm hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-100">
+                          Limpar
+                      </button>
+                  )}
+                  {statusFilter === 'PagosNoPeriodo' && (!filterStart || !filterEnd) && (
+                      <span className="text-xs text-orange-600 font-bold ml-2 bg-orange-50 px-3 py-2 rounded-lg border border-orange-200 animate-pulse">
+                          ⚠️ Informe as datas para ver pagamentos.
+                      </span>
+                  )}
               </div>
-              <div>
-                  <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Data Final</label>
-                  <input type="date" value={filterEnd} onChange={e => setFilterEnd(e.target.value)} className="p-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10"/>
-              </div>
-              {(filterStart || filterEnd) && (
-                  <button onClick={() => { setFilterStart(''); setFilterEnd(''); }} className="px-4 py-2 text-red-600 font-bold text-sm hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-100">
-                      Limpar
-                  </button>
-              )}
-              {statusFilter === 'PagosNoPeriodo' && (!filterStart || !filterEnd) && (
-                  <span className="text-xs text-orange-600 font-bold ml-2 bg-orange-50 px-3 py-2 rounded-lg border border-orange-200 animate-pulse">
-                      ⚠️ Informe as datas para ver pagamentos.
-                  </span>
+
+              {/* 🚀 NOVO WIDGET: SOMA DOS SELECIONADOS NO TOPO */}
+              {selectedIds.length > 0 && (
+                  <div className="flex bg-slate-800 rounded-xl shadow-lg border border-slate-700 text-white overflow-hidden animate-in fade-in slide-in-from-bottom-2">
+                      <div className="p-3 bg-slate-900/50 flex flex-col justify-center border-r border-slate-700">
+                          <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Selecionados</span>
+                          <span className="text-lg font-black text-white leading-tight text-center">{tableTotals.count}</span>
+                      </div>
+                      <div className="p-3 flex flex-col justify-center border-r border-slate-700">
+                          <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider" title="Soma do Saldo Devedor">Saldo Capital</span>
+                          <span className="text-sm font-bold text-slate-200 mt-0.5">R$ {formatMoney(tableTotals.capital)}</span>
+                      </div>
+                      <div className="p-3 flex flex-col justify-center border-r border-slate-700">
+                          <span className="text-[9px] uppercase font-bold text-green-400/80 tracking-wider" title="Soma dos Juros já recebidos">Juros Pagos</span>
+                          <span className="text-sm font-bold text-green-400 mt-0.5">R$ {formatMoney(tableTotals.interest)}</span>
+                      </div>
+                      <div className="p-3 bg-blue-600/20 flex flex-col justify-center">
+                          <span className="text-[9px] uppercase font-black text-blue-300 tracking-wider">Valor Devido (Atual)</span>
+                          <span className="text-base font-black text-blue-100 mt-0.5">R$ {formatMoney(tableTotals.installment)}</span>
+                      </div>
+                  </div>
               )}
           </div>
         </div>
@@ -2580,26 +2643,6 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     </>
                 )}
             </tbody>
-            
-            <tfoot className="bg-slate-50 border-t-2 border-slate-200">
-                <tr>
-                    <td colSpan={5} className="p-4 text-right font-bold text-slate-500 uppercase tracking-widest text-xs">
-                        Soma dos Selecionados ({tableTotals.count} contratos):
-                    </td>
-                    <td className="p-4 text-right font-black text-slate-800 text-lg" title="Soma do Saldo Devedor (Capital)">
-                        R$ {formatMoney(tableTotals.capital)}
-                    </td>
-                    <td className="p-4 text-right font-black text-green-600 text-lg" title="Soma dos Juros já recebidos">
-                        R$ {formatMoney(tableTotals.interest)}
-                    </td>
-                    <td className="p-4 text-right font-black text-slate-500 text-lg" title="Soma das parcelas pendentes (c/ multas ou abatimentos parciais)">
-                        R$ {formatMoney(tableTotals.installment)}
-                        <span className="block text-[9px] text-slate-400 font-bold mt-1 uppercase">Valor Devido (Atual)</span>
-                    </td>
-                    <td colSpan={2}></td>
-                </tr>
-            </tfoot>
-            
             </table>
         </div>
       </div>
@@ -2789,12 +2832,16 @@ const handleFinalSave = async (e: React.FormEvent) => {
                             if (!firstOverdueSliceDate) {
                                 firstOverdueSliceDate = sliceDate.toISOString().split('T')[0];
                             }
+                            const remainingSlice = Math.max(0, baseAmount - slicePaidAmount);
                             const ratio = baseAmount / (breakdown.total || 1);
-                            const sliceOverdue = calculateOverdueValue(baseAmount, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount * ratio);
-                            slicePenalty = sliceOverdue - baseAmount;
+                            const sliceOverdue = calculateOverdueValue(remainingSlice, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount * ratio);
+                            
+                            // 🚀 FIX MODAL: Isola a soma apenas das fatias que venceram
+                            totalSlicesCalc += sliceOverdue;
+                        } else if (!isFatiaAtrasada) {
+                            // Se não há atraso, vai mantendo a soma do ciclo normal
+                            totalSlicesCalc += Math.max(0, baseAmount - slicePaidAmount);
                         }
-                        
-                        totalSlicesCalc += Math.max(0, (baseAmount + slicePenalty) - slicePaidAmount);
                     }
                     displayTotal = totalSlicesCalc;
                     if (firstOverdueSliceDate) bannerDateStr = firstOverdueSliceDate;

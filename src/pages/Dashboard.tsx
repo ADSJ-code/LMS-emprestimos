@@ -324,10 +324,8 @@ const Dashboard = () => {
     const currentYear = tempDue.getFullYear();
     const loanFreq = loan.frequency || 'MENSAL';
     
-    // 🚀 FIX: Calcula exatamente quanto foi pago no mês (ou semana) do atraso
     let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
         const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-        
         let isSameCycle = false;
         if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
             isSameCycle = hDue.getDate() === tempDue.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
@@ -341,13 +339,51 @@ const Dashboard = () => {
         return acc;
     }, 0);
 
-    const remainingInstallments = parseVal(loan.installments) || 1;
     const pad = (n: number) => n.toString().padStart(2, '0');
+    const validSlices = (loan as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
+
+    // 🚀 BLINDAGEM FATIAS (MULTI-DATE): Calcula o atraso iterando fatia por fatia vencida
+    if (validSlices.length > 0) {
+        const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
+        let tempPaid = totalPaidInCycle;
+
+        for (const s of sortedSlices) {
+            const sliceBaseAmount = parseVal(s.amount);
+            const sliceDate = new Date(currentYear, currentMonth, Number(s.day));
+            
+            const slicePaidAmount = Math.min(sliceBaseAmount, tempPaid);
+            tempPaid = Math.max(0, tempPaid - sliceBaseAmount);
+            
+            const isPaid = slicePaidAmount >= (sliceBaseAmount - 10.00);
+            
+            if (!isPaid && sliceDate < today) {
+                const remainingSlice = Math.max(0, sliceBaseAmount - slicePaidAmount);
+                if (remainingSlice > 0.10) {
+                    const ratio = sliceBaseAmount / (breakdown.total || 1);
+                    const updatedVal = calculateOverdueValue(
+                        remainingSlice,
+                        sliceDate.toISOString().split('T')[0],
+                        "Atrasado",
+                        parseVal(loan.fineRate) || 0,
+                        parseVal(loan.moraInterestRate) || 0,
+                        parseVal(loan.amount) * ratio
+                    );
+                    totalOverdue += updatedVal;
+                    missedCount = 1; 
+                }
+            }
+        }
+        
+        // Retorna o resultado fatiado direto para não rodar o loop de mês inteiro
+        return { totalOverdue, missedCount };
+    }
+
+    // 🚀 LÓGICA PADRÃO PARA CONTRATOS SEM FATIAS
+    const remainingInstallments = parseVal(loan.installments) || 1;
 
     while (tempDue < today) {
       const dateStr = `${tempDue.getFullYear()}-${pad(tempDue.getMonth() + 1)}-${pad(tempDue.getDate())}`;
       
-      // 🚀 MATEMÁTICA PERFEITA: Subtrai o que ele pagou picado ANTES de jogar a multa
       const debtOriginal = count === 0 ? Math.max(0, baseAmount - totalPaidInCycle) : baseAmount;
 
       if (debtOriginal > 0.05) {
@@ -498,14 +534,15 @@ const Dashboard = () => {
             else currentDue.setMonth(currentDue.getMonth() + 1);
         }
 
+        const tier = loan.interestRate < 10 ? 'low' : loan.interestRate <= 15 ? 'mid' : 'high';
+
+        // 🚀 FIX GLOBAL: A Bola de Neve é absoluta e global, DEVE ficar fora do filtro de datas
+        if (realStatus === 'Atrasado') {
+            overAcc.all += totalOverdue; overAcc[tier] += totalOverdue;
+        }
+
         if (hasMatch) {
             uniqueMatchedContracts.add(loan.id);
-            const tier = loan.interestRate < 10 ? 'low' : loan.interestRate <= 15 ? 'mid' : 'high';
-
-            // 🚀 FIX: A Bola de Neve é absoluta e global, calcula fora do filtro de período
-            if (realStatus === 'Atrasado') {
-                overAcc.all += totalOverdue; overAcc[tier] += totalOverdue;
-            }
 
             if (period !== 'todos') {
                 capAcc.all += capToAdd; capAcc[tier] += capToAdd;
