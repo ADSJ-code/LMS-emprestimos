@@ -387,57 +387,202 @@ const Clients = () => {
     return new Date(year, month - 1, day);
   };
 
+  // 🚀 MOTOR INTELIGENTE MATEMÁTICO (CÓPIA EXATA DO BILLING PARA PRECISÃO ABSOLUTA)
+  const parseVal = (v: any): number => {
+      if (typeof v === 'number') return isNaN(v) ? 0 : v;
+      if (!v) return 0;
+      if (typeof v === 'string') {
+          const clean = v.trim();
+          if (clean.includes(',') && clean.includes('.')) return parseFloat(clean.replace(/\./g, '').replace(',', '.')) || 0;
+          if (clean.includes(',')) return parseFloat(clean.replace(',', '.')) || 0;
+          return parseFloat(clean) || 0;
+      }
+      return 0;
+  };
+
+  const getSyncedBreakdown = (loan: any) => {
+      if (!loan) return { interest: 0, capital: 0, total: 0 };
+      const currentDue = parseLocalDate(loan.nextDue);
+      const currentMonth = currentDue.getMonth();
+      const currentYear = currentDue.getFullYear();
+      const loanFreq = loan.frequency || 'MENSAL';
+
+      let capitalPaidInThisCycle = 0;
+      if (loan.history) {
+          loan.history.forEach((h: any) => {
+              const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+              let isSameCycle = false;
+              if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
+                  isSameCycle = hDue.getDate() === currentDue.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+              } else {
+                  isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+              }
+              if (isSameCycle && !h.note?.includes('[CICLO COMPLETADO]') && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Ajuste de Migração' && h.type !== 'Acordo') {
+                  capitalPaidInThisCycle += parseVal(h.capitalPaid);
+              }
+          });
+      }
+
+      const principalAtStartOfCycle = (parseVal(loan.amount) - parseVal(loan.totalPaidCapital)) + capitalPaidInThisCycle;
+      
+      if (loan.interestType === 'SIMPLE') {
+          let periodRate = parseVal(loan.interestRate) / 100;
+          if (loan.frequency === 'SEMANAL') periodRate /= 4;
+          else if (loan.frequency === 'DIARIO') periodRate /= 30;
+
+          const dynamicInterest = principalAtStartOfCycle * periodRate;
+          let extraAcordo = 0;
+          if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
+          return { interest: dynamicInterest + extraAcordo, capital: 0, total: dynamicInterest + extraAcordo };
+      } else {
+          const totalReceivable = parseVal(loan.amount) + parseVal(loan.projectedProfit);
+          const originalInstallments = Math.max(1, Math.round(totalReceivable / parseVal(loan.installmentValue)));
+          const flatInterest = Math.max(0, parseVal(loan.projectedProfit) / originalInstallments);
+          
+          let extraAcordo = 0;
+          if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
+
+          const globalRemainingCap = Math.max(0, parseVal(loan.amount) - parseVal(loan.totalPaidCapital));
+          const theoreticalCapital = parseVal(loan.installmentValue) - flatInterest;
+          const flatCapital = Math.max(0, Math.min(globalRemainingCap, theoreticalCapital));
+
+          return { interest: flatInterest + extraAcordo, capital: flatCapital, total: flatCapital + flatInterest + extraAcordo };
+      }
+  };
+
+  const getLoanRealStatus = (loan: any) => {
+      const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
+      if (balance <= 0.10 || loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
+      
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      const dueLocalDate = parseLocalDate(loan.nextDue);
+
+      if (loan.status === 'Acordo') {
+          if (dueLocalDate < today) return 'Atrasado';
+          return 'Acordo';
+      }
+
+      const currentMonth = dueLocalDate.getMonth();
+      const currentYear = dueLocalDate.getFullYear();
+      const loanFreq = loan.frequency || 'MENSAL';
+
+      let totalPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
+          const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+          let isSameCycle = false;
+          if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
+              isSameCycle = hDue.getDate() === dueLocalDate.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+          } else {
+              isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+          }
+
+          if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+              return acc + parseVal(h.amount);
+          }
+          return acc;
+      }, 0);
+
+      if (loanFreq === 'MENSAL') {
+          const validSlices = (loan.multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+          if (validSlices.length > 0) {
+              let tempPaidInCycle = totalPaidInCycle;
+              const sortedSlices = [...validSlices].sort((a: any, b: any) => Number(a.day) - Number(b.day));
+              let todasFatiasPagas = true;
+
+              for (const slice of sortedSlices) {
+                  const baseAmount = parseVal(slice.amount);
+                  const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+                  if (tempPaidInCycle >= (baseAmount - 0.10)) {
+                      tempPaidInCycle -= baseAmount;
+                  } else {
+                      todasFatiasPagas = false;
+                      if (sliceDate < today) return 'Atrasado'; 
+                      else return 'Em Dia'; 
+                  }
+              }
+              if (todasFatiasPagas) return 'Em Dia'; 
+          }
+      }
+
+      const breakdown = getSyncedBreakdown(loan);
+      const requiredTotal = loan.interestType === 'SIMPLE' ? breakdown.interest : breakdown.total;
+      
+      if (requiredTotal > 0.10 && totalPaidInCycle >= (requiredTotal - 0.10)) return 'Em Dia';
+      if (dueLocalDate < today) return 'Atrasado';
+      
+      return 'Em Dia';
+  };
+
   const getClientDebtStatus = (clientName: string) => {
-    const clientLoans = loans.filter(l => l.client === clientName);
-    if (clientLoans.length === 0) return { label: 'Sem Histórico', color: 'gray' };
-    
-    // 🚀 FIX: Usa a mesma régua matemática inteligente do Dashboard
-    const activeLoans = clientLoans.filter(l => {
-        if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return false;
-        const balance = parseFloat(l.amount as any) - parseFloat(l.totalPaidCapital as any);
-        if (balance <= 0.10) return false;
-        if (l.interestType !== 'SIMPLE' && Number(l.installments) <= 0) return false;
-        return true;
-    });
+      const clientLoans = loans.filter(l => l.client === clientName);
+      if (clientLoans.length === 0) return { label: 'Sem Histórico', color: 'gray' };
 
-    if (activeLoans.length === 0) return { label: 'Quitado', color: 'green' };
+      // 1. Filtra contratos ativos
+      const activeLoans = clientLoans.filter(l => {
+          if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return false;
+          const balance = parseVal(l.amount) - parseVal(l.totalPaidCapital);
+          if (balance <= 0.10) return false;
+          return true;
+      });
 
-    const hasOverdue = activeLoans.some(l => {
-        if (l.status === 'Acordo') return false;
-        
-        const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseFloat(s.amount) > 0) || [];
-        const today = new Date();
-        today.setHours(0,0,0,0);
-        const dueLocalDate = parseLocalDate(l.nextDue);
+      if (activeLoans.length === 0) return { label: 'Quitado', color: 'green' };
 
-        if (validSlices.length > 0) {
-            const currentMonth = dueLocalDate.getMonth();
-            const currentYear = dueLocalDate.getFullYear();
-            for (const slice of validSlices) {
-                const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
-                if (sliceDate < today) {
-                    const baseAmount = parseFloat(slice.amount);
-                    const slicePaidAmount = (l.history || []).reduce((acc: any, h: any) => {
-                        const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-                        if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                            return acc + parseFloat(h.amount);
-                        }
-                        return acc;
-                    }, 0);
-                    if (slicePaidAmount < (baseAmount - 0.05)) return true;
-                }
-            }
-            return false;
-        }
-        return dueLocalDate < today;
-    });
-    
-    if (hasOverdue) return { label: 'Inadimplente', color: 'red' };
-    
-    const hasAcordo = activeLoans.some(l => l.status === 'Acordo');
-    if (hasAcordo) return { label: 'Em Acordo', color: 'orange' };
-    
-    return { label: 'Em Dia (Ativo)', color: 'blue' };
+      // 2. SIMULAÇÃO EXATA DO ECRÃ "OVERDUE" (BOLA DE NEVE)
+      // Um cliente só é Inadimplente se ele realmente gerasse uma Bola de Neve no Dashboard
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      let isReallyOverdue = false;
+
+      for (const l of activeLoans) {
+          const realStatus = getLoanRealStatus(l);
+          if (realStatus === 'Atrasado') {
+              // Verifica se há alguma fatia (multiDate) vencida que gera Bola de Neve real
+              const validSlices = (l as any).multiDates?.filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0) || [];
+              
+              if (validSlices.length > 0) {
+                  const currentMonth = parseLocalDate(l.nextDue).getMonth();
+                  const currentYear = parseLocalDate(l.nextDue).getFullYear();
+                  
+                  let totalPaidInCycle = (l.history || []).reduce((acc: number, h: any) => {
+                      const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+                      if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Ajuste de Migração' && h.type !== 'Acordo') {
+                          return acc + parseVal(h.amount);
+                      }
+                      return acc;
+                  }, 0);
+
+                  const sortedSlices = [...validSlices].sort((a: any, b: any) => Number(a.day) - Number(b.day));
+                  let tempPaid = totalPaidInCycle;
+                  
+                  for (const s of sortedSlices) {
+                      const sliceBaseAmount = parseVal(s.amount);
+                      const sliceDate = new Date(currentYear, currentMonth, Number(s.day));
+                      const slicePaidAmount = Math.min(sliceBaseAmount, tempPaid);
+                      tempPaid = Math.max(0, tempPaid - sliceBaseAmount);
+                      
+                      const isPaid = slicePaidAmount >= (sliceBaseAmount - 10.00);
+                      if (!isPaid && sliceDate < today) {
+                          isReallyOverdue = true;
+                          break;
+                      }
+                  }
+              } else {
+                  // Lógica Padrão: Venceu e não pagou o total
+                  const dueLocalDate = parseLocalDate(l.nextDue);
+                  if (dueLocalDate < today) {
+                      isReallyOverdue = true;
+                  }
+              }
+          }
+          if (isReallyOverdue) break;
+      }
+
+      if (isReallyOverdue) return { label: 'Inadimplente', color: 'red' };
+      
+      const hasAcordo = activeLoans.some(l => getLoanRealStatus(l) === 'Acordo');
+      if (hasAcordo) return { label: 'Em Acordo', color: 'orange' };
+      
+      return { label: 'Em Dia (Ativo)', color: 'blue' };
   };
 
   // 🚀 MOTOR DE MÉTRICAS UNIFICADO: Sincroniza a contagem dos Cards diretamente com os filtros visuais da tabela

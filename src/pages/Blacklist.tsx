@@ -233,7 +233,8 @@ const Blacklist = () => {
     e.preventDefault();
     if (selectedUserForUnblock) {
       try {
-        await blacklistService.delete(selectedUserForUnblock.id);
+        // 🚀 Agora envia o ID, o Nome, o CPF e o Motivo de Desbloqueio que o usuário escolheu no Modal
+        await blacklistService.delete(selectedUserForUnblock.id, selectedUserForUnblock.name, selectedUserForUnblock.cpf, unblockReason);
         
         // 🚀 DESBLOQUEIA NA BASE DE CLIENTES PARA VOLTAR ÀS MÉTRICAS
         const cleanDocs = (selectedUserForUnblock.cpf || '').replace(/\D/g, '');

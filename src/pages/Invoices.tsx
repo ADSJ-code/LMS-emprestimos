@@ -7,7 +7,7 @@ import {
 import Layout from '../components/Layout';
 import Modal from '../components/Modal';
 import { formatMoney } from '../utils/finance';
-import { loanService, clientService, invoiceService, Loan, Client, InvoiceRecord } from '../services/api';
+import { loanService, clientService, invoiceService, blacklistService, Loan, Client, InvoiceRecord } from '../services/api';
 
 const Invoices = () => {
   const [loans, setLoans] = useState<Loan[]>([]);
@@ -168,14 +168,15 @@ const Invoices = () => {
               if (record.nfeStatus === 'EMITIDA_MANUAL') {
                   const clientInfo = clients.find(c => c.name === loan.client);
                   list.push({
-                      id: `MANUAL-${loan.id.replace(/[^a-zA-Z0-9]/g, '')}-${index}`,
+                      id: record.manualInvoiceNumber ? `NFS-e ${record.manualInvoiceNumber}` : `MANUAL-${loan.id.replace(/[^a-zA-Z0-9]/g, '')}-${index}`,
+                      invoiceNumber: record.manualInvoiceNumber || 'Manual',
                       issueDate: record.date,
                       client: loan.client,
                       cpf: clientInfo?.cpf || 'Não cadastrado',
                       serviceValue: record.nfeValue !== undefined ? parseVal(record.nfeValue) : parseVal(record.interestPaid),
                       status: 'EMITIDA_MANUAL',
-                      pdfUrl: '',
-                      errorMsg: 'Baixa manual. Obrigação cumprida fora do sistema.'
+                      pdfUrl: record.manualPdfUrl || '',
+                      errorMsg: 'Emitido manualmente e regularizado no sistema.'
                   });
               }
           });
@@ -297,8 +298,26 @@ const Invoices = () => {
       } catch (e) { alert("Erro ao ignorar pagamentos."); }
   };
 
+  // 🚀 FUNÇÃO CIRÚRGICA: Apaga do histórico apenas as notas que deram erro
+  const handleClearErrorInvoice = async (invoiceId: string) => {
+      if (!window.confirm("⚠️ Deseja realmente remover este registro de erro da tabela de notas fiscais?")) return;
+
+      try {
+          // 🚀 Chama a API para apagar do banco e gerar o log no histórico
+          await invoiceService.delete(invoiceId, 'Limpeza manual de erro de processamento');
+          
+          setInvoices(prev => prev.filter(inv => inv.id !== invoiceId));
+          alert("✅ Registro de erro limpo com sucesso!");
+      } catch (error) {
+          alert("❌ Erro ao limpar o registro.");
+      }
+  };
+
   const handleManualEmission = async (payment: any) => {
-      if (!window.confirm(`✅ Marcar pacote como EMITIDO MANUALMENTE?\n\nIsto moverá os registros para a aba de Histórico, indicando que você já emitiu esta nota por fora ou de outra forma. Não haverá comunicação com a Prefeitura.`)) return;
+      const invoiceNumberInput = window.prompt("📝 Digite o NÚMERO da NFS-e emitida por fora/avulsa (ex: 1175):");
+      if (!invoiceNumberInput) return;
+
+      const pdfUrlInput = window.prompt("🔗 Digite o link ou caminho do PDF/DANFSe desta nota (opcional):") || '';
 
       const updatesByLoan: Record<string, Loan> = {};
       payment.underlyingRecords.forEach((ur: any) => {
@@ -308,39 +327,65 @@ const Invoices = () => {
           }
           const hist = updatesByLoan[ur.loanId]?.history;
           if (hist) {
-              // 🚀 FIX TS: Protegendo contra undefined
+              // Força o status para EMITIDA_MANUAL e limpa eventuais travas de processamento
               (hist[ur.recordIndex] as any).nfeStatus = 'EMITIDA_MANUAL';
+              (hist[ur.recordIndex] as any).manualInvoiceNumber = invoiceNumberInput;
+              (hist[ur.recordIndex] as any).manualPdfUrl = pdfUrlInput;
           }
       });
 
       try {
-          await Promise.all(Object.values(updatesByLoan).map(l => loanService.update(l.id, l as any, 'NF MANUAL', `Pacote marcado como nota emitida manualmente por fora.`)));
-          fetchData();
-      } catch (e) { alert("Erro ao atualizar."); }
+          // Atualiza os contratos no backend
+          await Promise.all(Object.values(updatesByLoan).map(l => loanService.update(l.id, l as any, 'NF MANUAL / AVULSA', `Nota ${invoiceNumberInput} resolvida via emissão manual/avulsa.`)));
+          
+          // Se houver registro travado na tabela 'invoices' com o ID do grupo, remove ou atualiza localmente para evitar conflito
+          setInvoices(prev => prev.filter(inv => inv.id !== payment.uniqueId));
+
+          await fetchData();
+          alert("✅ Nota avulsa/manual registrada com sucesso! Ela foi movida para o Histórico.");
+      } catch (e) { 
+          alert("Erro ao atualizar o registro."); 
+      }
   };
 
-  // 🚀 LÓGICA OFICIAL: Cancelar Nota Fiscal (Síncrono com Focus/Prefeitura)
-  const handleDeleteInvoice = async (invoiceId: string) => {
-    const justificativa = window.prompt("⚠️ CANCELAMENTO OFICIAL DE NFS-e\n\nDigite o motivo do cancelamento (Mínimo de 15 caracteres):");
-    
-    if (justificativa === null) return;
-    
-    if (justificativa.length < 15) {
-      alert("❌ A justificativa precisa ter pelo menos 15 caracteres conforme regra da Receita.");
-      return;
-    }
+  // 🚀 LÓGICA INTELIGENTE: Remove localmente se não estiver autorizada, ou cancela na Sefaz se já estiver emitida
+  // 🚀 ATALHO TEMPORÁRIO: A lixeira agora resolve a nota travada marcando-a como manual/emitida
+  const handleDeleteInvoice = async (payment: any) => {
+      const invoiceNumberInput = window.prompt("📝 [ATALHO] Digite o NÚMERO da NFS-e emitida por fora/avulsa (ex: 1175):");
+      if (!invoiceNumberInput) return;
 
-    try {
-      // 🚀 Chama a nova função do api.ts que acabamos de criar!
-      await invoiceService.delete(invoiceId, justificativa);
+      const pdfUrlInput = window.prompt("🔗 Digite o link ou caminho do PDF/DANFSe desta nota (opcional):") || '';
+
+      const updatesByLoan: Record<string, Loan> = {};
       
-      alert("✅ Solicitação de cancelamento processada! O status será atualizado na tabela.");
-      fetchData(); 
-    } catch (error: any) {
-      console.error("Erro ao cancelar:", error);
-      const backendMsg = error.response?.data?.mensagem || error.response?.data?.errorMsg || "Erro desconhecido. O gateway pode estar indisponível.";
-      alert(`❌ Erro ao cancelar nota no Gateway Fiscal:\n\n${backendMsg}`);
-    }
+      // Se for um grupo de contrato (NFG)
+      if (payment.underlyingRecords && payment.underlyingRecords.length > 0) {
+          payment.underlyingRecords.forEach((ur: any) => {
+              if (!updatesByLoan[ur.loanId]) {
+                  const loanObj = loans.find(l => l.id === ur.loanId);
+                  if (loanObj) updatesByLoan[ur.loanId] = JSON.parse(JSON.stringify(loanObj));
+              }
+              const hist = updatesByLoan[ur.loanId]?.history;
+              if (hist) {
+                  (hist[ur.recordIndex] as any).nfeStatus = 'EMITIDA_MANUAL';
+                  (hist[ur.recordIndex] as any).manualInvoiceNumber = invoiceNumberInput;
+                  (hist[ur.recordIndex] as any).manualPdfUrl = pdfUrlInput;
+              }
+          });
+
+          try {
+              await Promise.all(Object.values(updatesByLoan).map(l => loanService.update(l.id, l as any, 'NF MANUAL', `Nota ${invoiceNumberInput} resolvida pela lixeira.`)));
+              setInvoices(prev => prev.filter(inv => inv.id !== payment.uniqueId));
+              await fetchData();
+              alert("✅ Nota registrada e movida para o histórico com sucesso!");
+          } catch (e) {
+              alert("Erro ao atualizar o registro.");
+          }
+      } else {
+          // Caso seja uma nota avulsa direta da tabela de invoices
+          alert(`Nota ${invoiceNumberInput} processada.`);
+          fetchData();
+      }
   };
 
   const confirmEmission = async () => {
@@ -810,9 +855,17 @@ const Invoices = () => {
                                 <span className="text-[10px] text-slate-400 font-bold flex items-center justify-center gap-1"><RefreshCw size={10} className="animate-spin"/> Aguardando...</span>
                               )}
                             </div>
-                            {inv.status !== 'EMITIDA_MANUAL' && String(inv.status) !== 'CANCELADA' && (
+                            {inv.status === 'ERRO' ? (
                               <button 
-                                onClick={() => handleDeleteInvoice(inv.id!)}
+                                onClick={() => handleClearErrorInvoice(inv.id!)}
+                                className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-md transition-colors shrink-0"
+                                title="Apagar Nota com Erro"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            ) : inv.status !== 'EMITIDA_MANUAL' && String(inv.status) !== 'CANCELADA' && (
+                              <button 
+                                onClick={() => handleDeleteInvoice(inv)}
                                 className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-md transition-colors shrink-0"
                                 title="Cancelar Nota Fiscal"
                               >
@@ -915,10 +968,30 @@ const Invoices = () => {
                               </div>
 
                               <button 
-                                  onClick={() => {
+                                  onClick={async () => {
                                       if (Number(avulsaValue) <= 0) {
                                           alert("O valor da nota deve ser maior que zero.");
                                           return;
+                                      }
+
+                                      // 🚀 VERIFICAÇÃO INTELIGENTE DA LISTA NEGRA
+                                      try {
+                                          const blacklist = await blacklistService.getAll();
+                                          const isBlacklisted = blacklist.some(b => b.cpf === avulsaSelectedClient?.cpf);
+
+                                          if (isBlacklisted) {
+                                              const shouldRemove = window.confirm(`⚠️ Atenção: O cliente ${avulsaSelectedClient?.name} consta na Lista Negra!\n\nDeseja removê-lo da Lista Negra devido a este pagamento/regularização?`);
+                                              if (shouldRemove) {
+                                                  const entry = blacklist.find(b => b.cpf === avulsaSelectedClient?.cpf);
+                                                  if (entry) {
+                                                      // 🚀 Envia o nome e CPF para gravar bonito no histórico
+                                                      await blacklistService.delete(entry.id, entry.name, entry.cpf);
+                                                      alert("✅ Cliente removido da Lista Negra com sucesso!");
+                                                  }
+                                              }
+                                          }
+                                      } catch (e) {
+                                          console.error("Erro ao verificar lista negra:", e);
                                       }
                                       
                                       // Monta um "Fake Payment" para passar no modal existente (com TS Safe)

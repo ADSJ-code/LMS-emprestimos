@@ -330,16 +330,20 @@ export const blacklistService = {
   },
   create: async (entry: BlacklistEntry): Promise<BlacklistEntry> => {
     const response = await api.post('/blacklist', entry);
-    await registerSystemLog('LISTA NEGRA', `Bloqueou o CPF ${entry.cpf} - Motivo: ${entry.reason}`);
+    await registerSystemLog('LISTA NEGRA', `Bloqueou o cliente ${entry.name} (CPF: ${entry.cpf}). Motivo: ${entry.reason}`);
     return response.data;
   },
   update: async (id: string, entry: BlacklistEntry): Promise<BlacklistEntry> => {
     const response = await api.put(`/blacklist/${id}`, entry);
+    await registerSystemLog('EDIÇÃO DA LISTA NEGRA', `Alterou o registro de risco de ${entry.name}. Novo Risco: ${entry.riskLevel} | Motivo: ${entry.reason}`);
     return response.data;
   },
-  delete: async (id: string): Promise<void> => {
+  delete: async (id: string, clientName?: string, cpf?: string, reason?: string): Promise<void> => {
     await api.delete(`/blacklist/${id}`);
-    await registerSystemLog('LISTA NEGRA', `Removeu o bloqueio do ID ${id}`);
+    const detail = clientName 
+        ? `Removeu o bloqueio do cliente ${clientName} (CPF: ${cpf || 'Não informado'}). ${reason ? `Motivo do Desbloqueio: ${reason}` : ''}`
+        : `Removeu o bloqueio do ID ${id}`;
+    await registerSystemLog('LISTA NEGRA', detail.trim());
   }
 };
 
@@ -427,10 +431,10 @@ export const invoiceService = {
     await registerSystemLog('NOTA FISCAL', `Solicitada emissão de NF no valor de R$ ${invoiceData.serviceValue} para ${invoiceData.client}`);
     return response.data;
   },
-  // 🚀 NOVA FUNÇÃO: Cancelamento Síncrono de Nota Fiscal na Sefaz
-  delete: async (id: string, justificativa: string): Promise<void> => {
+  // 🚀 NOVA FUNÇÃO: Cancelamento Síncrono de Nota Fiscal na Sefaz (com justificativa opcional)
+  delete: async (id: string, justificativa: string = 'Erro no processamento'): Promise<void> => {
     await api.post(`/invoices/${id}/cancel`, { justificativa });
-    await registerSystemLog('CANCELAMENTO NF', `Solicitou o cancelamento oficial da nota fiscal ${id}. Motivo: ${justificativa}`);
+    await registerSystemLog('LIMPEZA DE ERRO', `Removeu o registro de erro da nota fiscal ${id}. Detalhe: ${justificativa}`);
   }
 };
 

@@ -31,10 +31,10 @@ const History = () => {
   const determineLogType = (action: string, details: string): Log['type'] => {
     const text = (action + ' ' + details).toLowerCase();
     
-    if (text.includes('exclusão') || text.includes('deletado') || text.includes('crítica') || text.includes('bloqueio')) return 'critical';
+    if (text.includes('exclusão') || text.includes('deletado') || text.includes('crítica') || text.includes('bloqueio') || text.includes('lista negra')) return 'critical';
     if (text.includes('acordo')) return 'agreement';
-    if (text.includes('desfazer') || text.includes('estorno') || text.includes('reversão')) return 'undo';
-    if (text.includes('baixa') || text.includes('pagamento') || text.includes('parcela') || text.includes('juros')) return 'financial';
+    if (text.includes('desfazer') || text.includes('estorno') || text.includes('reversão') || text.includes('limpeza de erro')) return 'undo';
+    if (text.includes('baixa') || text.includes('pagamento') || text.includes('parcela') || text.includes('juros') || text.includes('nota fiscal')) return 'financial';
     if (text.includes('cliente') || text.includes('cadastro')) return 'client';
     
     return 'system';
