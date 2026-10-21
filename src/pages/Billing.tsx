@@ -492,8 +492,9 @@ const Billing = () => {
           
           let totalPaidInCycle = (loan.history || []).reduce((acc: any, h: any) => {
               const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
-              if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura')) {
-                  return acc + parseVal(h.amount);
+              if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                  const val = loan.interestType === 'SIMPLE' ? parseVal(h.interestPaid) : parseVal(h.amount);
+                  return acc + val;
               }
               return acc;
           }, 0);
@@ -513,9 +514,19 @@ const Billing = () => {
 
   // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
-      // 1. PRIORIDADE ABSOLUTA: Saldo Devedor. Se não deve capital, está Quitado.
+      // 1. PRIORIDADE ABSOLUTA: Saldo Devedor e Juros Pendentes.
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
-      if (balance <= 0.10 || loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') {
+      const isSimple = loan.interestType === 'SIMPLE';
+      const expectedProfit = parseVal(loan.projectedProfit) || 0;
+      const paidProfit = parseVal(loan.totalPaidInterest) || 0;
+      const interestBalance = expectedProfit - paidProfit;
+
+      if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') {
+          return 'Quitado'; 
+      }
+      
+      // Se quitou o capital e não deve juros projetados (ou é juros simples), então está Quitado!
+      if (balance <= 0.10 && (isSimple || interestBalance <= 0.10)) {
           return 'Quitado'; 
       }
       
@@ -547,7 +558,9 @@ const Billing = () => {
           }
 
           if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
-              return acc + parseVal(h.amount);
+              // 🚀 FIX VÍDEOS 1 E 2: Em Juros Simples, apenas o pagamento de Juros conta para abater a fatia!
+              const val = loan.interestType === 'SIMPLE' ? parseVal(h.interestPaid) : parseVal(h.amount);
+              return acc + val;
           }
           return acc;
       }, 0);
@@ -1313,7 +1326,8 @@ const Billing = () => {
         let tempPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
             const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
             if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
-                return acc + parseVal(h.amount);
+                const val = loan.interestType === 'SIMPLE' ? parseVal(h.interestPaid) : parseVal(h.amount);
+                return acc + val;
             }
             return acc;
         }, 0);
@@ -1402,8 +1416,9 @@ const Billing = () => {
         autoInterest = remainingInt > 0.05 ? remainingInt.toFixed(2) : '';
     }
 
-    setPayCapital(autoCapital);
-    setPayInterest(autoInterest);
+    // 🚀 FIX INPUT: Se autoCapital ou autoInterest for '0.00' do rateio, deixa vazio para evitar digitar "0.00204"
+    setPayCapital(autoCapital === '0.00' ? '' : autoCapital);
+    setPayInterest(autoInterest === '0.00' ? '' : autoInterest);
     setSettleInterest(false);
     setIsDiscountSettlement(false); // 🚀 Limpa a checkbox de Desconto ao abrir novo modal
     setSettlementDiscount(''); // Limpa o campo de desconto opcional
@@ -1522,7 +1537,7 @@ const Billing = () => {
             noteText += ` [QUITAÇÃO TOTAL]`;
         }
     } 
-    else if (balance <= 0.10) {
+    else if (balance <= 0.10 && (isSimple || ((updatedLoan.projectedProfit || 0) - (updatedLoan.totalPaidInterest || 0)) <= 0.10)) {
         updatedLoan.status = 'Quitado';
         updatedLoan.installments = 0;
         if (isSimple) updatedLoan.installmentValue = 0;
@@ -1604,19 +1619,29 @@ const Billing = () => {
             let periodRate = updatedLoan.interestRate / 100;
             if (updatedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
             else if (updatedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
+            
+            const oldInstallmentValue = updatedLoan.installmentValue;
             updatedLoan.installmentValue = balance * periodRate;
 
             if (updatedLoan.multiDates && updatedLoan.multiDates.length > 0) {
-                const oldTotalSlices = updatedLoan.multiDates.reduce((acc, s) => acc + (Number(s.amount) || 0), 0);
-                if (oldTotalSlices > 0) {
-                    const newSlices = updatedLoan.multiDates.map(s => {
-                        const ratio = (Number(s.amount) || 0) / oldTotalSlices;
-                        return { ...s, amount: parseFloat((updatedLoan.installmentValue * ratio).toFixed(2)) };
+                const discountAmost = oldInstallmentValue - updatedLoan.installmentValue;
+                const safeMultiDates = updatedLoan.multiDates; 
+                
+                if (discountAmost > 0) {
+                    // 🚀 FIX HÉLIO MULTI-DATA: Descobre qual fatia foi efetivamente paga baseada no Juro que acabou de ser processado (valInterest)
+                    // Ao invés de depender do clique do mouse, olhamos a matemática real para ter certeza absoluta.
+                    let targetDay = safeMultiDates[safeMultiDates.length - 1].day; // Fallback
+                    
+                    // Procura a fatia cujo valor bata exatamente (ou quase) com o Juro pago agora.
+                    const matchedSlice = safeMultiDates.find((s: any) => Math.abs(Number(s.amount) - valInterest) < 2.00);
+                    if (matchedSlice) targetDay = matchedSlice.day;
+                    
+                    updatedLoan.multiDates = safeMultiDates.map((slice: any) => {
+                        if (slice.day == targetDay) {
+                            return { ...slice, amount: parseFloat(Math.max(0, Number(slice.amount) - discountAmost).toFixed(2)) };
+                        }
+                        return slice;
                     });
-                    const newTotal = newSlices.reduce((acc, s) => acc + s.amount, 0);
-                    const diff = updatedLoan.installmentValue - newTotal;
-                    if (diff !== 0) newSlices[newSlices.length - 1].amount = parseFloat((newSlices[newSlices.length - 1].amount + diff).toFixed(2));
-                    updatedLoan.multiDates = newSlices;
                 }
             }
         }
@@ -2812,20 +2837,25 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     let totalSlicesCalc = 0;
                     let firstOverdueSliceDate: string | null = null;
                     
-                    for (const slice of slices) {
+                    let tempPaidForPenalty = (selectedLoan.history || []).reduce((acc: number, h: any) => {
+                        const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                        if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                            const val = selectedLoan.interestType === 'SIMPLE' ? parseVal(h.interestPaid) : parseVal(h.amount);
+                            return acc + val;
+                        }
+                        return acc;
+                    }, 0);
+
+                    const sortedSlices = [...slices].sort((a: any, b: any) => Number(a.day) - Number(b.day));
+
+                    for (const slice of sortedSlices) {
                         const baseAmount = Number(slice.amount) || 0;
                         const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                         
-                        const slicePaidAmount = (selectedLoan.history || []).reduce((acc, h) => {
-                            const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
-                            if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Dia ${slice.day}`)) {
-                                return acc + h.amount;
-                            }
-                            return acc;
-                        }, 0);
+                        const slicePaidAmount = Math.min(baseAmount, tempPaidForPenalty);
+                        tempPaidForPenalty = Math.max(0, tempPaidForPenalty - baseAmount);
 
                         const isPaid = slicePaidAmount >= (baseAmount - 0.05);
-                        let slicePenalty = 0;
                         
                         if (!isPaid && sliceDate < today && selectedLoan.status !== 'Pago' && selectedLoan.status !== 'Quitado') {
                             isFatiaAtrasada = true;
@@ -2836,16 +2866,14 @@ const handleFinalSave = async (e: React.FormEvent) => {
                             const ratio = baseAmount / (breakdown.total || 1);
                             const sliceOverdue = calculateOverdueValue(remainingSlice, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount * ratio);
                             
-                            // 🚀 FIX MODAL: Isola a soma apenas das fatias que venceram
                             totalSlicesCalc += sliceOverdue;
-                        } else if (!isFatiaAtrasada) {
-                            // Se não há atraso, vai mantendo a soma do ciclo normal
+                        } else {
                             totalSlicesCalc += Math.max(0, baseAmount - slicePaidAmount);
                         }
                     }
                     displayTotal = totalSlicesCalc;
                     if (firstOverdueSliceDate) bannerDateStr = firstOverdueSliceDate;
-                } else if (status === 'Atrasado') {
+                }else if (status === 'Atrasado') {
                     displayTotal = calculateOverdueValue(breakdown.total, selectedLoan.nextDue, 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount);
                 }
 
@@ -2890,7 +2918,8 @@ const handleFinalSave = async (e: React.FormEvent) => {
                             let tempPaidUI = (selectedLoan.history || []).reduce((acc: number, h: any) => {
                                 const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
                                 if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
-                                    return acc + parseVal(h.amount);
+                                    const val = selectedLoan.interestType === 'SIMPLE' ? parseVal(h.interestPaid) : parseVal(h.amount);
+                                    return acc + val;
                                 }
                                 return acc;
                             }, 0);
