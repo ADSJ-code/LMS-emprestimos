@@ -361,7 +361,10 @@ const Billing = () => {
         if (loan.frequency === 'SEMANAL') periodRate /= 4;
         else if (loan.frequency === 'DIARIO') periodRate /= 30;
 
-        const dynamicInterest = principalAtStartOfCycle * periodRate;
+        const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+        const slicesSum = validSlices.reduce((acc: number, s: any) => acc + parseVal(s.amount), 0);
+
+        const dynamicInterest = slicesSum > 0 ? slicesSum : (principalAtStartOfCycle * periodRate);
         let extraAcordo = 0;
         if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
         
@@ -493,8 +496,14 @@ const Billing = () => {
           let totalPaidInCycle = (loan.history || []).reduce((acc: any, h: any) => {
               const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
               if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
-                  const val = loan.interestType === 'SIMPLE' ? parseVal(h.interestPaid) : parseVal(h.amount);
-                  return acc + val;
+                  if (loan.interestType === 'SIMPLE') {
+                      let pRate = parseVal(loan.interestRate) / 100;
+                      if (loan.frequency === 'SEMANAL') pRate /= 4;
+                      else if (loan.frequency === 'DIARIO') pRate /= 30;
+                      const disc = parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0 ? (parseVal(h.capitalPaid) * pRate) : 0;
+                      return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+                  }
+                  return acc + parseVal(h.amount);
               }
               return acc;
           }, 0);
@@ -558,9 +567,15 @@ const Billing = () => {
           }
 
           if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
-              // 🚀 FIX VÍDEOS 1 E 2: Em Juros Simples, apenas o pagamento de Juros conta para abater a fatia!
-              const val = loan.interestType === 'SIMPLE' ? parseVal(h.interestPaid) : parseVal(h.amount);
-              return acc + val;
+              // 🚀 FIX VÍDEOS 1 E 2: Em Juros Simples, apenas o pagamento líquido de Juros conta para a fatia!
+              if (loan.interestType === 'SIMPLE') {
+                  let pRate = parseVal(loan.interestRate) / 100;
+                  if (loan.frequency === 'SEMANAL') pRate /= 4;
+                  else if (loan.frequency === 'DIARIO') pRate /= 30;
+                  const disc = ( (loan as any).multiDates?.length > 0 && parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0 ) ? (parseVal(h.capitalPaid) * pRate) : 0;
+                  return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+              }
+              return acc + parseVal(h.amount);
           }
           return acc;
       }, 0);
@@ -732,7 +747,16 @@ const Billing = () => {
               currentCycle++; 
               accPaidInCurrentCycle = 0; // Resetou o ciclo
           } else {
-              accPaidInCurrentCycle += Number(p.amount) || 0; // Soma o picadinho pago
+              if (isSimple) {
+                  let pRate = parseVal(loan.interestRate) / 100;
+                  if (loan.frequency === 'SEMANAL') pRate /= 4;
+                  else if (loan.frequency === 'DIARIO') pRate /= 30;
+                  const hasSlices = ((loan as any).multiDates || []).length > 0;
+                  const disc = (hasSlices && parseVal(p.capitalPaid) > 0 && parseVal(p.interestPaid) > 0) ? (parseVal(p.capitalPaid) * pRate) : 0;
+                  accPaidInCurrentCycle += Math.max(0, parseVal(p.interestPaid) - disc);
+              } else {
+                  accPaidInCurrentCycle += Number(p.amount) || 0; // Soma o picadinho pago
+              }
           }
       });
 
@@ -857,6 +881,13 @@ const Billing = () => {
                let tempPaidInCycle = (l.history || []).reduce((acc: number, h: any) => {
                    const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
                    if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                       if (l.interestType === 'SIMPLE') {
+                           let pRate = parseVal(l.interestRate) / 100;
+                           if (l.frequency === 'SEMANAL') pRate /= 4;
+                           else if (l.frequency === 'DIARIO') pRate /= 30;
+                           const disc = parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0 ? (parseVal(h.capitalPaid) * pRate) : 0;
+                           return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+                       }
                        return acc + parseVal(h.amount);
                    }
                    return acc;
@@ -900,6 +931,13 @@ const Billing = () => {
                let tempPaidInCycle = (l.history || []).reduce((acc: number, h: any) => {
                    const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
                    if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                       if (l.interestType === 'SIMPLE') {
+                           let pRate = parseVal(l.interestRate) / 100;
+                           if (l.frequency === 'SEMANAL') pRate /= 4;
+                           else if (l.frequency === 'DIARIO') pRate /= 30;
+                           const disc = parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0 ? (parseVal(h.capitalPaid) * pRate) : 0;
+                           return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+                       }
                        return acc + parseVal(h.amount);
                    }
                    return acc;
@@ -951,6 +989,14 @@ const Billing = () => {
               }
 
               if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                  if (l.interestType === 'SIMPLE') {
+                      let pRate = parseVal(l.interestRate) / 100;
+                      if (l.frequency === 'SEMANAL') pRate /= 4;
+                      else if (l.frequency === 'DIARIO') pRate /= 30;
+                      const hasSlices = ((l as any).multiDates || []).length > 0;
+                      const disc = (hasSlices && parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0) ? (parseVal(h.capitalPaid) * pRate) : 0;
+                      return sum + Math.max(0, parseVal(h.interestPaid) - disc);
+                  }
                   return sum + parseVal(h.amount);
               }
               return sum;
@@ -1197,6 +1243,14 @@ const Billing = () => {
                   }
 
                   if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                      if (isSimple) {
+                          let pRate = parseVal(loan.interestRate) / 100;
+                          if (loan.frequency === 'SEMANAL') pRate /= 4;
+                          else if (loan.frequency === 'DIARIO') pRate /= 30;
+                          const hasSlices = ((loan as any).multiDates || []).length > 0;
+                          const disc = (hasSlices && parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0) ? (parseVal(h.capitalPaid) * pRate) : 0;
+                          return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+                      }
                       return acc + parseVal(h.amount);
                   }
                   return acc;
@@ -1303,7 +1357,11 @@ const Billing = () => {
             }
 
             if (isSameCycle && h.type !== 'Abertura' && h.type !== 'Ajuste de Migração' && h.type !== 'Acordo') {
-                accInt += parseVal(h.interestPaid);
+                let pRate = parseVal(loan.interestRate) / 100;
+                if (loan.frequency === 'SEMANAL') pRate /= 4;
+                else if (loan.frequency === 'DIARIO') pRate /= 30;
+                const disc = (loan.interestType === 'SIMPLE' && slices.length > 0 && parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0) ? (parseVal(h.capitalPaid) * pRate) : 0;
+                accInt += Math.max(0, parseVal(h.interestPaid) - disc);
                 accCap += parseVal(h.capitalPaid);
             }
         });
@@ -1326,8 +1384,14 @@ const Billing = () => {
         let tempPaidInCycle = (loan.history || []).reduce((acc: number, h: any) => {
             const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
             if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
-                const val = loan.interestType === 'SIMPLE' ? parseVal(h.interestPaid) : parseVal(h.amount);
-                return acc + val;
+                if (loan.interestType === 'SIMPLE') {
+                    let pRate = parseVal(loan.interestRate) / 100;
+                    if (loan.frequency === 'SEMANAL') pRate /= 4;
+                    else if (loan.frequency === 'DIARIO') pRate /= 30;
+                    const disc = parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0 ? (parseVal(h.capitalPaid) * pRate) : 0;
+                    return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+                }
+                return acc + parseVal(h.amount);
             }
             return acc;
         }, 0);
@@ -1497,9 +1561,13 @@ const Billing = () => {
     if (selectedLoan.multiDates && selectedLoan.multiDates.length > 0) {
         totalRequiredInCycle = selectedLoan.multiDates.reduce((acc, s) => acc + (Number(s.amount) || 0), 0);
     }
-    const totalAccumulatedInCycle = valTotal + cycleAcc.interest + cycleAcc.capital;
+    // 🚀 FIX CRÍTICO: Em Juros Simples, capital amortizado NÃO conta para avançar o mês antes de pagar todas as fatias de juros!
+    const totalAccumulatedInCycle = isSimple 
+        ? (valInterest + cycleAcc.interest) 
+        : (valTotal + cycleAcc.interest + cycleAcc.capital);
 
-    // 🚀 EFEITO CASCATA FINAL: Agora o botão não carimba mais o Dia X. Ele só calcula se todo o dinheiro do mês bateu a meta!
+    // 🚀 Preserva o dia selecionado na tela antes de limpar a variável global
+    const selectedSliceDay = (window as any).lastSelectedDay;
     if ((window as any).lastSelectedDay) {
         delete (window as any).lastSelectedDay;
     }
@@ -1620,28 +1688,32 @@ const Billing = () => {
             if (updatedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
             else if (updatedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
             
-            const oldInstallmentValue = updatedLoan.installmentValue;
-            updatedLoan.installmentValue = balance * periodRate;
+            // 🚀 FIX CRISTIANO: Calcula EXATAMENTE quanto desconto essa amortização gerou (Ex: Amortizou 500, taxa 13% = Desconto de 65)
+            // Em vez de recalcular tudo e estragar arredondamentos manuais do Rodrigo, a gente só subtrai o desconto real!
+            const discountAmost = valCapital * periodRate;
+            
+            // A parcela global do contrato também sofre apenas esse desconto
+            updatedLoan.installmentValue = Math.max(0, updatedLoan.installmentValue - discountAmost);
 
             if (updatedLoan.multiDates && updatedLoan.multiDates.length > 0) {
-                const discountAmost = oldInstallmentValue - updatedLoan.installmentValue;
                 const safeMultiDates = updatedLoan.multiDates; 
                 
                 if (discountAmost > 0) {
-                    // 🚀 FIX HÉLIO MULTI-DATA: Descobre qual fatia foi efetivamente paga baseada no Juro que acabou de ser processado (valInterest)
-                    // Ao invés de depender do clique do mouse, olhamos a matemática real para ter certeza absoluta.
-                    let targetDay = safeMultiDates[safeMultiDates.length - 1].day; // Fallback
-                    
-                    // Procura a fatia cujo valor bata exatamente (ou quase) com o Juro pago agora.
-                    const matchedSlice = safeMultiDates.find((s: any) => Math.abs(Number(s.amount) - valInterest) < 2.00);
-                    if (matchedSlice) targetDay = matchedSlice.day;
+                    // 🚀 Prioridade 1: A fatia exata que o usuário selecionou no modal (resolve fatias de valores iguais como 560 e 560)
+                    let targetDay = selectedSliceDay;
+                    if (!targetDay) {
+                        const matchedSlice = safeMultiDates.find((s: any) => Math.abs(Number(s.amount) - valInterest) < 2.00);
+                        targetDay = matchedSlice ? matchedSlice.day : safeMultiDates[safeMultiDates.length - 1].day;
+                    }
                     
                     updatedLoan.multiDates = safeMultiDates.map((slice: any) => {
-                        if (slice.day == targetDay) {
+                        if (Number(slice.day) === Number(targetDay)) {
                             return { ...slice, amount: parseFloat(Math.max(0, Number(slice.amount) - discountAmost).toFixed(2)) };
                         }
                         return slice;
                     });
+                    updatedLoan.installmentValue = parseFloat(updatedLoan.multiDates.reduce((acc: number, s: any) => acc + (Number(s.amount) || 0), 0).toFixed(2));
+                    noteText += ` [Fatia Dia ${targetDay} reduzida em R$ ${formatMoney(discountAmost)}]`;
                 }
             }
         }
@@ -1720,7 +1792,21 @@ const Billing = () => {
             let periodRate = updatedLoan.interestRate / 100;
             if (updatedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
             else if (updatedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
-            updatedLoan.installmentValue = restoredBalance * periodRate;
+            const restoredDiscount = lastEntry.capitalPaid * periodRate;
+
+            if (updatedLoan.multiDates && updatedLoan.multiDates.length > 0) {
+                const dayMatch = lastEntry.note?.match(/\[Fatia Dia (\d+) reduzida/);
+                const targetDayToRestore = dayMatch ? Number(dayMatch[1]) : updatedLoan.multiDates[updatedLoan.multiDates.length - 1].day;
+                updatedLoan.multiDates = updatedLoan.multiDates.map((s: any) => {
+                    if (Number(s.day) === Number(targetDayToRestore)) {
+                        return { ...s, amount: parseFloat((Number(s.amount) + restoredDiscount).toFixed(2)) };
+                    }
+                    return s;
+                });
+                updatedLoan.installmentValue = parseFloat(updatedLoan.multiDates.reduce((acc: number, s: any) => acc + (Number(s.amount) || 0), 0).toFixed(2));
+            } else {
+                updatedLoan.installmentValue = restoredBalance * periodRate;
+            }
         }
     }
 
@@ -1800,11 +1886,7 @@ const handleOpenEditContract = (loan: Loan) => {
       let displayInstallment = Number(loan.installmentValue || 0).toFixed(2);
       
       if (loan.interestType === 'SIMPLE') {
-          let periodRate = loan.interestRate / 100;
-          if (loan.frequency === 'SEMANAL') periodRate = periodRate / 4;
-          else if (loan.frequency === 'DIARIO') periodRate = periodRate / 30;
-          const currentBalance = loan.amount; // 🚀 FIX: O modal agora abre exibindo a parcela baseada no Valor Nominal Original
-          displayInstallment = (currentBalance * periodRate).toFixed(2);
+          displayInstallment = getSyncedBreakdown(loan).interest.toFixed(2);
       }
 
       setEditContractData({
@@ -1871,6 +1953,10 @@ const handleOpenEditContract = (loan: Loan) => {
           day: parseInt(md.day),
           amount: parseFloat(md.amount)
       })).filter((md: any) => !isNaN(md.day) && !isNaN(md.amount));
+
+      if (isSimple && finalMultiDates.length > 0) {
+          newInstallmentValue = parseFloat(finalMultiDates.reduce((acc: number, s: any) => acc + s.amount, 0).toFixed(2));
+      }
 
       // 🚀 FIX: Destrava o status caso o contrato estivesse Quitado, mas a edição gerou um saldo devedor válido
       const newBalance = newAmount - (selectedLoan.totalPaidCapital || 0);
@@ -2276,6 +2362,14 @@ const handleFinalSave = async (e: React.FormEvent) => {
               }
 
               if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                  if (loan.interestType === 'SIMPLE') {
+                      let pRate = parseVal(loan.interestRate) / 100;
+                      if (loan.frequency === 'SEMANAL') pRate /= 4;
+                      else if (loan.frequency === 'DIARIO') pRate /= 30;
+                      const hasSlices = ((loan as any).multiDates || []).length > 0;
+                      const disc = (hasSlices && parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0) ? (parseVal(h.capitalPaid) * pRate) : 0;
+                      return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+                  }
                   return acc + parseVal(h.amount);
               }
               return acc;
@@ -2840,8 +2934,14 @@ const handleFinalSave = async (e: React.FormEvent) => {
                     let tempPaidForPenalty = (selectedLoan.history || []).reduce((acc: number, h: any) => {
                         const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
                         if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
-                            const val = selectedLoan.interestType === 'SIMPLE' ? parseVal(h.interestPaid) : parseVal(h.amount);
-                            return acc + val;
+                            if (selectedLoan.interestType === 'SIMPLE') {
+                                let pRate = parseVal(selectedLoan.interestRate) / 100;
+                                if (selectedLoan.frequency === 'SEMANAL') pRate /= 4;
+                                else if (selectedLoan.frequency === 'DIARIO') pRate /= 30;
+                                const disc = parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0 ? (parseVal(h.capitalPaid) * pRate) : 0;
+                                return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+                            }
+                            return acc + parseVal(h.amount);
                         }
                         return acc;
                     }, 0);
@@ -2918,8 +3018,14 @@ const handleFinalSave = async (e: React.FormEvent) => {
                             let tempPaidUI = (selectedLoan.history || []).reduce((acc: number, h: any) => {
                                 const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
                                 if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
-                                    const val = selectedLoan.interestType === 'SIMPLE' ? parseVal(h.interestPaid) : parseVal(h.amount);
-                                    return acc + val;
+                                    if (selectedLoan.interestType === 'SIMPLE') {
+                                        let pRate = parseVal(selectedLoan.interestRate) / 100;
+                                        if (selectedLoan.frequency === 'SEMANAL') pRate /= 4;
+                                        else if (selectedLoan.frequency === 'DIARIO') pRate /= 30;
+                                        const disc = parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0 ? (parseVal(h.capitalPaid) * pRate) : 0;
+                                        return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+                                    }
+                                    return acc + parseVal(h.amount);
                                 }
                                 return acc;
                             }, 0);
@@ -2996,8 +3102,10 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                                     const sliceCapOriginal = breakdown.capital * ratio;
                                                     const sliceIntOriginal = breakdown.interest * ratio;
                                                     
-                                                    setPayCapital((sliceCapOriginal * remRatio).toFixed(2));
-                                                    setPayInterest(((sliceIntOriginal + slicePenalty) * remRatio).toFixed(2));
+                                                    const newCap = (sliceCapOriginal * remRatio).toFixed(2);
+                                                    const newInt = ((sliceIntOriginal + slicePenalty) * remRatio).toFixed(2);
+                                                    setPayCapital(newCap === '0.00' ? '' : newCap);
+                                                    setPayInterest(newInt === '0.00' ? '' : newInt);
                                                     (window as any).lastSelectedDay = slice.day;
                                                     setLoans([...loans]);
                                                 }}

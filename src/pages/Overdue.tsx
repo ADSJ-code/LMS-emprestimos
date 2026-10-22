@@ -153,16 +153,22 @@ const Overdue = () => {
       if (!loan) return { interest: 0, capital: 0, total: 0 };
       
       if (loan.interestType === 'SIMPLE') {
-          const dueDate = new Date(loan.nextDue);
-          const cycleStart = new Date(dueDate);
-          cycleStart.setMonth(cycleStart.getMonth() - 1);
-          cycleStart.setHours(23, 59, 59, 999);
+          const currentDue = parseLocalDate(loan.nextDue);
+          const currentMonth = currentDue.getMonth();
+          const currentYear = currentDue.getFullYear();
+          const loanFreq = loan.frequency || 'MENSAL';
 
           let capitalPaidInThisCycle = 0;
           if (loan.history) {
               loan.history.forEach(h => {
-                  const hDate = new Date(h.date);
-                  if (hDate > cycleStart && !h.note?.includes('[CICLO COMPLETADO]')) {
+                  const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+                  let isSameCycle = false;
+                  if (loanFreq === 'SEMANAL' || loanFreq === 'DIARIO') {
+                      isSameCycle = hDue.getDate() === currentDue.getDate() && hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+                  } else {
+                      isSameCycle = hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear;
+                  }
+                  if (isSameCycle && !h.note?.includes('[CICLO COMPLETADO]') && h.type !== 'Abertura' && h.type !== 'Ajuste de Migração' && h.type !== 'Acordo') {
                       capitalPaidInThisCycle += parseVal(h.capitalPaid);
                   }
               });
@@ -173,7 +179,10 @@ const Overdue = () => {
           if (loan.frequency === 'SEMANAL') periodRate /= 4;
           else if (loan.frequency === 'DIARIO') periodRate /= 30;
 
-          const dynamicInterest = principalAtStartOfMonth * periodRate;
+          const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+          const slicesSum = validSlices.reduce((acc: number, s: any) => acc + parseVal(s.amount), 0);
+
+          const dynamicInterest = slicesSum > 0 ? slicesSum : (principalAtStartOfMonth * periodRate);
           let extraAcordo = 0;
           if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
           
@@ -203,9 +212,18 @@ const Overdue = () => {
 
   // --- MOTOR INTELIGENTE DE STATUS BLINDADO CONTRA DATAS E FATIAS FANTASMAS ---
   const getLoanRealStatus = (loan: Loan) => {
-      // 1. PRIORIDADE ABSOLUTA: Saldo Devedor. Se não deve capital, está Quitado.
+      // 1. PRIORIDADE ABSOLUTA: Saldo Devedor e Juros Pendentes.
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
-      if (balance <= 0.10 || loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') {
+      const isSimple = loan.interestType === 'SIMPLE';
+      const expectedProfit = parseVal(loan.projectedProfit) || 0;
+      const paidProfit = parseVal(loan.totalPaidInterest) || 0;
+      const interestBalance = expectedProfit - paidProfit;
+
+      if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') {
+          return 'Quitado'; 
+      }
+      
+      if (balance <= 0.10 && (isSimple || interestBalance <= 0.10)) {
           return 'Quitado'; 
       }
       
@@ -238,6 +256,14 @@ const Overdue = () => {
           }
 
           if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Ajuste de Migração' && h.type !== 'Acordo') {
+              if (loan.interestType === 'SIMPLE') {
+                  let pRate = parseVal(loan.interestRate) / 100;
+                  if (loan.frequency === 'SEMANAL') pRate /= 4;
+                  else if (loan.frequency === 'DIARIO') pRate /= 30;
+                  const hasSlices = ((loan as any).multiDates || []).length > 0;
+                  const disc = (hasSlices && parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0) ? (parseVal(h.capitalPaid) * pRate) : 0;
+                  return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+              }
               return acc + parseVal(h.amount);
           }
           return acc;
@@ -324,6 +350,14 @@ const Overdue = () => {
         }
 
         if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Ajuste de Migração' && h.type !== 'Acordo') {
+            if (loan.interestType === 'SIMPLE') {
+                let pRate = parseVal(loan.interestRate) / 100;
+                if (loan.frequency === 'SEMANAL') pRate /= 4;
+                else if (loan.frequency === 'DIARIO') pRate /= 30;
+                const hasSlices = ((loan as any).multiDates || []).length > 0;
+                const disc = (hasSlices && parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0) ? (parseVal(h.capitalPaid) * pRate) : 0;
+                return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+            }
             return acc + parseVal(h.amount);
         }
         return acc;

@@ -430,7 +430,10 @@ const Clients = () => {
           if (loan.frequency === 'SEMANAL') periodRate /= 4;
           else if (loan.frequency === 'DIARIO') periodRate /= 30;
 
-          const dynamicInterest = principalAtStartOfCycle * periodRate;
+          const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
+          const slicesSum = validSlices.reduce((acc: number, s: any) => acc + parseVal(s.amount), 0);
+
+          const dynamicInterest = slicesSum > 0 ? slicesSum : (principalAtStartOfCycle * periodRate);
           let extraAcordo = 0;
           if (loan.status === 'Acordo' && parseVal(loan.agreementValue) > 0) extraAcordo = parseVal(loan.agreementValue);
           return { interest: dynamicInterest + extraAcordo, capital: 0, total: dynamicInterest + extraAcordo };
@@ -452,7 +455,13 @@ const Clients = () => {
 
   const getLoanRealStatus = (loan: any) => {
       const balance = parseVal(loan.amount) - parseVal(loan.totalPaidCapital);
-      if (balance <= 0.10 || loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
+      const isSimple = loan.interestType === 'SIMPLE';
+      const expectedProfit = parseVal(loan.projectedProfit) || 0;
+      const paidProfit = parseVal(loan.totalPaidInterest) || 0;
+      const interestBalance = expectedProfit - paidProfit;
+
+      if (loan.status?.toLowerCase() === 'pago' || loan.status?.toLowerCase() === 'quitado') return 'Quitado'; 
+      if (balance <= 0.10 && (isSimple || interestBalance <= 0.10)) return 'Quitado'; 
       
       const today = new Date();
       today.setHours(0,0,0,0);
@@ -477,6 +486,14 @@ const Clients = () => {
           }
 
           if (isSameCycle && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+              if (loan.interestType === 'SIMPLE') {
+                  let pRate = parseVal(loan.interestRate) / 100;
+                  if (loan.frequency === 'SEMANAL') pRate /= 4;
+                  else if (loan.frequency === 'DIARIO') pRate /= 30;
+                  const hasSlices = ((loan as any).multiDates || []).length > 0;
+                  const disc = (hasSlices && parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0) ? (parseVal(h.capitalPaid) * pRate) : 0;
+                  return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+              }
               return acc + parseVal(h.amount);
           }
           return acc;
@@ -517,13 +534,8 @@ const Clients = () => {
       const clientLoans = loans.filter(l => l.client === clientName);
       if (clientLoans.length === 0) return { label: 'Sem Histórico', color: 'gray' };
 
-      // 1. Filtra contratos ativos
-      const activeLoans = clientLoans.filter(l => {
-          if (l.status?.toLowerCase() === 'pago' || l.status?.toLowerCase() === 'quitado') return false;
-          const balance = parseVal(l.amount) - parseVal(l.totalPaidCapital);
-          if (balance <= 0.10) return false;
-          return true;
-      });
+      // 1. Filtra contratos ativos usando a régua inteligente unificada
+      const activeLoans = clientLoans.filter(l => getLoanRealStatus(l) !== 'Quitado');
 
       if (activeLoans.length === 0) return { label: 'Quitado', color: 'green' };
 
@@ -546,6 +558,13 @@ const Clients = () => {
                   let totalPaidInCycle = (l.history || []).reduce((acc: number, h: any) => {
                       const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
                       if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Ajuste de Migração' && h.type !== 'Acordo') {
+                          if (l.interestType === 'SIMPLE') {
+                              let pRate = parseVal(l.interestRate) / 100;
+                              if (l.frequency === 'SEMANAL') pRate /= 4;
+                              else if (l.frequency === 'DIARIO') pRate /= 30;
+                              const disc = parseVal(h.capitalPaid) > 0 && parseVal(h.interestPaid) > 0 ? (parseVal(h.capitalPaid) * pRate) : 0;
+                              return acc + Math.max(0, parseVal(h.interestPaid) - disc);
+                          }
                           return acc + parseVal(h.amount);
                       }
                       return acc;
@@ -1434,13 +1453,14 @@ const Clients = () => {
                                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2"><List size={14}/> Contratos do Cliente</h4>
                                 <div className="max-h-[250px] overflow-y-auto space-y-3 custom-scrollbar pr-2">
                                     {clientLoans.length === 0 ? <p className="text-xs text-slate-400 italic text-center py-4">Sem contratos.</p> : clientLoans.map(l => {
-                                        const isClosed = l.status === 'Pago' || l.status === 'Quitado';
+                                        const realSt = getLoanRealStatus(l);
+                                        const isClosed = realSt === 'Quitado';
                                         return (
                                         <div key={l.id} className={`p-4 border rounded-xl flex justify-between items-center transition-all ${isClosed ? 'bg-slate-50 border-slate-200 opacity-60' : 'bg-white border-blue-200 shadow-sm'}`}>
                                             <div>
                                                 <div className="flex items-center gap-2 mb-1">
                                                     <p className="font-black text-slate-800 text-sm">#{l.id}</p>
-                                                    <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${isClosed ? 'bg-slate-200 text-slate-500' : 'bg-blue-100 text-blue-600'}`}>{l.status}</span>
+                                                    <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${isClosed ? 'bg-slate-200 text-slate-500' : realSt === 'Atrasado' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{realSt}</span>
                                                 </div>
                                                 <p className="text-[10px] text-slate-400 font-medium">Início: {new Date(l.startDate).toLocaleDateString('pt-BR')}</p>
                                                 <p className="font-black text-slate-800 mt-1">R$ {formatMoney(l.amount)}</p>
