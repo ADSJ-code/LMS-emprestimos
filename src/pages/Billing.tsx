@@ -584,7 +584,6 @@ const Billing = () => {
           const validSlices = ((loan as any).multiDates || []).filter((s: any) => s && s.day && !isNaN(Number(s.day)) && Number(s.day) > 0 && parseVal(s.amount) > 0);
 
           if (validSlices.length > 0) {
-              let tempPaidInCycle = totalPaidInCycle;
               const sortedSlices = [...validSlices].sort((a, b) => Number(a.day) - Number(b.day));
               let todasFatiasPagas = true;
 
@@ -592,9 +591,16 @@ const Billing = () => {
                   const baseAmount = parseVal(slice.amount);
                   const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                   
-                  if (tempPaidInCycle >= (baseAmount - 0.10)) {
-                      tempPaidInCycle -= baseAmount;
-                  } else {
+                  // 🚀 Busca exclusivamente os juros pagos NAQUELA fatia
+                  const slicePaidAmount = (loan.history || []).reduce((acc: number, h: any) => {
+                      const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+                      if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && hDue.getDate() === Number(slice.day) && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                          return acc + parseVal(h.interestPaid);
+                      }
+                      return acc;
+                  }, 0);
+                  
+                  if (slicePaidAmount < (baseAmount - 0.10)) {
                       todasFatiasPagas = false;
                       if (sliceDate < today) {
                           return 'Atrasado'; 
@@ -603,7 +609,7 @@ const Billing = () => {
                       }
                   }
               }
-              if (todasFatiasPagas) return 'Em Dia'; // 🚀 FIX: Se pagou tudo picado, não é atraso!
+              if (todasFatiasPagas) return 'Em Dia'; 
           }
       }
 
@@ -1487,11 +1493,35 @@ const Billing = () => {
     setIsDiscountSettlement(false); // 🚀 Limpa a checkbox de Desconto ao abrir novo modal
     setSettlementDiscount(''); // Limpa o campo de desconto opcional
     
-    // 🚀 FIX 3: Base do CycleMissing blindada para considerar Acordos extras.
-    const expectedInterest = breakdown.interest;
-    const requiredTotal = loan.interestType === 'SIMPLE' ? expectedInterest : breakdown.total;
-    const accumulatedTotal = loan.interestType === 'SIMPLE' ? accInt : (accInt + accCap);
-    setCycleMissing(Math.max(0, requiredTotal - accumulatedTotal));
+    // 🚀 FIX: Calcula exatamente quanto falta para fechar o mês SOMANDO as fatias pendentes!
+    let calcMissing = 0;
+    if (slices.length > 0) {
+        const currentMonth = new Date(loan.nextDue).getMonth();
+        const currentYear = new Date(loan.nextDue).getFullYear();
+
+        const sortedSlices = [...slices].sort((a, b) => Number(a.day) - Number(b.day));
+        for (const s of sortedSlices) {
+            const baseAmount = Number(s.amount) || 0;
+            
+            // 🚀 Busca exclusivamente os juros pagos NAQUELA fatia
+            const slicePaidAmount = (loan.history || []).reduce((acc: number, h: any) => {
+                const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+                if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && hDue.getDate() === Number(s.day) && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                    return acc + parseVal(h.interestPaid);
+                }
+                return acc;
+            }, 0);
+
+            const remainingSlice = Math.max(0, baseAmount - slicePaidAmount);
+            if (remainingSlice > 0.05) calcMissing += remainingSlice;
+        }
+    } else {
+        const expectedInterest = breakdown.interest;
+        const requiredTotal = loan.interestType === 'SIMPLE' ? expectedInterest : breakdown.total;
+        const accumulatedTotal = loan.interestType === 'SIMPLE' ? accInt : (accInt + accCap);
+        calcMissing = Math.max(0, requiredTotal - accumulatedTotal);
+    }
+    setCycleMissing(calcMissing);
 
     setForceAdvanceMonth(false);
     setIsDetailsOpen(false);
@@ -1552,7 +1582,7 @@ const Billing = () => {
     let noteText = `Baixa Manual. Ref: ${new Date(payDate).toLocaleString('pt-BR')}`;
     if (appliedPenalty > 0) noteText += ` [Inc. R$ ${formatMoney(appliedPenalty)} de Multa/Mora]`;
     
-    const originalDueStr = selectedLoan.nextDue; 
+    let originalDueStr = selectedLoan.nextDue; 
     const isSimple = selectedLoan.interestType === 'SIMPLE';
 
     // 🚀 FIX EMERSON: Puxa o breakdown e as fatias para decidir se o ciclo do mês foi fechado!
@@ -1699,9 +1729,10 @@ const Billing = () => {
                 const safeMultiDates = updatedLoan.multiDates; 
                 
                 if (discountAmost > 0) {
-                    // 🚀 Prioridade 1: A fatia exata que o usuário selecionou no modal (resolve fatias de valores iguais como 560 e 560)
+                    // 🚀 FIX DEFINITIVO: Confia cegamente no botão azul "Selecionado" do modal, independentemente do que foi digitado
                     let targetDay = selectedSliceDay;
                     if (!targetDay) {
+                        // Só tenta adivinhar pelo valor ou pela última fatia se o Rodrigo não tiver clicado em botão nenhum
                         const matchedSlice = safeMultiDates.find((s: any) => Math.abs(Number(s.amount) - valInterest) < 2.00);
                         targetDay = matchedSlice ? matchedSlice.day : safeMultiDates[safeMultiDates.length - 1].day;
                     }
@@ -1713,10 +1744,21 @@ const Billing = () => {
                         return slice;
                     });
                     updatedLoan.installmentValue = parseFloat(updatedLoan.multiDates.reduce((acc: number, s: any) => acc + (Number(s.amount) || 0), 0).toFixed(2));
-                    noteText += ` [Fatia Dia ${targetDay} reduzida em R$ ${formatMoney(discountAmost)}]`;
+                    
+                    // 🚀 GUARDA O DIA SECRETO NO HISTÓRICO PARA O DESFAZER REGISTRO ACHAR!
+                    const originalDateObj = parseLocalDate(originalDueStr);
+                    const newDateStr = `${originalDateObj.getFullYear()}-${String(originalDateObj.getMonth() + 1).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+                    originalDueStr = newDateStr;
                 }
             }
         }
+    }
+
+    // 🚀 FIX DEFINITIVO DAS FATIAS: A data de referência do pagamento TEM de ser o dia exato da fatia que foi selecionada.
+    let targetDueDate = originalDueStr;
+    if (selectedSliceDay && isSimple && selectedLoan.multiDates && selectedLoan.multiDates.length > 0) {
+        const currentDueObj = parseLocalDate(originalDueStr);
+        targetDueDate = `${currentDueObj.getFullYear()}-${String(currentDueObj.getMonth() + 1).padStart(2, '0')}-${String(selectedSliceDay).padStart(2, '0')}`;
     }
 
     const newRecord: PaymentRecord = {
@@ -1724,7 +1766,7 @@ const Billing = () => {
         amount: valTotal, capitalPaid: valCapital, interestPaid: valInterest,
         type: (valCapital > 0 && valInterest > 0) ? 'Parcela' : (valCapital > 0 ? 'Amortização' : 'Juros'),
         note: noteText, registeredAt: new Date().toISOString(),
-        originalDueDate: originalDueStr 
+        originalDueDate: targetDueDate 
     };
 
     updatedLoan.history = [...(selectedLoan.history || []), newRecord];
@@ -1795,8 +1837,9 @@ const Billing = () => {
             const restoredDiscount = lastEntry.capitalPaid * periodRate;
 
             if (updatedLoan.multiDates && updatedLoan.multiDates.length > 0) {
-                const dayMatch = lastEntry.note?.match(/\[Fatia Dia (\d+) reduzida/);
-                const targetDayToRestore = dayMatch ? Number(dayMatch[1]) : updatedLoan.multiDates[updatedLoan.multiDates.length - 1].day;
+                // 🚀 RESTAURA A PARTIR DO DIA SECRETO SALVO NO ORIGINAL DUE DATE
+                const dayMatch = lastEntry.originalDueDate ? parseLocalDate(lastEntry.originalDueDate).getDate() : null;
+                const targetDayToRestore = dayMatch || updatedLoan.multiDates[updatedLoan.multiDates.length - 1].day;
                 updatedLoan.multiDates = updatedLoan.multiDates.map((s: any) => {
                     if (Number(s.day) === Number(targetDayToRestore)) {
                         return { ...s, amount: parseFloat((Number(s.amount) + restoredDiscount).toFixed(2)) };
@@ -2952,6 +2995,44 @@ const handleFinalSave = async (e: React.FormEvent) => {
                         const baseAmount = Number(slice.amount) || 0;
                         const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                         
+                        // 🚀 ALINHA: Se a fatia foi alterada manualmente ou paga, o tempPaid não transborda de forma irreal
+                        const hasSpecificPayment = (selectedLoan.history || []).some(h => {
+                            const hDue = h.originalDueDate ? new Date(h.originalDueDate) : new Date(h.date);
+                            return hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && h.note?.includes(`Fatia Dia ${slice.day}`);
+                        });
+                        
+                        let slicePaidAmount = Math.min(baseAmount, tempPaidForPenalty);
+                        if (hasSpecificPayment) {
+                            slicePaidAmount = baseAmount;
+                            tempPaidForPenalty = 0;
+                        } else {
+                            const isFirstSliceReduced = (selectedLoan.history || []).some(h => h.note?.includes('reduzida'));
+                            if (isFirstSliceReduced && slicePaidAmount < baseAmount * 0.1) {
+                                slicePaidAmount = 0; tempPaidForPenalty = 0;
+                            } else {
+                                tempPaidForPenalty = Math.max(0, tempPaidForPenalty - baseAmount);
+                            }
+                        }
+
+                        const isPaid = slicePaidAmount >= (baseAmount - 0.05);
+                        const remainingSlice = Math.max(0, baseAmount - slicePaidAmount);
+                        
+                        if (!isPaid && sliceDate < today && selectedLoan.status !== 'Pago' && selectedLoan.status !== 'Quitado') {
+                            isFatiaAtrasada = true;
+                            if (!firstOverdueSliceDate) {
+                                firstOverdueSliceDate = sliceDate.toISOString().split('T')[0];
+                            }
+                            const ratio = baseAmount / (breakdown.total || 1);
+                            const sliceOverdue = calculateOverdueValue(remainingSlice, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount * ratio);
+                            
+                            totalSlicesCalc += sliceOverdue;
+                        } else {
+                            totalSlicesCalc += remainingSlice;
+                        }
+                    }for (const slice of sortedSlices) {
+                        const baseAmount = Number(slice.amount) || 0;
+                        const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
+                        
                         const slicePaidAmount = Math.min(baseAmount, tempPaidForPenalty);
                         tempPaidForPenalty = Math.max(0, tempPaidForPenalty - baseAmount);
 
@@ -3039,16 +3120,29 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                 today.setHours(0,0,0,0);
                                 const sliceDate = new Date(currentYear, currentMonth, Number(slice.day));
                                 
-                                const slicePaidAmount = Math.min(baseAmount, tempPaidUI);
-                                tempPaidUI = Math.max(0, tempPaidUI - baseAmount);
+                                // 🚀 FIX: Calcula EXATAMENTE quanto foi pago de juros nesta fatia, ancorado no "originalDueDate"
+                                const exactSlicePayments = (selectedLoan.history || []).reduce((acc: number, h: any) => {
+                                    const hDue = h.originalDueDate ? parseLocalDate(h.originalDueDate) : parseLocalDate(h.date);
+                                    if (hDue.getMonth() === currentMonth && hDue.getFullYear() === currentYear && hDue.getDate() === Number(slice.day) && !h.type?.toLowerCase().includes('abertura') && h.type !== 'Acordo') {
+                                        return acc + parseVal(h.interestPaid);
+                                    }
+                                    return acc;
+                                }, 0);
+
+                                // O valor pago nesta fatia é unicamente o que está registado para o dia dela
+                                let slicePaidAmount = Math.min(baseAmount, exactSlicePayments);
+
+                                // 🚀 FIX VISUAL: Se a fatia teve amortização, o baseAmount já encolheu, então o "pago parcial" não pode vazar o limite
+                                slicePaidAmount = Math.max(0, slicePaidAmount);
 
                                 const isPaid = slicePaidAmount >= (baseAmount - 0.05);
                                 let slicePenalty = 0;
                                 
                                 if (!isPaid && sliceDate < today && selectedLoan.status !== 'Pago' && selectedLoan.status !== 'Quitado') {
+                                    const remainingSlice = Math.max(0, baseAmount - slicePaidAmount);
                                     const ratio = baseAmount / (breakdown.total || 1);
-                                    const sliceOverdue = calculateOverdueValue(baseAmount, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount * ratio);
-                                    slicePenalty = sliceOverdue - baseAmount;
+                                    const sliceOverdue = calculateOverdueValue(remainingSlice, sliceDate.toISOString().split('T')[0], 'Atrasado', Number(selectedLoan.fineRate || 0), Number(selectedLoan.moraInterestRate || 0), selectedLoan.amount * ratio);
+                                    slicePenalty = sliceOverdue - remainingSlice;
                                 }
                                 
                                 const finalAmount = baseAmount + slicePenalty;
@@ -3097,6 +3191,13 @@ const handleFinalSave = async (e: React.FormEvent) => {
                                             <button 
                                                 type="button"
                                                 onClick={() => {
+                                                    // Se já estava selecionado e clicar de novo, desmarca e volta os campos originais
+                                                    if (isSelected) {
+                                                        delete (window as any).lastSelectedDay;
+                                                        handleOpenPayment(selectedLoan);
+                                                        return;
+                                                    }
+
                                                     const remRatio = remainingToPay / finalAmount;
                                                     const ratio = baseAmount / (breakdown.total || 1);
                                                     const sliceCapOriginal = breakdown.capital * ratio;
