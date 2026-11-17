@@ -1323,17 +1323,27 @@ func invoiceEmitHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if len(cepLimpo) == 8 {
-			// 🚀 FIX: Client HTTP customizado com User-Agent, pois o ViaCEP bloqueia o Go padrão
+			// 🚀 FIX FOCUS NFE (E58): Garante que o IBGE bate com o CEP do cliente
 			clientVC := &http.Client{Timeout: 5 * time.Second}
 			reqVC, _ := http.NewRequest("GET", "https://viacep.com.br/ws/"+cepLimpo+"/json/", nil)
 			reqVC.Header.Set("User-Agent", "CreditNow-App/1.0")
 			
 			respViaCep, err := clientVC.Do(reqVC)
-			if err == nil {
+			// Verifica se a API respondeu com Sucesso (200 OK)
+			if err == nil && respViaCep.StatusCode == 200 {
 				defer respViaCep.Body.Close()
 				var vcData struct { Ibge string `json:"ibge"` }
 				if json.NewDecoder(respViaCep.Body).Decode(&vcData) == nil && vcData.Ibge != "" {
-					enderecoTomador["codigo_municipio"] = vcData.Ibge
+					enderecoTomador["codigo_municipio"] = vcData.Ibge // Sobrescreve com o IBGE real retornado pela API
+				}
+			} else {
+				// 🚀 FALLBACK SALVA-VIDAS REGIONAL: Se a API ViaCEP cair, o sistema assume o IBGE pelos prefixos do ABC Paulista
+				if cepLimpo == "09750000" || strings.HasPrefix(cepLimpo, "097") || strings.HasPrefix(cepLimpo, "098") {
+					enderecoTomador["codigo_municipio"] = "3548708" // São Bernardo do Campo
+				} else if strings.HasPrefix(cepLimpo, "090") || strings.HasPrefix(cepLimpo, "091") || strings.HasPrefix(cepLimpo, "092") {
+					enderecoTomador["codigo_municipio"] = "3547809" // Santo André
+				} else if strings.HasPrefix(cepLimpo, "095") || strings.HasPrefix(cepLimpo, "096") {
+					enderecoTomador["codigo_municipio"] = "3548807" // São Caetano do Sul
 				}
 			}
 		}

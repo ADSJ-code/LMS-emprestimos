@@ -1661,26 +1661,22 @@ const Billing = () => {
                  updatedLoan.nextDue = `${nextYear}-${String(nextMonth + 1).padStart(2, '0')}-${String(originalDay).padStart(2, '0')}`;
                  updatedLoan.agreementValue = 0;
              } else {
-                 // 🚀 FIX FUSO HORÁRIO: Força a leitura exata do Ano, Mês e Dia para não retroceder ou avançar dias por causa do UTC
-                 // E também preserva o dia original (o que foi digitado ao criar o contrato) para não variar em meses de 31 e 30!
+                 // 🚀 FIX FUSO HORÁRIO: Força a leitura exata do Ano, Mês e Dia
                  const [y, m, d] = updatedLoan.nextDue.split('T')[0].split('-').map(Number);
-                 const originalContractDay = new Date(updatedLoan.startDate).getDate();
-                 
                  const currentDue = new Date(y, m - 1, d);
                  
-                 if (updatedLoan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
-   else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
-   else currentDue.setMonth(currentDue.getMonth() + 1);
-
-   // 🚀 BLINDAGEM TEMPORAL: Se após o avanço a data ainda estiver no passado, 
-   // empurra iterativamente até estar no mês/futuro correto.
-   const todayCheck = new Date();
-   todayCheck.setHours(0,0,0,0);
-   while (currentDue < todayCheck) {
-       if (updatedLoan.frequency === 'SEMANAL') currentDue.setDate(currentDue.getDate() + 7);
-       else if (updatedLoan.frequency === 'DIARIO') currentDue.setDate(currentDue.getDate() + 1);
-       else currentDue.setMonth(currentDue.getMonth() + 1);
-   }
+                 // 🚀 FIX BUG FREQUÊNCIA: Garante o fallback seguro caso o dado antigo esteja corrompido
+                 const safeFreq = updatedLoan.frequency || 'MENSAL';
+                 
+                 // Avanço exato e linear de 1 único ciclo (Removemos o While que engolia atrasos acumulados)
+                 if (safeFreq === 'SEMANAL') {
+                     currentDue.setDate(currentDue.getDate() + 7);
+                 } else if (safeFreq === 'DIARIO') {
+                     currentDue.setDate(currentDue.getDate() + 1);
+                 } else {
+                     // Lógica de avanço mensal mantendo o dia original
+                     currentDue.setMonth(currentDue.getMonth() + 1);
+                 }
    
    const nextY = currentDue.getFullYear();
    const nextM = String(currentDue.getMonth() + 1).padStart(2, '0');
@@ -1934,6 +1930,7 @@ const handleOpenEditContract = (loan: Loan) => {
 
       setEditContractData({
               id: loan.id,
+              frequency: loan.frequency || 'MENSAL', // 🚀 PUXA A FREQUÊNCIA ATUAL
               amount: loan.amount.toString(),
               interestRate: loan.interestRate.toString(),
               installments: loan.interestType === 'SIMPLE' ? '1' : loan.installments.toString(),
@@ -1971,8 +1968,10 @@ const handleOpenEditContract = (loan: Loan) => {
       // 🚀 MATEMÁTICA BLINDADA: O sistema recalcula o valor exato da parcela na hora de salvar usando o SALDO DEVEDOR!
       let newInstallmentValue = 0;
       let periodRate = newInterestRate / 100;
-      if (selectedLoan.frequency === 'SEMANAL') periodRate = periodRate / 4;
-      else if (selectedLoan.frequency === 'DIARIO') periodRate = periodRate / 30;
+      // 🚀 FIX: Usa a frequência selecionada na edição em vez da original presa no banco
+      const currentFreq = editContractData.frequency || selectedLoan.frequency || 'MENSAL';
+      if (currentFreq === 'SEMANAL') periodRate = periodRate / 4;
+      else if (currentFreq === 'DIARIO') periodRate = periodRate / 30;
 
       // 🚀 FIX: Usa sempre o novo Valor Bruto preenchido na tela para calcular a parcela!
       const baseCalculationAmount = newAmount; 
@@ -2009,6 +2008,7 @@ const handleOpenEditContract = (loan: Loan) => {
           ...selectedLoan, 
           status: newStatus, // 🚀 FIX: Injetando o status destravado
           id: editContractData.id,
+          frequency: currentFreq, // 🚀 FIX: Grava a nova periodicidade no banco!
           amount: newAmount,
           interestRate: newInterestRate,
           installments: isSimple ? 1 : (parseInt(editContractData.installments) || selectedLoan.installments),
@@ -3441,9 +3441,38 @@ const handleFinalSave = async (e: React.FormEvent) => {
                   <p className="text-xs text-blue-700">Modifique qualquer dado base do contrato. Estas alterações substituirão os dados originais no sistema e não gerarão um "Acordo" no extrato.</p>
               </div>
               
-              <div className="mb-4">
-                  <label className="block text-xs font-bold text-slate-500 mb-1">ID do Contrato</label>
-                  <input type="text" value={editContractData.id} onChange={e => setEditContractData({...editContractData, id: e.target.value})} className="w-full p-2.5 border rounded-lg outline-none font-bold text-slate-800"/>
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">ID do Contrato</label>
+                      <input type="text" value={editContractData.id} onChange={e => setEditContractData({...editContractData, id: e.target.value})} className="w-full p-2.5 border border-slate-200 rounded-lg outline-none font-bold text-slate-800 bg-white"/>
+                  </div>
+                  <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">Periodicidade</label>
+                      <select value={editContractData.frequency || 'MENSAL'} onChange={e => {
+                          const newFreq = e.target.value;
+                          setEditContractData((prev: any) => {
+                              const amt = parseFloat(prev.amount) || 0;
+                              const rateNum = parseFloat(prev.interestRate) || 0;
+                              const inst = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(prev.installments) || 1);
+                              
+                              let pRate = rateNum / 100;
+                              if (newFreq === 'SEMANAL') pRate /= 4;
+                              if (newFreq === 'DIARIO') pRate /= 30;
+                              
+                              let calcInst = 0;
+                              if (selectedLoan?.interestType === 'SIMPLE') calcInst = amt * pRate;
+                              else {
+                                  if (pRate === 0) calcInst = amt / inst;
+                                  else calcInst = amt * ((pRate * Math.pow(1 + pRate, inst)) / (Math.pow(1 + pRate, inst) - 1));
+                              }
+                              return { ...prev, frequency: newFreq, installmentValue: calcInst > 0 ? (Math.round(calcInst * 100) / 100).toFixed(2) : '' };
+                          });
+                      }} className="w-full p-2.5 border border-slate-200 rounded-lg outline-none font-bold text-slate-800 bg-white cursor-pointer">
+                          <option value="MENSAL">Mensal</option>
+                          <option value="SEMANAL">Semanal</option>
+                          <option value="DIARIO">Diário</option>
+                      </select>
+                  </div>
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
@@ -3456,8 +3485,9 @@ const handleFinalSave = async (e: React.FormEvent) => {
                               const rateNum = parseFloat(prev.interestRate) || 0;
                               const inst = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(prev.installments) || 1);
                               let periodRate = rateNum / 100;
-                              if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
-                              if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
+                              const currentFreq = prev.frequency || selectedLoan?.frequency || 'MENSAL';
+                              if (currentFreq === 'SEMANAL') periodRate /= 4;
+                              if (currentFreq === 'DIARIO') periodRate /= 30;
                               let calcInst = 0;
                               const currentBalance = newAmtNum; // 🚀 FIX: Calcula sempre pelo valor nominal editado
                               if (selectedLoan?.interestType === 'SIMPLE') calcInst = currentBalance * periodRate;
@@ -3478,8 +3508,9 @@ const handleFinalSave = async (e: React.FormEvent) => {
                               const amt = parseFloat(prev.amount) || 0;
                               const inst = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(prev.installments) || 1);
                               let periodRate = newRateNum / 100;
-                              if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
-                              if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
+                              const currentFreq = prev.frequency || selectedLoan?.frequency || 'MENSAL';
+                              if (currentFreq === 'SEMANAL') periodRate /= 4;
+                              if (currentFreq === 'DIARIO') periodRate /= 30;
                               let calcInst = 0;
                               const currentBalance = amt; // 🚀 FIX: Calcula sempre pelo valor nominal editado
                               if (selectedLoan?.interestType === 'SIMPLE') calcInst = currentBalance * periodRate;
@@ -3500,8 +3531,9 @@ const handleFinalSave = async (e: React.FormEvent) => {
                               const rateNum = parseFloat(prev.interestRate) || 0;
                               const inst = selectedLoan?.interestType === 'SIMPLE' ? 1 : (parseInt(newInstStr) || 1);
                               let periodRate = rateNum / 100;
-                              if (selectedLoan?.frequency === 'SEMANAL') periodRate /= 4;
-                              if (selectedLoan?.frequency === 'DIARIO') periodRate /= 30;
+                              const currentFreq = prev.frequency || selectedLoan?.frequency || 'MENSAL';
+                              if (currentFreq === 'SEMANAL') periodRate /= 4;
+                              if (currentFreq === 'DIARIO') periodRate /= 30;
                               let calcInst = 0;
                               const currentBalance = amt; // 🚀 FIX: Calcula sempre pelo valor nominal editado
                               if (selectedLoan?.interestType === 'SIMPLE') calcInst = currentBalance * periodRate;

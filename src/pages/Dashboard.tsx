@@ -712,15 +712,21 @@ const Dashboard = () => {
 
   // --- LÓGICA DO POP-UP DIÁRIO (VENCIMENTOS DE HOJE) ---
   useEffect(() => {
+      // 🚀 FIX RELÓGIO: Gera a string de "hoje" exatamente como o motor do Billing e o getDisplayNextDue
       const today = new Date();
-      const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+      const todayY = today.getFullYear();
+      const todayM = String(today.getMonth() + 1).padStart(2, '0');
+      const todayD = String(today.getDate()).padStart(2, '0');
+      const exactTodayStr = `${todayY}-${todayM}-${todayD}`;
       
       const dueToday = allLoans.filter(l => {
          // 🚀 FIX: A lista allLoans já vem limpa de clientes bloqueados pelo fetchAndCalculate.
          // Só precisamos garantir que não aparecem quitados nem acordos antigos!
          const dStr = getDisplayNextDue(l);
          const isActivelyDue = getLoanRealStatus(l) !== 'Quitado'; // 🚀 FIX: Usa a régua inteligente!
-         return dStr === todayStr && isActivelyDue;
+         
+         // Se a data que a régua de atrasos diz que ele tem de pagar for igual ao dia de hoje no calendário local, ele entra no Sino!
+         return dStr === exactTodayStr && isActivelyDue;
       });
       setTodaysLoans(dueToday);
   }, [allLoans]);

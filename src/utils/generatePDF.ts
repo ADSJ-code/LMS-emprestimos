@@ -187,21 +187,47 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client, setti
     
     addText("Cláusula Primeira – DO OBJETO", true);
 
+    // 🚀 FIX: Deteção Inteligente do Tipo de Chave Pix (CPF, Celular, CNPJ, Email ou Aleatória)
     let labelPixCliente = "Pix:";
     if (loan.paymentMethod) {
-        const cleanMethod = loan.paymentMethod.replace(/\D/g, '');
-        if (cleanMethod.length === 11) labelPixCliente = "Pix CPF:";
-        else if (cleanMethod.length === 14) labelPixCliente = "Pix CNPJ:";
+        const rawMethod = loan.paymentMethod.trim();
+        const cleanMethod = rawMethod.replace(/\D/g, '');
+        
+        // Se a string já vier com o rótulo do sistema (ex: "Chave Aleatória: xyz")
+        if (rawMethod.toLowerCase().includes('chave aleatória:')) {
+            labelPixCliente = "";
+        } else if (rawMethod.toLowerCase().includes('agência e conta:')) {
+            labelPixCliente = "";
+        } else if (rawMethod.includes('@')) {
+            labelPixCliente = "Pix E-mail:";
+        } else if (cleanMethod.length === 11) {
+            // Distingue entre CPF (ex: 123.456.789-00) e Celular (ex: (11) 98765-4321)
+            if (rawMethod.includes('(') && rawMethod.includes(')')) {
+                labelPixCliente = "Pix Celular:";
+            } else {
+                labelPixCliente = "Pix CPF:";
+            }
+        } else if (cleanMethod.length === 14) {
+            labelPixCliente = "Pix CNPJ:";
+        } else if (rawMethod.length > 25) {
+            labelPixCliente = "Pix (Chave Aleatória):";
+        }
     }
 
-    const pixDestino = loan.paymentMethod ? ` ${labelPixCliente} ${loan.paymentMethod}` : "";
+    const pixDestino = loan.paymentMethod ? ` ${labelPixCliente} ${loan.paymentMethod}`.trim() : "";
     const bankDestino = loan.clientBank ? `, Banco ${loan.clientBank.toUpperCase()}` : ", Banco NÃO INFORMADO";
 
     addText(`1.1 Pelo presente instrumento, o MUTUANTE entrega ao MUTUÁRIO neste ato, a título de empréstimo (ou “Mútuo”), a importância de ${formatMoney(loan.amount)} (${valorParaExtenso(loan.amount).toUpperCase()}), através de transferência bancária para a chave${pixDestino} do próprio MUTUÁRIO${bankDestino}.`);
     
-    const displayRate = Number(loan.interestRate).toFixed(2);
-    addText(`1.2 Fica acordado entre as Partes que o Valor do Mútuo, na data do vencimento do presente contrato, será acrescido de uma taxa de remuneração a ${displayRate}% a.m do Valor do Mútuo.`);
-    addText(`1.3 O Valor do Mútuo deverá ser restituído em sua integralidade pelo MUTUÁRIO ao MUTUANTE, respeitando-se os juros e correção pactuados na cláusula 1.2 acima, até o término do prazo de vigência do presente contrato, qual seja, até o pagamento da parcela.`);
+    // 🚀 FIX: Ajusta a nomenclatura da taxa de juros proporcionalmente ao período escolhido
+    let printRate = loan.interestRate;
+    let rateSuffix = 'a.m';
+    if (loan.frequency === 'SEMANAL') { printRate /= 4; rateSuffix = 'a.s (ao período semanal)'; }
+    else if (loan.frequency === 'DIARIO') { printRate /= 30; rateSuffix = 'a.d (ao dia)'; }
+    
+    const displayRate = Number(printRate).toFixed(2);
+    addText(`1.2 Fica acordado entre as Partes que o Valor do Mútuo, na data do vencimento do presente contrato, será acrescido de uma taxa de remuneração de ${displayRate}% ${rateSuffix} do Valor do Mútuo.`);
+    addText(`1.3 O Valor do Mútuo deverá ser restituído em sua integralidade pelo MUTUÁRIO ao MUTUANTE, respeitando-se os juros e correção pactuados na cláusula 1.2 acima, até o término do prazo de vigência do presente contrato, qual seja, até o pagamento da última parcela.`);
     addText(`1.4 Caso o MUTUÁRIO deixe de pagar integralmente o Valor do Mútuo e seus acessórios no prazo estipulado na cláusula 1.3 acima, o saldo devedor corrigido na data do término de referido prazo ficará sujeito a juros moratórios à taxa de 20% (vinte por cento) ao mês, multa de mora na ordem de 2% (dois por cento) sobre o valor atualizado do débito e correção monetária.`);
     
     y += 5;
@@ -209,7 +235,15 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client, setti
     
     const totalInst = getOriginalInstallmentsCount(loan);
     const isSimple = loan.interestType === 'SIMPLE';
-    let baseDate = new Date(loan.nextDue || loan.startDate);
+    
+    // 🚀 FIX: Ancora as datas na primeira parcela real, ignorando avanços de pagamentos recentes
+    let anchorDueStrContract = loan.nextDue;
+    const firstPaymentContract = (loan.history || []).find(h => (h.type === 'Parcela' || h.type === 'Juros' || h.type === 'Amortização') && h.originalDueDate);
+    if (firstPaymentContract && firstPaymentContract.originalDueDate) {
+        anchorDueStrContract = firstPaymentContract.originalDueDate;
+    }
+    
+    let baseDate = new Date(anchorDueStrContract || loan.startDate);
     baseDate.setMinutes(baseDate.getMinutes() + baseDate.getTimezoneOffset());
     
     const hasMultiDates = loan.multiDates && loan.multiDates.length > 0;
@@ -230,10 +264,29 @@ export const generateContractPDF = async (loan: Loan, clientData?: Client, setti
     const instTextNum = totalInst.toString().padStart(2, '0');
     const instTextExt = numeroParaExtensoParcelas(totalInst).toUpperCase();
     const palavraParcela = totalInst === 1 ? "parcela" : "parcelas";
-    const totalRepayment = isSimple ? (Number(loan.amount) * (1 + (loan.interestRate / 100))) : (loan.installmentValue || 0);
+    
+    // 🚀 FIX: Calcula a taxa proporcional para o Contrato se for Diário ou Semanal
+    let mathRate = loan.interestRate / 100;
+    if (loan.frequency === 'SEMANAL') mathRate /= 4;
+    else if (loan.frequency === 'DIARIO') mathRate /= 30;
+
+    const totalRepayment = isSimple ? (Number(loan.amount) * (1 + mathRate)) : (loan.installmentValue || 0);
+
+    // 🚀 FIX: Texto da vigência agora é 100% dinâmico (Semanas e Dias)
+    let freqText = 'mensais';
+    let freqCycle = `todo dia ${targetDay} de cada mês`;
+    if (loan.frequency === 'SEMANAL') {
+        freqText = 'semanais';
+        const weekDays = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+        const dayOfWeek = baseDate.getDay();
+        freqCycle = `toda ${weekDays[dayOfWeek].toLowerCase()}`;
+    } else if (loan.frequency === 'DIARIO') {
+        freqText = 'diários';
+        freqCycle = `todos os dias`;
+    }
 
     let textoVigencia = isSimple 
-        ? `A vigência perdurará com pagamentos mensais contínuos de juros, com vencimento todo dia ${targetDay} de cada mês`
+        ? `A vigência perdurará com pagamentos ${freqText} contínuos de juros, com vencimento ${freqCycle}`
         : totalInst === 1 ? `A vigência perdurará até a data exata de ${datesText.replace(', ', '')}` : `A vigência perdurará nas seguintes datas: ${datesText}`;
 
     addText(`2.1. O presente Contrato entra em vigor na data de sua assinatura. ${textoVigencia}, findo o qual o MUTUÁRIO deverá efetuar a restituição ao MUTUANTE do Valor do Mútuo, acrescido da taxa de remuneração, perfazendo o total em ${instTextNum} (${instTextExt}) ${palavraParcela} no valor de ${formatMoney(totalRepayment)} (${valorParaExtenso(totalRepayment).toUpperCase()}), através de transferência para a conta corrente do MUTUANTE, ${lenderBank} NA QUAL A CHAVE PIX É O CNPJ: ${lenderCNPJ}, sob pena de ficar constituído em mora, autorizada a aplicação das sanções previstas na cláusula 1.4.`);
@@ -308,8 +361,13 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client, set
 
     const borrowerFullAddress = `${clientData?.address || ''}, ${clientData?.number || ''}${ (clientData as any)?.block ? ' - BLOCO ' + (clientData as any)?.block : '' }, ${clientData?.city || ''}, CEP: ${clientData?.cep || ''}`.toUpperCase();
 
-    // 🚀 LÓGICA INTELIGENTE: Puxa o Vencimento Personalizado se houver. Caso contrário, usa a data normal.
-    let baseDate = new Date((loan as any).promissoryDueDate || loan.nextDue || loan.startDate);
+    // 🚀 FIX: Se o PDF for gerado após algum pagamento, busca a data original da 1ª parcela no histórico!
+    let anchorDueStr = (loan as any).promissoryDueDate || loan.nextDue;
+    const firstPayment = (loan.history || []).find(h => (h.type === 'Parcela' || h.type === 'Juros' || h.type === 'Amortização') && h.originalDueDate);
+    if (firstPayment && firstPayment.originalDueDate) {
+        anchorDueStr = firstPayment.originalDueDate;
+    }
+    let baseDate = new Date(anchorDueStr || loan.startDate);
     baseDate.setMinutes(baseDate.getMinutes() + baseDate.getTimezoneOffset());
 
     for (let i = 1; i <= totalInst; i++) {
@@ -321,7 +379,12 @@ export const generatePromissoryPDF = async (loan: Loan, clientData?: Client, set
         else if (loan.frequency === 'DIARIO') pDate.setDate(baseDate.getDate() + (1 * (i - 1)));
         else pDate.setMonth(baseDate.getMonth() + (i - 1));
 
-        const val = loan.interestType === 'SIMPLE' ? (Number(loan.amount) * (1 + (loan.interestRate / 100))) : loan.installmentValue;
+        // 🚀 FIX: A nota promissória também precisa respeitar a proporção da taxa Semanal/Diária!
+        let promRate = loan.interestRate / 100;
+        if (loan.frequency === 'SEMANAL') promRate /= 4;
+        else if (loan.frequency === 'DIARIO') promRate /= 30;
+
+        const val = loan.interestType === 'SIMPLE' ? (Number(loan.amount) * (1 + promRate)) : loan.installmentValue;
 
         doc.setLineWidth(0.3); doc.rect(10, startY, 190, 130);
         doc.setFont("times", "bold"); doc.setFontSize(12);
